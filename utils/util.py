@@ -8,6 +8,13 @@ import torchvision
 import PIL
 from collections import defaultdict
 
+# Function to disable inplace ReLU operations
+def disable_inplace_relu(model):
+    """Disable inplace operations in ReLU layers"""
+    for module in model.modules():
+        if isinstance(module, torch.nn.ReLU):
+            module.inplace = False
+
 def set_random_seed(seed=0):
     """Set all random seeds for reproducibility"""
     random.seed(seed)

@@ -213,7 +213,7 @@ def main(args):
 
     # SHAP explainability analysis
     if getattr(args, 'enable_shap', False):
-    print("\n📊 Running SHAP explainability...")
+        print("\n📊 Running SHAP explainability...")
     try:
         # Prepare background and evaluation data
         background = get_background_batch(valid_loader, size=64).cuda()

@@ -15,7 +15,7 @@ from network.act_network import ActNetwork
 # Unified SHAP utilities import
 from shap_utils import (
     get_background_batch, safe_compute_shap_values, plot_summary,
-    plot_force, overlay_signal_with_shap, plot_shap_heatmap,
+    overlay_signal_with_shap, plot_shap_heatmap,
     evaluate_shap_impact, compute_flip_rate, compute_confidence_change,
     compute_aopc, compute_feature_coherence, compute_shap_entropy,
     plot_emg_shap_4d, plot_4d_shap_surface, evaluate_advanced_shap_metrics
@@ -46,7 +46,7 @@ def main(args):
     print(s)
 
     # Create output directory if it doesn't exist
-    os.makedirs(args.output, exist_ok=True)
+    os.maked(args.output, exist_ok=True)
 
     # Load datasets
     loader_data = get_act_dataloader(args)
@@ -225,14 +225,14 @@ def main(args):
             # Compute SHAP values safely
             shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
             
+            # Convert to numpy safely before visualization
+            X_eval_np = X_eval.detach().cpu().numpy()
+            
             # Generate core visualizations
-            plot_summary(shap_vals, X_eval.cpu().numpy(), 
+            plot_summary(shap_vals, X_eval_np, 
                          output_path=os.path.join(args.output, "shap_summary.png"))
             
-            plot_force(None, shap_vals, X_eval.cpu().numpy(),
-                       output_path=os.path.join(args.output, "shap_force.html"))
-            
-            overlay_signal_with_shap(X_eval[0].cpu().numpy(), shap_vals.values[0], 
+            overlay_signal_with_shap(X_eval_np[0], shap_vals.values[0], 
                                     output_path=os.path.join(args.output, "shap_overlay.png"))
             
             plot_shap_heatmap(shap_vals, 

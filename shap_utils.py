@@ -45,7 +45,6 @@ def get_shap_explainer(model, background_data):
     return shap.DeepExplainer(wrapped, background_data)
 
 def compute_shap_values(explainer, inputs):
-    # Ensure gradients are enabled
     inputs = inputs.clone().detach().requires_grad_(True)
     return explainer(inputs)
 

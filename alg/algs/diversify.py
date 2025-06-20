@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from scipy.spatial.distance import cdist
+from torch.utils.data import ConcatDataset  # Added import
 
 from alg.modelopera import get_fea
 from network import Adver_network, common_network
@@ -122,8 +123,37 @@ class Diversify(Algorithm):
             dd = cdist(all_fea, initc, 'cosine')
             pred_label = dd.argmin(axis=1)
 
-        # Set labels in dataset
-        loader.dataset.set_labels_by_index(pred_label, all_index, 'pdlabel')
+        # ========== START: Added ConcatDataset handling ==========
+        # Handle ConcatDataset
+        if isinstance(loader.dataset, ConcatDataset):
+            concat_dataset = loader.dataset
+            cumulative_sizes = concat_dataset.cumulative_sizes
+            datasets = concat_dataset.datasets
+            starts = [0] + cumulative_sizes[:-1]
+            
+            per_ds_indices = [[] for _ in range(len(datasets))]
+            per_ds_labels = [[] for _ in range(len(datasets))]
+            
+            for idx, label in zip(all_index, pred_label):
+                for ds_idx, end in enumerate(cumulative_sizes):
+                    if idx < end:
+                        start = starts[ds_idx]
+                        local_idx = idx - start
+                        per_ds_indices[ds_idx].append(local_idx)
+                        per_ds_labels[ds_idx].append(label)
+                        break
+            
+            for ds_idx, dataset in enumerate(datasets):
+                if per_ds_indices[ds_idx]:
+                    dataset.set_labels_by_index(
+                        per_ds_labels[ds_idx],
+                        per_ds_indices[ds_idx],
+                        'pdlabel'
+                    )
+        else:
+            loader.dataset.set_labels_by_index(pred_label, all_index, 'pdlabel')
+        # ========== END: Added ConcatDataset handling ==========
+        
         print(Counter(pred_label))
         
         # Return to training mode

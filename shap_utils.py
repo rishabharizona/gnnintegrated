@@ -298,7 +298,7 @@ def compute_shap_entropy(shap_values):
     abs_vals = np.abs(to_numpy(shap_values.values))
     # Flatten spatial dimensions
     flat_vals = abs_vals.reshape(abs_vals.shape[0], -1)
-    normalized = flat_vals / (flat_vals.sum(axis=1, keepdims=True) + 1e-10
+    normalized = flat_vals / (flat_vals.sum(axis=1, keepdims=True)) + 1e-10
     ent = entropy(normalized, axis=1)
     return np.mean(ent)
 

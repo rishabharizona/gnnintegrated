@@ -46,7 +46,7 @@ def main(args):
     print(s)
 
     # Create output directory if it doesn't exist
-    os.maked(args.output, exist_ok=True)
+    os.makedirs(args.output, exist_ok=True)
 
     # Load datasets
     loader_data = get_act_dataloader(args)

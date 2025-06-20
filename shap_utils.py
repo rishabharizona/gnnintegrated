@@ -23,6 +23,7 @@ from tqdm import tqdm
 from scipy.stats import entropy
 from sklearn.metrics import mutual_info_score
 from sklearn.decomposition import PCA
+import random
 
 # Helper function to safely convert tensors to numpy
 def to_numpy(tensor):
@@ -126,11 +127,24 @@ def plot_summary(shap_values, features, output_path, max_display=20):
     else:
         flat_shap_values = shap_values.values.reshape(shap_values.values.shape[0], -1)
     
+    # Verify shape consistency
+    if flat_shap_values.shape != flat_features.shape:
+        print(f"⚠️ Shape mismatch: SHAP values {flat_shap_values.shape} vs features {flat_features.shape}")
+        # Attempt to automatically fix by truncating to min length
+        min_samples = min(flat_shap_values.shape[0], flat_features.shape[0])
+        min_features = min(flat_shap_values.shape[1], flat_features.shape[1])
+        flat_shap_values = flat_shap_values[:min_samples, :min_features]
+        flat_features = flat_features[:min_samples, :min_features]
+        print(f"⚠️ Using truncated shapes: SHAP {flat_shap_values.shape}, features {flat_features.shape}")
+    
     # Create feature names for EMG data
     feature_names = []
     for ch in range(features.shape[1]):  # Channels
         for t in range(features.shape[3]):  # Time steps
             feature_names.append(f"CH{ch+1}_T{t}")
+    
+    # Use explicit random state to avoid FutureWarning
+    rng = np.random.RandomState(42)
     
     shap.summary_plot(
         flat_shap_values, 
@@ -138,7 +152,8 @@ def plot_summary(shap_values, features, output_path, max_display=20):
         feature_names=feature_names,
         plot_type="bar",
         max_display=max_display,
-        show=False
+        show=False,
+        rng=rng  # Explicit random state
     )
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
@@ -346,7 +361,7 @@ def compute_feature_coherence(shap_values):
     """Measure spatial-temporal coherence of SHAP values"""
     # Handle multi-class SHAP values
     if isinstance(shap_values.values, list):
-        vals = to_numpy(shap_values.values[0])
+        vals = to_numpy(shap_values.values[0]))
     else:
         vals = to_numpy(shap_values.values)
     
@@ -367,7 +382,7 @@ def compute_pca_alignment(shap_values):
     """Measure how well SHAP values align with PCA components"""
     # Handle multi-class SHAP values
     if isinstance(shap_values.values, list):
-        vals = to_numpy(shap_values.values[0])
+        vals = to_numpy(shap_values.values[0]))
     else:
         vals = to_numpy(shap_values.values)
     

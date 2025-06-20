@@ -13,6 +13,17 @@ from sklearn.decomposition import PCA
 import os
 import warnings
 
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+import shap
+import os
+import json
+from tqdm import tqdm
+from scipy.stats import entropy
+from sklearn.metrics import mutual_info_score
+from sklearn.decomposition import PCA
+
 # Helper function to safely convert tensors to numpy
 def to_numpy(tensor):
     """Safely convert tensor to numpy array with detachment"""
@@ -107,7 +118,13 @@ def plot_summary(shap_values, features, output_path, max_display=20):
     # Reshape data for summary plot
     # Flatten all dimensions except batch: (batch, channels, 1, time_steps) -> (batch, channels * time_steps)
     flat_features = features.reshape(features.shape[0], -1)
-    flat_shap_values = shap_values.values.reshape(shap_values.values.shape[0], -1)
+    
+    # Handle multi-class SHAP values
+    if isinstance(shap_values.values, list):
+        # Multi-class explanation: use SHAP values for first class
+        flat_shap_values = shap_values.values[0].reshape(shap_values.values[0].shape[0], -1)
+    else:
+        flat_shap_values = shap_values.values.reshape(shap_values.values.shape[0], -1)
     
     # Create feature names for EMG data
     feature_names = []
@@ -159,9 +176,16 @@ def plot_shap_heatmap(shap_values, output_path):
     """Heatmap of SHAP values across time and channels"""
     plt.figure(figsize=(12, 8))
     
-    # For EMG data: shap_values shape (samples, channels, 1, time_steps)
+    # Handle multi-class SHAP values
+    if isinstance(shap_values.values, list):
+        # Use SHAP values for first class
+        shap_vals = shap_values.values[0]
+    else:
+        shap_vals = shap_values.values
+    
+    # For EMG data: shap_vals shape (samples, channels, 1, time_steps)
     # Aggregate across samples and spatial dim
-    aggregated = np.abs(to_numpy(shap_values.values)).mean(axis=0).squeeze()
+    aggregated = np.abs(to_numpy(shap_vals)).mean(axis=0).squeeze()
     
     # Transpose to (channels, time_steps)
     aggregated = aggregated.T
@@ -204,7 +228,12 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
     # Convert to numpy for processing
     base_preds_np = to_numpy(base_preds)
     inputs_np = to_numpy(inputs)
-    shap_vals_np = to_numpy(shap_values.values)
+    
+    # Handle multi-class SHAP values
+    if isinstance(shap_values.values, list):
+        shap_vals_np = to_numpy(shap_values.values[0])
+    else:
+        shap_vals_np = to_numpy(shap_values.values)
     
     masked_inputs = inputs_np.copy()
     batch_size, n_channels, _, n_timesteps = inputs_np.shape
@@ -254,7 +283,13 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     """Compute Area Over Perturbation Curve"""
     model.eval()
     inputs_np = to_numpy(inputs)
-    shap_vals_np = to_numpy(shap_values.values)
+    
+    # Handle multi-class SHAP values
+    if isinstance(shap_values.values, list):
+        shap_vals_np = to_numpy(shap_values.values[0])
+    else:
+        shap_vals_np = to_numpy(shap_values.values)
+    
     batch_size, n_channels, _, n_timesteps = inputs_np.shape
     
     with torch.no_grad():
@@ -295,7 +330,12 @@ def compute_aopc(model, inputs, shap_values, steps=10):
 
 def compute_shap_entropy(shap_values):
     """Compute entropy of SHAP value distribution"""
-    abs_vals = np.abs(to_numpy(shap_values.values))
+    # Handle multi-class SHAP values
+    if isinstance(shap_values.values, list):
+        abs_vals = np.abs(to_numpy(shap_values.values[0]))
+    else:
+        abs_vals = np.abs(to_numpy(shap_values.values))
+    
     # Flatten spatial dimensions
     flat_vals = abs_vals.reshape(abs_vals.shape[0], -1)
     normalized = flat_vals / (flat_vals.sum(axis=1, keepdims=True)) + 1e-10
@@ -304,7 +344,11 @@ def compute_shap_entropy(shap_values):
 
 def compute_feature_coherence(shap_values):
     """Measure spatial-temporal coherence of SHAP values"""
-    vals = to_numpy(shap_values.values)
+    # Handle multi-class SHAP values
+    if isinstance(shap_values.values, list):
+        vals = to_numpy(shap_values.values[0])
+    else:
+        vals = to_numpy(shap_values.values)
     
     # Compute channel-wise correlations
     channel_corrs = []
@@ -321,7 +365,12 @@ def compute_feature_coherence(shap_values):
 
 def compute_pca_alignment(shap_values):
     """Measure how well SHAP values align with PCA components"""
-    vals = to_numpy(shap_values.values)
+    # Handle multi-class SHAP values
+    if isinstance(shap_values.values, list):
+        vals = to_numpy(shap_values.values[0])
+    else:
+        vals = to_numpy(shap_values.values)
+    
     # Flatten spatial dimensions
     flat_vals = vals.reshape(vals.shape[0], -1)
     
@@ -334,9 +383,15 @@ def compute_pca_alignment(shap_values):
 
 def evaluate_advanced_shap_metrics(shap_values, inputs):
     """Compute a suite of advanced SHAP metrics"""
+    # Handle multi-class SHAP values
+    if isinstance(shap_values.values, list):
+        shap_vals = to_numpy(shap_values.values[0])
+    else:
+        shap_vals = to_numpy(shap_values.values)
+    
     # Flatten inputs and SHAP values for mutual info
     flat_inputs = inputs.reshape(-1)
-    flat_shap = np.abs(shap_values.values).reshape(-1)
+    flat_shap = np.abs(shap_vals).reshape(-1)
     
     # Create bins for mutual information calculation
     input_bins = np.digitize(flat_inputs, bins=np.linspace(flat_inputs.min(), flat_inputs.max(), 10))
@@ -345,8 +400,8 @@ def evaluate_advanced_shap_metrics(shap_values, inputs):
     return {
         'shap_entropy': compute_shap_entropy(shap_values),
         'feature_coherence': compute_feature_coherence(shap_values),
-        'channel_variance': np.var(to_numpy(shap_values.values), axis=(0, 2, 3)).mean(),
-        'temporal_entropy': entropy(np.abs(to_numpy(shap_values.values)).mean(axis=(0, 1, 2))),
+        'channel_variance': np.var(shap_vals, axis=(0, 2, 3)).mean(),
+        'temporal_entropy': entropy(np.abs(shap_vals).mean(axis=(0, 1, 2))),
         'mutual_info': mutual_info_score(input_bins, shap_bins),
         'pca_alignment': compute_pca_alignment(shap_values)
     }
@@ -356,12 +411,17 @@ def evaluate_advanced_shap_metrics(shap_values, inputs):
 def plot_emg_shap_4d(inputs, shap_values, output_path):
     """4D scatter plot of SHAP values (channels x time x value)"""
     inputs = to_numpy(inputs)
-    shap_values = to_numpy(shap_values)
+    
+    # Handle multi-class SHAP values
+    if isinstance(shap_values, list):
+        shap_vals = to_numpy(shap_values[0])
+    else:
+        shap_vals = to_numpy(shap_values)
     
     # For first sample only
     sample_idx = 0
     inputs = inputs[sample_idx]
-    shap_values = shap_values[sample_idx]
+    shap_vals = shap_vals[sample_idx]
     
     # Create interactive plot
     fig = plt.figure(figsize=(14, 10))
@@ -374,7 +434,7 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     # Plot each channel
     for ch in range(inputs.shape[0]):
         # Get SHAP magnitude for this channel
-        shap_mag = np.abs(shap_values[ch, 0])
+        shap_mag = np.abs(shap_vals[ch, 0])
         
         # Plot channel with different color
         ax.plot(
@@ -397,10 +457,14 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
 
 def plot_4d_shap_surface(shap_values, output_path):
     """Surface plot of aggregated SHAP values"""
-    shap_values = to_numpy(shap_values.values)
+    # Handle multi-class SHAP values
+    if isinstance(shap_values.values, list):
+        shap_vals = to_numpy(shap_values.values[0])
+    else:
+        shap_vals = to_numpy(shap_values.values)
     
     # Aggregate across samples and spatial dim
-    aggregated = np.abs(shap_values).mean(axis=(0, 2)).T  # (channels, time_steps)
+    aggregated = np.abs(shap_vals).mean(axis=(0, 2)).T  # (channels, time_steps)
     
     # Create grid
     channels = np.arange(aggregated.shape[0])

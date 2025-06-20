@@ -9,16 +9,17 @@ from scipy.stats import kendalltau
 from sklearn.metrics import accuracy_score
 import os
 
-# ✅ SHAP-safe wrapper
+# ✅ SHAP-safe wrapper (UPDATED)
 class PredictWrapper(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
 
     def forward(self, x):
-        return self.model.predict(x)
+        # Use the safe explain method
+        return self.model.explain(x)
 
-# ✅ Explainer setup
+# ✅ Explainer setup (UPDATED)
 def get_shap_explainer(model, background_data):
     model.eval()
     wrapped = PredictWrapper(model)
@@ -51,18 +52,26 @@ def plot_summary(shap_values, inputs, output_path="shap_summary.png", log_to_wan
     if log_to_wandb:
         wandb.log({"SHAP Summary": wandb.Image(output_path)})
 
-# ✅ Force plot (first instance)
+# ✅ Force plot (first instance) (UPDATED)
 def plot_force(explainer, shap_values, inputs, index=0, output_path="shap_force.html", log_to_wandb=False):
     shap_array = _get_shap_array(shap_values)
     shap_for_instance = shap_array[index].reshape(-1)
 
+    # Get expected value from explainer
     if hasattr(explainer, "expected_value"):
         ev = explainer.expected_value
         expected_value = ev[0] if isinstance(ev, (list, np.ndarray)) else ev
     else:
         expected_value = 0
 
-    force_html = shap.plots.force(expected_value, shap_for_instance)
+    # Get base value from model prediction
+    with torch.no_grad():
+        base_value = explainer.model(inputs[index:index+1]).mean().item()
+
+    # Use whichever is available
+    base_val = expected_value if expected_value != 0 else base_value
+        
+    force_html = shap.plots.force(base_val, shap_for_instance)
     shap.save_html(output_path, force_html)
 
     if log_to_wandb:
@@ -84,7 +93,7 @@ def overlay_signal_with_shap(signal, shap_val, output_path="shap_overlay.png", l
     plt.fill_between(np.arange(min_len), 0, shap_val, color="red", alpha=0.3, label="SHAP")
 
     plt.title("Signal with SHAP Overlay")
-    plt.xlabel("Flattened Feature Index")  # <-- changed
+    plt.xlabel("Flattened Feature Index")
     plt.ylabel("Signal / SHAP")
     plt.legend()
     plt.tight_layout()
@@ -94,13 +103,8 @@ def overlay_signal_with_shap(signal, shap_val, output_path="shap_overlay.png", l
     if log_to_wandb:
         wandb.log({"SHAP Overlay": wandb.Image(output_path)})
 
-
 # ✅ SHAP heatmap: channels × time
 def plot_shap_heatmap(shap_values, output_path="shap_heatmap.png", log_to_wandb=False):
-    import numpy as np
-    import seaborn as sns
-    import matplotlib.pyplot as plt
-
     # Handle both SHAP Explanation objects and raw NumPy arrays
     if hasattr(shap_values, "values"):
         shap_array = shap_values.values
@@ -129,13 +133,12 @@ def plot_shap_heatmap(shap_values, output_path="shap_heatmap.png", log_to_wandb=
     print(f"[INFO] Saved SHAP heatmap to: {output_path}")
 
     if log_to_wandb:
-        import wandb
         wandb.log({"SHAP Heatmap": wandb.Image(output_path)})
 
-
-# ✅ Mask most influential inputs and evaluate impact
+# ✅ Mask most influential inputs and evaluate impact (UPDATED)
 def evaluate_shap_impact(model, inputs, shap_values, top_k=10):
-    base_preds = model.predict(inputs).detach().cpu().numpy()
+    # Use safe explain method
+    base_preds = model.explain(inputs).detach().cpu().numpy()
     shap_array = _get_shap_array(shap_values)
 
     flat_shap = np.abs(shap_array).reshape(shap_array.shape[0], -1)
@@ -151,10 +154,10 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=10):
         flat[indices] = 0
         masked_inputs[i] = flat.view_as(masked_inputs[i])
 
-    masked_preds = model.predict(masked_inputs).detach().cpu().numpy()
+    # Use safe explain method
+    masked_preds = model.explain(masked_inputs).detach().cpu().numpy()
     accuracy_drop = np.mean(np.argmax(base_preds, axis=1) != np.argmax(masked_preds, axis=1))
     return base_preds, masked_preds, accuracy_drop
-
 
 # ✅ Background data for DeepExplainer
 def get_background_batch(loader, size=100):

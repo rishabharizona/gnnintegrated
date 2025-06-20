@@ -157,7 +157,6 @@ def plot_summary(shap_values, features, output_path, max_display=20):
     plt.close()
     print(f"✅ Saved summary plot: {output_path}")
 
-
 def overlay_signal_with_shap(signal, shap_vals, output_path):
     """Overlay SHAP values on original signal (detached)"""
     signal = to_numpy(signal)
@@ -187,8 +186,6 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
 
 def plot_shap_heatmap(shap_values, output_path):
     """Heatmap of SHAP values across time and channels"""
-    plt.figure(figsize=(12, 8))
-    
     # Handle multi-class SHAP values
     if isinstance(shap_values.values, list):
         # Use SHAP values for first class
@@ -196,13 +193,23 @@ def plot_shap_heatmap(shap_values, output_path):
     else:
         shap_vals = shap_values.values
     
-    # For EMG data: shap_vals shape (samples, channels, 1, time_steps)
-    # Aggregate across samples and spatial dim
-    aggregated = np.abs(to_numpy(shap_vals)).mean(axis=0).squeeze()
+    # Convert to numpy and take absolute values
+    abs_vals = np.abs(to_numpy(shap_vals))
+    
+    # For EMG data: abs_vals shape (samples, channels, 1, time_steps)
+    # Reduce to 2D: average across samples and spatial dimension
+    # This handles any 3D or 4D array by averaging over extra dimensions
+    while abs_vals.ndim > 2:
+        abs_vals = abs_vals.mean(axis=tuple(range(abs_vals.ndim - 2)))
+    
+    # Now abs_vals should be 2D: (channels, time_steps)
+    if abs_vals.ndim != 2:
+        raise ValueError(f"Could not reduce SHAP values to 2D array. Final shape: {abs_vals.shape}")
     
     # Transpose to (channels, time_steps)
-    aggregated = aggregated.T
+    aggregated = abs_vals.T
     
+    plt.figure(figsize=(12, 8))
     plt.imshow(aggregated, 
                aspect='auto', 
                cmap='viridis',
@@ -351,7 +358,7 @@ def compute_shap_entropy(shap_values):
     
     # Flatten spatial dimensions
     flat_vals = abs_vals.reshape(abs_vals.shape[0], -1)
-    normalized = flat_vals / (flat_vals.sum(axis=1, keepdims=True)) + 1e-10
+    normalized = flat_vals / (flat_vals.sum(axis=1, keepdims=True) + 1e-10)
     ent = entropy(normalized, axis=1)
     return np.mean(ent)
 

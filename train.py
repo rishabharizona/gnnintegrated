@@ -213,14 +213,17 @@ def main(args):
 
     # SHAP explainability analysis
     if getattr(args, 'enable_shap', False):
-        print("\n📊 Running SHAP explainability...")
-        try:
-            # Prepare background and evaluation data
-            background = get_background_batch(valid_loader, size=64).cuda()
-            X_eval = background[:10]
-            
-            # Compute SHAP values safely
-            shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
+    print("\n📊 Running SHAP explainability...")
+    try:
+        # Prepare background and evaluation data
+        background = get_background_batch(valid_loader, size=64).cuda()
+        X_eval = background[:10]
+        
+        # Disable inplace operations in the model
+        disable_inplace_relu(algorithm)
+        
+        # Compute SHAP values safely
+        shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
             
             # Generate core visualizations
             plot_summary(shap_vals, X_eval.cpu().numpy(), 

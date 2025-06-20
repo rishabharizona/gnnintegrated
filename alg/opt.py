@@ -52,3 +52,4 @@ def get_optimizer(alg, args, nettype):
         lr=args.lr, 
         weight_decay=args.weight_decay, 
         betas=(args.beta1, 0.9)
+    )

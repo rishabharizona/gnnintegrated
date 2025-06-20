@@ -361,7 +361,7 @@ def compute_feature_coherence(shap_values):
     """Measure spatial-temporal coherence of SHAP values"""
     # Handle multi-class SHAP values
     if isinstance(shap_values.values, list):
-        vals = to_numpy(shap_values.values[0]))
+        vals = to_numpy(shap_values.values[0])
     else:
         vals = to_numpy(shap_values.values)
     

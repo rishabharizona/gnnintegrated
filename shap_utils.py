@@ -8,24 +8,38 @@ from scipy.spatial.distance import cosine
 from scipy.stats import kendalltau
 from sklearn.metrics import accuracy_score
 import os
+import warnings
+
+# Suppress SHAP warnings
+warnings.filterwarnings("ignore", message="torch==2.3.0", category=UserWarning)
 
 # ✅ SHAP-safe wrapper (UPDATED)
 class PredictWrapper(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
+        # Ensure gradients are enabled
+        for param in self.model.parameters():
+            param.requires_grad = True
 
     def forward(self, x):
-        # Use the safe explain method
+        # Enable gradients for input
+        x = x.clone().detach().requires_grad_(True)
         return self.model.explain(x)
 
 # ✅ Explainer setup (UPDATED)
 def get_shap_explainer(model, background_data):
     model.eval()
+    # Ensure gradients are enabled
+    for param in model.parameters():
+        param.requires_grad = True
+        
     wrapped = PredictWrapper(model)
     return shap.DeepExplainer(wrapped, background_data)
 
 def compute_shap_values(explainer, inputs):
+    # Ensure gradients are enabled
+    inputs = inputs.clone().detach().requires_grad_(True)
     return explainer(inputs)
 
 def _get_shap_array(shap_values):
@@ -65,7 +79,7 @@ def plot_force(explainer, shap_values, inputs, index=0, output_path="shap_force.
         expected_value = 0
 
     # Get base value from model prediction
-    with torch.no_grad():
+    with torch.enable_grad():
         base_value = explainer.model(inputs[index:index+1]).mean().item()
 
     # Use whichever is available
@@ -137,33 +151,36 @@ def plot_shap_heatmap(shap_values, output_path="shap_heatmap.png", log_to_wandb=
 
 # ✅ Mask most influential inputs and evaluate impact (UPDATED)
 def evaluate_shap_impact(model, inputs, shap_values, top_k=10):
-    # Use safe explain method
-    base_preds = model.explain(inputs).detach().cpu().numpy()
-    shap_array = _get_shap_array(shap_values)
+    # Use safe explain method with gradients disabled
+    with torch.no_grad():
+        base_preds = model.explain(inputs).detach().cpu().numpy()
+        shap_array = _get_shap_array(shap_values)
 
-    flat_shap = np.abs(shap_array).reshape(shap_array.shape[0], -1)
-    sorted_indices = np.argsort(-flat_shap, axis=1)[:, :top_k]
+        flat_shap = np.abs(shap_array).reshape(shap_array.shape[0], -1)
+        sorted_indices = np.argsort(-flat_shap, axis=1)[:, :top_k]
 
-    masked_inputs = inputs.clone()
-    total_features = masked_inputs[0].numel()
+        masked_inputs = inputs.clone()
+        total_features = masked_inputs[0].numel()
 
-    for i, indices in enumerate(sorted_indices):
-        # Safe clamping
-        indices = np.clip(indices, 0, total_features - 1)
-        flat = masked_inputs[i].view(-1)
-        flat[indices] = 0
-        masked_inputs[i] = flat.view_as(masked_inputs[i])
+        for i, indices in enumerate(sorted_indices):
+            # Safe clamping
+            indices = np.clip(indices, 0, total_features - 1)
+            flat = masked_inputs[i].view(-1)
+            flat[indices] = 0
+            masked_inputs[i] = flat.view_as(masked_inputs[i])
 
-    # Use safe explain method
-    masked_preds = model.explain(masked_inputs).detach().cpu().numpy()
-    accuracy_drop = np.mean(np.argmax(base_preds, axis=1) != np.argmax(masked_preds, axis=1))
+        # Use safe explain method
+        masked_preds = model.explain(masked_inputs).detach().cpu().numpy()
+        accuracy_drop = np.mean(np.argmax(base_preds, axis=1) != np.argmax(masked_preds, axis=1))
     return base_preds, masked_preds, accuracy_drop
 
-# ✅ Background data for DeepExplainer
+# ✅ Background data for DeepExplainer (UPDATED)
 def get_background_batch(loader, size=100):
     x_bg = []
     for batch in loader:
         x = batch[0]
+        # Ensure gradients are enabled
+        x = x.clone().detach().requires_grad_(True)
         x_bg.append(x)
         if len(torch.cat(x_bg)) >= size:
             break
@@ -185,3 +202,26 @@ def cosine_similarity_shap(shap1, shap2):
 def log_shap_numpy(shap_values, save_path="shap_values.npy"):
     shap_array = _get_shap_array(shap_values)
     np.save(save_path, shap_array)
+
+# ✅ Enable gradients for SHAP (NEW)
+def enable_shap_gradients(model):
+    """Enable gradients for SHAP analysis"""
+    model.eval()
+    for param in model.parameters():
+        param.requires_grad = True
+    print("[SHAP] Enabled gradients for all model parameters")
+
+# ✅ Safe SHAP computation (NEW)
+def safe_compute_shap_values(model, background, inputs):
+    """Compute SHAP values with proper gradient handling"""
+    # Enable gradients
+    enable_shap_gradients(model)
+    
+    # Create explainer
+    explainer = get_shap_explainer(model, background)
+    
+    # Compute SHAP values
+    with torch.enable_grad():
+        shap_values = compute_shap_values(explainer, inputs)
+    
+    return shap_values

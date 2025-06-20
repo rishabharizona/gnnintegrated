@@ -1,11 +1,11 @@
 import torch.nn as nn
+import numpy as np
 
 # Configuration for different sensor modalities
 var_size = {
     'emg': {
         'in_size': 8,        # Number of input channels (EMG sensors)
         'ker_size': 9,       # Kernel size for temporal convolution
-        'fc_size': 32 * 44   # Output size before fully-connected layers
     }
 }
 
@@ -13,14 +13,6 @@ class ActNetwork(nn.Module):
     """
     Convolutional neural network for sensor-based activity recognition
     Specifically designed for EMG data processing
-    
-    Architecture:
-    - Two convolutional blocks with batch norm and ReLU
-    - Each block followed by max pooling
-    - Output flattened for feature extraction
-    
-    Input shape: (batch, channels, 1, time_steps)
-    Output shape: (batch, 1408)  # For EMG: 32 * 44 = 1408
     """
     def __init__(self, taskname='emg'):
         """
@@ -57,8 +49,15 @@ class ActNetwork(nn.Module):
             nn.MaxPool2d(kernel_size=(1, 2), stride=2)
         )
         
-        # Precomputed output size after convolutions
-        self.in_features = var_size[taskname]['fc_size']
+        # Calculate output size dynamically
+        self.in_features = self._calculate_output_size()
+
+    def _calculate_output_size(self):
+        """Calculate output size dynamically using a dummy input"""
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, var_size[self.taskname]['in_size'], 1, 200)
+            features = self.conv2(self.conv1(dummy_input))
+            return int(np.prod(features.shape[1:]))  # Channels × Height × Width
 
     def forward(self, x):
         """
@@ -70,5 +69,5 @@ class ActNetwork(nn.Module):
         """
         x = self.conv1(x)
         x = self.conv2(x)
-        x = x.view(-1, self.in_features)  # Flatten while preserving batch dimension
+        x = x.view(x.size(0), -1)  # Flatten while preserving batch dimension
         return x

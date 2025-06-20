@@ -12,12 +12,16 @@ class feat_bottleneck(nn.Module):
         """
         Initialize bottleneck layer
         Args:
-            feature_dim: Input feature dimension
-            bottleneck_dim: Output feature dimension
+            feature_dim: Input feature dimension (int)
+            bottleneck_dim: Output feature dimension (int)
             type: Processing type ("ori" or "bn")
         """
         super(feat_bottleneck, self).__init__()
         self.type = type
+        
+        # Ensure dimensions are integers
+        feature_dim = int(feature_dim)
+        bottleneck_dim = int(bottleneck_dim)
         
         # Linear transformation layer
         self.bottleneck = nn.Linear(feature_dim, bottleneck_dim)
@@ -48,12 +52,16 @@ class feat_classifier(nn.Module):
         """
         Initialize classifier
         Args:
-            class_num: Number of output classes
-            bottleneck_dim: Input feature dimension
+            class_num: Number of output classes (must be int)
+            bottleneck_dim: Input feature dimension (must be int)
             type: Classifier type ("linear" or "wn")
         """
         super(feat_classifier, self).__init__()
         self.type = type
+        
+        # Ensure parameters are integers
+        class_num = int(class_num)
+        bottleneck_dim = int(bottleneck_dim)
         
         # Create appropriate classifier type
         if type == 'wn':

@@ -21,31 +21,13 @@ from shap_utils import (
     plot_emg_shap_4d, compute_shap_channel_variance, compute_shap_temporal_entropy, compare_top_k_channels, compute_mutual_info, compute_pca_alignment, plot_4d_shap_surface, safe_compute_shap_values
 )
 
-def automated_k_estimation(features, k_min=2, k_max=10):
-    """Automatically determine optimal cluster count using silhouette score"""
-    best_k = k_min
-    best_score = -1
-
-    for k in range(k_min, k_max + 1):
-        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10).fit(features)
-        labels = kmeans.labels_
-        score = silhouette_score(features, labels)
-
-        if score > best_score:
-            best_k = k
-            best_score = score
-
-    print(f"[INFO] Optimal K determined as {best_k} (Silhouette Score: {best_score:.4f})")
-    return best_k
-
 def main(args):
     s = print_args(args, [])
     set_random_seed(args.seed)
-
     print_environ()
     print(s)
-
     os.makedirs(args.output, exist_ok=True)
+
     loader_data = get_act_dataloader(args)
     train_loader, train_loader_noshuffle, valid_loader, target_loader, tr, val, targetdata = loader_data[:7]
 
@@ -54,29 +36,22 @@ def main(args):
         temp_model = ActNetwork(args.dataset).cuda()
         temp_model.eval()
         feature_list = []
-
         with torch.no_grad():
             for batch in train_loader:
                 inputs = batch[0].cuda().float()
                 features = temp_model(inputs)
                 feature_list.append(features.cpu().numpy())
-
         all_features = np.concatenate(feature_list, axis=0)
-        optimal_k = automated_k_estimation(all_features)
-        args.latent_domain_num = optimal_k
-        print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
+        best_k, _ = max(((k, silhouette_score(all_features, KMeans(n_clusters=k, n_init=10).fit(all_features).labels_)) for k in range(2, 11)), key=lambda x: x[1])
+        args.latent_domain_num = best_k
         del temp_model
 
-    if args.latent_domain_num < 6:
-        args.batch_size = 32 * args.latent_domain_num
-    else:
-        args.batch_size = 16 * args.latent_domain_num
-    print(f"Adjusted batch size: {args.batch_size}")
+    args.batch_size = 32 * args.latent_domain_num if args.latent_domain_num < 6 else 16 * args.latent_domain_num
 
-    train_loader = DataLoader(dataset=tr, batch_size=args.batch_size, num_workers=args.N_WORKERS, drop_last=False, shuffle=True)
-    train_loader_noshuffle = DataLoader(dataset=tr, batch_size=args.batch_size, num_workers=args.N_WORKERS, drop_last=False, shuffle=False)
-    valid_loader = DataLoader(dataset=val, batch_size=args.batch_size, num_workers=args.N_WORKERS, drop_last=False, shuffle=False)
-    target_loader = DataLoader(dataset=targetdata, batch_size=args.batch_size, num_workers=args.N_WORKERS, drop_last=False, shuffle=False)
+    train_loader = DataLoader(tr, batch_size=args.batch_size, num_workers=args.N_WORKERS, drop_last=False, shuffle=True)
+    train_loader_noshuffle = DataLoader(tr, batch_size=args.batch_size, num_workers=args.N_WORKERS, drop_last=False, shuffle=False)
+    valid_loader = DataLoader(val, batch_size=args.batch_size, num_workers=args.N_WORKERS, drop_last=False, shuffle=False)
+    target_loader = DataLoader(targetdata, batch_size=args.batch_size, num_workers=args.N_WORKERS, drop_last=False, shuffle=False)
 
     algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).cuda()
@@ -93,151 +68,74 @@ def main(args):
         print(f'\n======== ROUND {round_idx} ========')
 
         if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
-            if tr is not None and val is not None:
-                algorithm.eval()
-                full_dataset = ConcatDataset([tr, val])
-                train_loader = DataLoader(full_dataset, batch_size=args.batch_size, num_workers=args.N_WORKERS, shuffle=True)
-                print(f"Curriculum learning: Stage {round_idx}")
-                algorithm.train()
+            algorithm.eval()
+            train_loader = DataLoader(ConcatDataset([tr, val]), batch_size=args.batch_size, num_workers=args.N_WORKERS, shuffle=True)
+            algorithm.train()
 
         print('==== Feature update ====')
-        print_row(['epoch', 'class_loss'], colwidth=15)
         for step in range(args.local_epoch):
             for data in train_loader:
                 loss_result_dict = algorithm.update_a(data, opta)
-            print_row([step, loss_result_dict['class']], colwidth=15)
             logs['class_loss'].append(loss_result_dict['class'])
 
         print('==== Latent domain characterization ====')
-        print_row(['epoch', 'total_loss', 'dis_loss', 'ent_loss'], colwidth=15)
         for step in range(args.local_epoch):
             for data in train_loader:
                 loss_result_dict = algorithm.update_d(data, optd)
-            print_row([step, loss_result_dict['total'], loss_result_dict['dis'], loss_result_dict['ent']], colwidth=15)
-            logs['dis_loss'].append(loss_result_dict['dis'])
-            logs['ent_loss'].append(loss_result_dict['ent'])
-            logs['total_loss'].append(loss_result_dict['total'])
+            for key in ['dis', 'ent', 'total']:
+                logs[f"{key}_loss"].append(loss_result_dict[key])
 
         algorithm.set_dlabel(train_loader)
 
         print('==== Domain-invariant feature learning ====')
-        loss_list = alg_loss_dict(args)
-        eval_dict = train_valid_target_eval_names(args)
-        print_key = ['epoch'] + [f"{item}_loss" for item in loss_list] + [f"{item}_acc" for item in eval_dict] + ['total_cost_time']
-        print_row(print_key, colwidth=15)
-
-        round_start_time = time.time()
         for step in range(args.local_epoch):
-            step_start_time = time.time()
             for data in train_loader:
                 step_vals = algorithm.update(data, opt)
-
             results = {
                 'epoch': round_idx * args.local_epoch + step,
                 'train_acc': modelopera.accuracy(algorithm, train_loader_noshuffle, None),
                 'valid_acc': modelopera.accuracy(algorithm, valid_loader, None),
                 'target_acc': modelopera.accuracy(algorithm, target_loader, None),
-                'total_cost_time': time.time() - step_start_time
+                'total_cost_time': time.time() - time.time()
             }
-
-            for key in loss_list:
+            for key in alg_loss_dict(args):
                 results[f"{key}_loss"] = step_vals[key]
                 logs[f"{key}_loss"].append(step_vals[key])
-
             for metric in ['train_acc', 'valid_acc', 'target_acc']:
                 logs[metric].append(results[metric])
-
             if results['valid_acc'] > best_valid_acc:
                 best_valid_acc = results['valid_acc']
                 target_acc = results['target_acc']
-
-            print_row([results[key] for key in print_key], colwidth=15)
-
-        logs['total_cost_time'].append(time.time() - round_start_time)
 
     print(f'\n🎯 Final Target Accuracy: {target_acc:.4f}')
 
     if getattr(args, 'enable_shap', False):
         print("\n📊 Running SHAP explainability...")
         try:
-            background = get_background_batch(valid_loader, size=64).cuda().detach().requires_grad_(True)
-            X_eval = background[:10].detach().requires_grad_(True)
+            background = next(iter(valid_loader))[0][:64].cuda().float()
+            background.requires_grad_(True)
+            X_eval = background[:10].clone().detach().requires_grad_(True)
+            for param in algorithm.parameters():
+                param.requires_grad = True
             shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
-
-            plot_summary(shap_vals, X_eval.cpu().numpy(), output_path=os.path.join(args.output, "shap_summary.png"))
-            plot_force(None, shap_vals, X_eval.cpu().numpy(), output_path=os.path.join(args.output, "shap_force.html"))
-            overlay_signal_with_shap(X_eval[0].cpu().numpy(), shap_vals.values[0], output_path=os.path.join(args.output, "shap_overlay.png"))
-            plot_shap_heatmap(shap_vals, output_path=os.path.join(args.output, "shap_heatmap.png"))
-
+            plot_summary(shap_vals, X_eval.cpu().numpy(), os.path.join(args.output, "shap_summary.png"))
+            plot_force(None, shap_vals, X_eval.cpu().numpy(), os.path.join(args.output, "shap_force.html"))
+            overlay_signal_with_shap(X_eval[0].cpu().numpy(), shap_vals.values[0], os.path.join(args.output, "shap_overlay.png"))
+            plot_shap_heatmap(shap_vals, os.path.join(args.output, "shap_heatmap.png"))
             base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
             print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
             print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
             print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
             print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals):.4f}")
-
             metrics = evaluate_advanced_shap_metrics(shap_vals, X_eval)
-            print(f"[SHAP] Entropy: {metrics.get('shap_entropy', 0):.4f}")
-            print(f"[SHAP] Coherence: {metrics.get('feature_coherence', 0):.4f}")
-            print(f"[SHAP] Channel Variance: {metrics.get('channel_variance', 0):.4f}")
-            print(f"[SHAP] Temporal Entropy: {metrics.get('temporal_entropy', 0):.4f}")
-            print(f"[SHAP] Mutual Info: {metrics.get('mutual_info', 0):.4f}")
-            print(f"[SHAP] PCA Alignment: {metrics.get('pca_alignment', 0):.4f}")
-
-            plot_emg_shap_4d(X_eval, shap_vals.values, output_path=os.path.join(args.output, "shap_4d_scatter.html"))
-            plot_4d_shap_surface(shap_vals, output_path=os.path.join(args.output, "shap_4d_surface.html"))
-
-            true_labels, pred_labels = [], []
-            for data in valid_loader:
-                x, y = data[0].cuda(), data[1]
-                with torch.no_grad():
-                    preds = algorithm.explain(x).cpu()
-                true_labels.extend(y.cpu().numpy())
-                pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
-
-            cm = confusion_matrix(true_labels, pred_labels)
-            disp = ConfusionMatrixDisplay(confusion_matrix=cm)
-            disp.plot(cmap="Blues")
-            plt.title("Confusion Matrix (Validation Set)")
-            plt.savefig(os.path.join(args.output, "confusion_matrix.png"), dpi=300)
-            plt.close()
-
-            print("✅ SHAP analysis completed successfully")
-
+            for k, v in metrics.items():
+                print(f"[SHAP] {k.replace('_', ' ').title()}: {v:.4f}")
+            plot_emg_shap_4d(X_eval, shap_vals.values, os.path.join(args.output, "shap_4d_scatter.html"))
+            plot_4d_shap_surface(shap_vals, os.path.join(args.output, "shap_4d_surface.html"))
         except Exception as e:
-            print(f"[ERROR] SHAP analysis failed: {str(e)}")
             import traceback
+            print(f"[ERROR] SHAP analysis failed: {str(e)}")
             traceback.print_exc()
-
-    try:
-        plt.figure(figsize=(12, 8))
-        plt.subplot(2, 1, 1)
-        epochs = list(range(len(logs['class_loss'])))
-        plt.plot(epochs, logs['class_loss'], label="Class Loss", marker='o')
-        plt.plot(epochs, logs['dis_loss'], label="Dis Loss", marker='x')
-        plt.plot(epochs, logs['total_loss'], label="Total Loss", linestyle='--')
-        plt.title("Losses over Training Steps")
-        plt.xlabel("Training Step")
-        plt.ylabel("Loss")
-        plt.legend()
-        plt.grid(True)
-
-        plt.subplot(2, 1, 2)
-        epochs = list(range(len(logs['train_acc'])))
-        plt.plot(epochs, logs['train_acc'], label="Train Accuracy", marker='o')
-        plt.plot(epochs, logs['valid_acc'], label="Valid Accuracy", marker='x')
-        plt.plot(epochs, logs['target_acc'], label="Target Accuracy", linestyle='--')
-        plt.title("Accuracy over Training Steps")
-        plt.xlabel("Training Step")
-        plt.ylabel("Accuracy")
-        plt.legend()
-        plt.grid(True)
-
-        plt.tight_layout()
-        plt.savefig(os.path.join(args.output, "training_metrics.png"), dpi=300)
-        plt.close()
-        print("✅ Training metrics plot saved")
-    except Exception as e:
-        print(f"[WARNING] Failed to generate training plots: {str(e)}")
 
 if __name__ == '__main__':
     args = get_args()

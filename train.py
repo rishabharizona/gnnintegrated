@@ -18,7 +18,7 @@ from shap_utils import (
     plot_force, evaluate_shap_impact, plot_shap_heatmap, get_background_batch,
     compute_jaccard_topk, compute_kendall_tau, cosine_similarity_shap,
     log_shap_numpy, overlay_signal_with_shap, compute_flip_rate, compute_confidence_change, compute_aopc, compute_feature_coherence, compute_shap_entropy,
-    plot_emg_shap_4d, compute_shap_channel_variance, compute_shap_temporal_entropy, compare_top_k_channels, compute_mutual_info, compute_pca_alignment, plot_4d_shap_surface
+    plot_emg_shap_4d, compute_shap_channel_variance, compute_shap_temporal_entropy, compare_top_k_channels, compute_mutual_info, compute_pca_alignment, plot_4d_shap_surface, safe_compute_shap_values
 )
 
 def automated_k_estimation(features, k_min=2, k_max=10):

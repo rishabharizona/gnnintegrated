@@ -25,73 +25,35 @@ class PredictWrapper(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
-        # Ensure gradients are enabled
-        for param in self.model.parameters():
-            param.requires_grad = True
-
+        
     def forward(self, x):
-        # Enable gradients for input
-        x = x.clone().requires_grad_(True)
-        return self.model.explain(x)
+        # Directly run the model components with gradient tracking
+        with torch.enable_grad():
+            features = self.model.featurizer(x)
+            bottleneck = self.model.bottleneck(features)
+            return self.model.classifier(bottleneck)
 
 # ✅ Explainer setup
 def get_shap_explainer(model, background_data):
-    # Ensure gradients are enabled
-    model.train()
-    for param in model.parameters():
-        param.requires_grad = True
-        
+    # Create wrapper that bypasses custom methods
     wrapped = PredictWrapper(model)
     return shap.DeepExplainer(wrapped, background_data)
-
-def compute_shap_values(explainer, inputs):
-    # Ensure gradients are enabled
-    inputs = inputs.clone().requires_grad_(True)
-    return explainer(inputs)
-
-def _get_shap_array(shap_values):
-    if isinstance(shap_values, list):
-        return shap_values[0].values
-    return shap_values.values
-
-# ✅ Enable gradients for SHAP
-def enable_shap_gradients(model):
-    """Enable gradients for SHAP analysis"""
-    model.train()
-    for param in model.parameters():
-        param.requires_grad = True
-    print("[SHAP] Enabled gradients for all model parameters")
 
 # ✅ Safe SHAP computation
 def safe_compute_shap_values(model, background, inputs):
     """Compute SHAP values with proper gradient handling"""
-    # Save original model state
-    original_mode = model.training
+    # Create explainer
+    explainer = get_shap_explainer(model, background)
     
-    try:
-        # Enable gradients and training mode
-        enable_shap_gradients(model)
-        model.train()
-        
-        # Create explainer
-        explainer = get_shap_explainer(model, background)
-        
-        # Compute SHAP values with gradient context
-        with torch.enable_grad():
-            shap_values = compute_shap_values(explainer, inputs)
-        
-        return shap_values
-    finally:
-        # Restore original model state
-        model.train(original_mode)
+    # Compute SHAP values with gradient context
+    with torch.enable_grad():
+        return explainer(inputs)
 
 # ✅ Background data for DeepExplainer
 def get_background_batch(loader, size=100):
     x_bg = []
     for batch in loader:
         x = batch[0]
-        # Ensure gradients are enabled
-        x = x.clone().requires_grad_(True)
         x_bg.append(x)
         if len(torch.cat(x_bg)) >= size:
             break

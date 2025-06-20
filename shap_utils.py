@@ -13,9 +13,6 @@ from sklearn.decomposition import PCA
 import os
 import warnings
 
-# Suppress SHAP warnings
-warnings.filterwarnings("ignore", message="torch==2.3.0", category=UserWarning)
-
 # Helper function to safely convert tensors to numpy
 def to_numpy(tensor):
     """Safely convert tensor to numpy array with detachment"""
@@ -29,10 +26,10 @@ def safe_forward(model, x):
     1. Clones inputs to prevent modification
     2. Temporarily disables inplace operations
     3. Runs with gradient context
-    4. Returns detached outputs
+    4. Returns outputs with gradients preserved
     """
     # Clone inputs to prevent inplace modification
-    x = x.clone()
+    x = x.clone().requires_grad_(True)
     
     # Disable inplace operations
     original_states = {}
@@ -47,8 +44,7 @@ def safe_forward(model, x):
             features = model.featurizer(x)
             bottleneck = model.bottleneck(features)
             output = model.classifier(bottleneck)
-            # Return detached output to prevent gradient issues
-            return output.detach()
+            return output
     finally:
         # Restore original inplace states
         for name, module in model.named_modules():
@@ -77,7 +73,7 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
     """
     Compute SHAP values safely with:
     - Custom forward pass
-    - Gradient detachment
+    - Gradient preservation
     - Error handling
     """
     # Create the explainer with our safe wrapper

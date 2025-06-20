@@ -45,14 +45,10 @@ def main(args):
     print_environ()
     print(s)
 
-    # Create output directory if it doesn't exist
     os.makedirs(args.output, exist_ok=True)
-
-    # Load datasets
     loader_data = get_act_dataloader(args)
     train_loader, train_loader_noshuffle, valid_loader, target_loader, tr, val, targetdata = loader_data[:7]
 
-    # Automated K estimation if enabled
     if getattr(args, 'automated_k', False):
         print("Running automated K estimation...")
         temp_model = ActNetwork(args.dataset).cuda()
@@ -71,82 +67,39 @@ def main(args):
         print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
         del temp_model
 
-    # Batch size adjustment
     if args.latent_domain_num < 6:
         args.batch_size = 32 * args.latent_domain_num
     else:
         args.batch_size = 16 * args.latent_domain_num
     print(f"Adjusted batch size: {args.batch_size}")
 
-    # Recreate data loaders with new batch size
-    train_loader = DataLoader(
-        dataset=tr, 
-        batch_size=args.batch_size,
-        num_workers=args.N_WORKERS, 
-        drop_last=False, 
-        shuffle=True
-    )
-    
-    train_loader_noshuffle = DataLoader(
-        dataset=tr, 
-        batch_size=args.batch_size, 
-        num_workers=args.N_WORKERS, 
-        drop_last=False, 
-        shuffle=False
-    )
-    
-    valid_loader = DataLoader(
-        dataset=val, 
-        batch_size=args.batch_size,
-        num_workers=args.N_WORKERS, 
-        drop_last=False, 
-        shuffle=False
-    )
-    
-    target_loader = DataLoader(
-        dataset=targetdata, 
-        batch_size=args.batch_size,
-        num_workers=args.N_WORKERS, 
-        drop_last=False, 
-        shuffle=False
-    )
+    train_loader = DataLoader(dataset=tr, batch_size=args.batch_size, num_workers=args.N_WORKERS, drop_last=False, shuffle=True)
+    train_loader_noshuffle = DataLoader(dataset=tr, batch_size=args.batch_size, num_workers=args.N_WORKERS, drop_last=False, shuffle=False)
+    valid_loader = DataLoader(dataset=val, batch_size=args.batch_size, num_workers=args.N_WORKERS, drop_last=False, shuffle=False)
+    target_loader = DataLoader(dataset=targetdata, batch_size=args.batch_size, num_workers=args.N_WORKERS, drop_last=False, shuffle=False)
 
-    # Initialize algorithm
     algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).cuda()
     algorithm.train()
 
-    # Setup optimizers
     optd = get_optimizer(algorithm, args, nettype='Diversify-adv')
     opt = get_optimizer(algorithm, args, nettype='Diversify-cls')
     opta = get_optimizer(algorithm, args, nettype='Diversify-all')
 
-    # Training metrics logging
-    logs = {k: [] for k in ['epoch', 'class_loss', 'dis_loss', 'ent_loss', 
-                           'total_loss', 'train_acc', 'valid_acc', 'target_acc', 
-                           'total_cost_time']}
+    logs = {k: [] for k in ['epoch', 'class_loss', 'dis_loss', 'ent_loss', 'total_loss', 'train_acc', 'valid_acc', 'target_acc', 'total_cost_time']}
     best_valid_acc, target_acc = 0, 0
 
-    # Main training loop
     for round_idx in range(args.max_epoch):
         print(f'\n======== ROUND {round_idx} ========')
-        
-        # Curriculum learning setup
+
         if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
             if tr is not None and val is not None:
                 algorithm.eval()
                 full_dataset = ConcatDataset([tr, val])
-                # Use full dataset for curriculum (simplified)
-                train_loader = DataLoader(
-                    full_dataset, 
-                    batch_size=args.batch_size,
-                    num_workers=args.N_WORKERS, 
-                    shuffle=True
-                )
+                train_loader = DataLoader(full_dataset, batch_size=args.batch_size, num_workers=args.N_WORKERS, shuffle=True)
                 print(f"Curriculum learning: Stage {round_idx}")
                 algorithm.train()
 
-        # Phase 1: Feature update
         print('==== Feature update ====')
         print_row(['epoch', 'class_loss'], colwidth=15)
         for step in range(args.local_epoch):
@@ -155,7 +108,6 @@ def main(args):
             print_row([step, loss_result_dict['class']], colwidth=15)
             logs['class_loss'].append(loss_result_dict['class'])
 
-        # Phase 2: Latent domain characterization
         print('==== Latent domain characterization ====')
         print_row(['epoch', 'total_loss', 'dis_loss', 'ent_loss'], colwidth=15)
         for step in range(args.local_epoch):
@@ -168,12 +120,10 @@ def main(args):
 
         algorithm.set_dlabel(train_loader)
 
-        # Phase 3: Domain-invariant learning
         print('==== Domain-invariant feature learning ====')
         loss_list = alg_loss_dict(args)
         eval_dict = train_valid_target_eval_names(args)
-        print_key = ['epoch'] + [f"{item}_loss" for item in loss_list] + \
-                   [f"{item}_acc" for item in eval_dict] + ['total_cost_time']
+        print_key = ['epoch'] + [f"{item}_loss" for item in loss_list] + [f"{item}_acc" for item in eval_dict] + ['total_cost_time']
         print_row(print_key, colwidth=15)
 
         round_start_time = time.time()
@@ -182,7 +132,6 @@ def main(args):
             for data in train_loader:
                 step_vals = algorithm.update(data, opt)
 
-            # Calculate accuracies
             results = {
                 'epoch': round_idx * args.local_epoch + step,
                 'train_acc': modelopera.accuracy(algorithm, train_loader_noshuffle, None),
@@ -190,61 +139,42 @@ def main(args):
                 'target_acc': modelopera.accuracy(algorithm, target_loader, None),
                 'total_cost_time': time.time() - step_start_time
             }
-            
-            # Log losses
+
             for key in loss_list:
                 results[f"{key}_loss"] = step_vals[key]
                 logs[f"{key}_loss"].append(step_vals[key])
-            
-            # Log metrics
+
             for metric in ['train_acc', 'valid_acc', 'target_acc']:
                 logs[metric].append(results[metric])
-            
-            # Update best validation accuracy
+
             if results['valid_acc'] > best_valid_acc:
                 best_valid_acc = results['valid_acc']
                 target_acc = results['target_acc']
-            
+
             print_row([results[key] for key in print_key], colwidth=15)
 
         logs['total_cost_time'].append(time.time() - round_start_time)
 
     print(f'\n🎯 Final Target Accuracy: {target_acc:.4f}')
 
-    # SHAP explainability analysis
     if getattr(args, 'enable_shap', False):
         print("\n📊 Running SHAP explainability...")
         try:
-            # Prepare background and evaluation data
-            background = get_background_batch(valid_loader, size=64).cuda()
-            X_eval = background[:10]
-            
-            # Compute SHAP values safely
+            background = get_background_batch(valid_loader, size=64).cuda().detach().requires_grad_(True)
+            X_eval = background[:10].detach().requires_grad_(True)
             shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
-            
-            # Generate core visualizations
-            plot_summary(shap_vals, X_eval.cpu().numpy(), 
-                         output_path=os.path.join(args.output, "shap_summary.png"))
-            
-            plot_force(None, shap_vals, X_eval.cpu().numpy(),
-                       output_path=os.path.join(args.output, "shap_force.html"))
-            
-            overlay_signal_with_shap(X_eval[0].cpu().numpy(), shap_vals.values[0], 
-                                    output_path=os.path.join(args.output, "shap_overlay.png"))
-            
-            plot_shap_heatmap(shap_vals, 
-                             output_path=os.path.join(args.output, "shap_heatmap.png"))
 
-            # Evaluate SHAP impact
+            plot_summary(shap_vals, X_eval.cpu().numpy(), output_path=os.path.join(args.output, "shap_summary.png"))
+            plot_force(None, shap_vals, X_eval.cpu().numpy(), output_path=os.path.join(args.output, "shap_force.html"))
+            overlay_signal_with_shap(X_eval[0].cpu().numpy(), shap_vals.values[0], output_path=os.path.join(args.output, "shap_overlay.png"))
+            plot_shap_heatmap(shap_vals, output_path=os.path.join(args.output, "shap_heatmap.png"))
+
             base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
-
-            # Compute impact metrics
             print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
             print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
             print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
             print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals):.4f}")
 
-            # Compute advanced metrics
             metrics = evaluate_advanced_shap_metrics(shap_vals, X_eval)
             print(f"[SHAP] Entropy: {metrics.get('shap_entropy', 0):.4f}")
             print(f"[SHAP] Coherence: {metrics.get('feature_coherence', 0):.4f}")
@@ -253,14 +183,9 @@ def main(args):
             print(f"[SHAP] Mutual Info: {metrics.get('mutual_info', 0):.4f}")
             print(f"[SHAP] PCA Alignment: {metrics.get('pca_alignment', 0):.4f}")
 
-            # Generate 4D visualizations
-            plot_emg_shap_4d(X_eval, shap_vals.values, 
-                             output_path=os.path.join(args.output, "shap_4d_scatter.html"))
-            
-            plot_4d_shap_surface(shap_vals, 
-                                output_path=os.path.join(args.output, "shap_4d_surface.html"))
+            plot_emg_shap_4d(X_eval, shap_vals.values, output_path=os.path.join(args.output, "shap_4d_scatter.html"))
+            plot_4d_shap_surface(shap_vals, output_path=os.path.join(args.output, "shap_4d_surface.html"))
 
-            # Confusion matrix
             true_labels, pred_labels = [], []
             for data in valid_loader:
                 x, y = data[0].cuda(), data[1]
@@ -275,15 +200,14 @@ def main(args):
             plt.title("Confusion Matrix (Validation Set)")
             plt.savefig(os.path.join(args.output, "confusion_matrix.png"), dpi=300)
             plt.close()
-            
+
             print("✅ SHAP analysis completed successfully")
-            
+
         except Exception as e:
             print(f"[ERROR] SHAP analysis failed: {str(e)}")
             import traceback
             traceback.print_exc()
 
-    # Plot training metrics
     try:
         plt.figure(figsize=(12, 8))
         plt.subplot(2, 1, 1)

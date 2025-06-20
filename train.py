@@ -49,6 +49,7 @@ def automated_k_estimation(features, k_min=2, k_max=10):
 def main(args):
     s = print_args(args, [])
     set_random_seed(args.seed)
+
     print_environ()
     print(s)
 
@@ -59,28 +60,62 @@ def main(args):
 
     # Automated K estimation if enabled
     if getattr(args, 'automated_k', False):
-        algorithm_class = alg.get_algorithm_class(args.algorithm)
-        temp_algorithm = algorithm_class(args).cuda()
-        temp_algorithm.eval()
+        # Create a minimal feature extractor model
+        from network.act_network import ActNetwork
+        temp_model = ActNetwork(args.dataset).cuda()
+        temp_model.eval()
         feature_list = []
 
         with torch.no_grad():
             for batch in train_loader:
                 data = batch[0].cuda() if isinstance(batch, (list, tuple)) else batch.cuda()
-                features = temp_algorithm.featurizer(data)
+                features = temp_model(data)
                 feature_list.append(features.cpu().numpy())
 
         all_features = np.concatenate(feature_list, axis=0)
         optimal_k = automated_k_estimation(all_features)
         args.latent_domain_num = optimal_k
         print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
-        del temp_algorithm
+        del temp_model
 
     # Batch size adjustment
     if args.latent_domain_num < 6:
         args.batch_size = 32 * args.latent_domain_num
     else:
         args.batch_size = 16 * args.latent_domain_num
+
+    # Recreate data loaders with new batch size
+    train_loader = DataLoader(
+        dataset=tr, 
+        batch_size=args.batch_size,
+        num_workers=args.N_WORKERS, 
+        drop_last=False, 
+        shuffle=True
+    )
+    
+    train_loader_noshuffle = DataLoader(
+        dataset=tr, 
+        batch_size=args.batch_size, 
+        num_workers=args.N_WORKERS, 
+        drop_last=False, 
+        shuffle=False
+    )
+    
+    valid_loader = DataLoader(
+        dataset=val, 
+        batch_size=args.batch_size,
+        num_workers=args.N_WORKERS, 
+        drop_last=False, 
+        shuffle=False
+    )
+    
+    target_loader = DataLoader(
+        dataset=targetdata, 
+        batch_size=args.batch_size,
+        num_workers=args.N_WORKERS, 
+        drop_last=False, 
+        shuffle=False
+    )
 
     # Initialize algorithm
     algorithm_class = alg.get_algorithm_class(args.algorithm)

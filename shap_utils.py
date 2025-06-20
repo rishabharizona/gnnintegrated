@@ -23,7 +23,6 @@ from tqdm import tqdm
 from scipy.stats import entropy
 from sklearn.metrics import mutual_info_score
 from sklearn.decomposition import PCA
-import random
 
 # Helper function to safely convert tensors to numpy
 def to_numpy(tensor):
@@ -143,9 +142,7 @@ def plot_summary(shap_values, features, output_path, max_display=20):
         for t in range(features.shape[3]):  # Time steps
             feature_names.append(f"CH{ch+1}_T{t}")
     
-    # Use explicit random state to avoid FutureWarning
-    rng = np.random.RandomState(42)
-    
+    # Use integer seed instead of RandomState object
     shap.summary_plot(
         flat_shap_values, 
         flat_features,
@@ -153,12 +150,13 @@ def plot_summary(shap_values, features, output_path, max_display=20):
         plot_type="bar",
         max_display=max_display,
         show=False,
-        rng=rng  # Explicit random state
+        rng=42  # Pass integer seed directly
     )
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
     print(f"✅ Saved summary plot: {output_path}")
+
 
 def overlay_signal_with_shap(signal, shap_vals, output_path):
     """Overlay SHAP values on original signal (detached)"""

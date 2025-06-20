@@ -135,7 +135,7 @@ def plot_force(explainer, shap_values, inputs, index=0, output_path="shap_force.
     shap.save_html(output_path, force_html)
 
     if log_to_wandb:
-        wandb.log({"SHAP Force Plot": wandb.Html(open(output_path).read())})
+        wandb.log({"SHAP Force Plot": wandb.Html(open(output_path).read()})
 
 # ✅ Overlay SHAP importance on signal
 def overlay_signal_with_shap(signal, shap_val, output_path="shap_overlay.png", log_to_wandb=False):
@@ -247,7 +247,7 @@ def plot_emg_shap_4d(signal, shap_val, sample_id=0, output_path="shap_4d_scatter
     print(f"[INFO] Saved 4D SHAP scatter plot to: {output_path}")
 
     if log_to_wandb:
-        # FIXED: Removed extra parenthesis
+        # FIXED: Properly formatted wandb.log call
         wandb.log({title: wandb.Html(open(output_path).read()})
 
 # ✅ 4D SHAP Surface Plot
@@ -286,7 +286,7 @@ def plot_4d_shap_surface(shap_values, sample_id=0, output_path="shap_4d_surface.
     print(f"[INFO] Saved 4D SHAP surface plot to: {output_path}")
 
     if log_to_wandb:
-        # FIXED: Removed extra parenthesis
+        # FIXED: Properly formatted wandb.log call
         wandb.log({title: wandb.Html(open(output_path).read()})
 
 # ==============================

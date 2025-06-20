@@ -23,7 +23,10 @@ class Diversify(Algorithm):
         self.ddiscriminator = Adver_network.Discriminator(
             args.bottleneck, args.dis_hidden, args.num_classes)
         self.dclassifier = common_network.feat_classifier(
-            args.latent_domain_num, args.bottleneck, args.classifier)
+            int(args.latent_domain_num),  # Ensure integer
+            args.bottleneck, 
+            args.classifier
+        )
         
         # Main classification components
         self.bottleneck = common_network.feat_bottleneck(
@@ -35,7 +38,10 @@ class Diversify(Algorithm):
         self.abottleneck = common_network.feat_bottleneck(
             self.featurizer.in_features, args.bottleneck, args.layer)
         self.aclassifier = common_network.feat_classifier(
-            args.num_classes * args.latent_domain_num, args.bottleneck, args.classifier)
+            int(args.num_classes * args.latent_domain_num),  # Ensure integer
+            args.bottleneck, 
+            args.classifier
+        )
         
         # Domain discrimination components
         self.discriminator = Adver_network.Discriminator(

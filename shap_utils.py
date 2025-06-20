@@ -19,19 +19,39 @@ warnings.filterwarnings("ignore", message="torch==2.3.0", category=UserWarning)
 # ==============================
 # 🔍 Core SHAP Functionality
 # ==============================
+# Add a new function to safely run the model
+def safe_forward(model, x):
+    # Clone inputs to prevent inplace modification
+    x = x.clone()
+    
+    # Disable inplace operations
+    original_states = {}
+    for name, module in model.named_modules():
+        if hasattr(module, 'inplace'):
+            original_states[name] = module.inplace
+            module.inplace = False
+    
+    try:
+        with torch.enable_grad():
+            # Run model components separately
+            features = model.featurizer(x)
+            bottleneck = model.bottleneck(features)
+            output = model.classifier(bottleneck)
+            return output
+    finally:
+        # Restore original inplace states
+        for name, module in model.named_modules():
+            if name in original_states:
+                module.inplace = original_states[name]
 
-# ✅ SHAP-safe wrapper
+# Update the PredictWrapper
 class PredictWrapper(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
         
     def forward(self, x):
-        # Directly run the model components with gradient tracking
-        with torch.enable_grad():
-            features = self.model.featurizer(x)
-            bottleneck = self.model.bottleneck(features)
-            return self.model.classifier(bottleneck)
+        return safe_forward(self.model, x)
 
 # ✅ Explainer setup
 def get_shap_explainer(model, background_data):

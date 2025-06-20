@@ -98,8 +98,8 @@ def act_param_init(args):
         'emg': ((8, 1, 200), 6, 10)  # (input_shape, num_classes, grid_size)
     }
     
-    # Set parameters based on dataset
-    params = dataset_params.get(args.dataset, ((0, 0, 0), 0, 0)
+    # Set parameters based on dataset - FIXED THIS LINE
+    params = dataset_params.get(args.dataset, ((0, 0, 0), 0, 0))
     args.input_shape = params[0]
     args.num_classes = params[1]
     args.grid_size = params[2]

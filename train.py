@@ -7,7 +7,7 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, confusion_matrix, ConfusionMatrixDisplay
 from alg.opt import *
 from alg import alg, modelopera
-from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ
+from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ, disable_inplace_relu
 from datautil.getdataloader_single import get_act_dataloader
 from torch.utils.data import DataLoader, ConcatDataset
 from network.act_network import ActNetwork
@@ -214,16 +214,16 @@ def main(args):
     # SHAP explainability analysis
     if getattr(args, 'enable_shap', False):
         print("\n📊 Running SHAP explainability...")
-    try:
-        # Prepare background and evaluation data
-        background = get_background_batch(valid_loader, size=64).cuda()
-        X_eval = background[:10]
-        
-        # Disable inplace operations in the model
-        disable_inplace_relu(algorithm)
-        
-        # Compute SHAP values safely
-        shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
+        try:
+            # Prepare background and evaluation data
+            background = get_background_batch(valid_loader, size=64).cuda()
+            X_eval = background[:10]
+            
+            # Disable inplace operations in the model
+            disable_inplace_relu(algorithm)
+            
+            # Compute SHAP values safely
+            shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
             
             # Generate core visualizations
             plot_summary(shap_vals, X_eval.cpu().numpy(), 

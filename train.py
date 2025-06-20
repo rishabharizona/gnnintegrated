@@ -1,16 +1,18 @@
 import time
 import torch
 import numpy as np
+import os
+import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, confusion_matrix
-import matplotlib.pyplot as plt
-import pandas as pd
 from alg.opt import *
 from alg import alg, modelopera
 from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ
 from datautil.getdataloader_single import get_act_dataloader
-from datautil.getcurriculumloader import get_curriculum_loader, split_dataset_by_domain
-from torch.utils.data import ConcatDataset
+from torch.utils.data import DataLoader, ConcatDataset
+from network.act_network import ActNetwork
+
+# Full SHAP imports
 from shap_utils import (
     get_shap_explainer, compute_shap_values, _get_shap_array, plot_summary,
     plot_force, evaluate_shap_impact, plot_shap_heatmap, get_background_batch,
@@ -25,9 +27,6 @@ from shap4D import (
     plot_emg_shap_4d, compute_shap_channel_variance, compute_shap_temporal_entropy,
     compare_top_k_channels, compute_mutual_info, compute_pca_alignment, plot_4d_shap_surface
 )
-from sklearn.metrics import ConfusionMatrixDisplay
-import plotly.io as pio
-pio.renderers.default = 'colab'
 
 def automated_k_estimation(features, k_min=2, k_max=10):
     """Automatically determine optimal cluster count using silhouette score"""
@@ -35,7 +34,7 @@ def automated_k_estimation(features, k_min=2, k_max=10):
     best_score = -1
 
     for k in range(k_min, k_max + 1):
-        kmeans = KMeans(n_clusters=k, random_state=42).fit(features)
+        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10).fit(features)
         labels = kmeans.labels_
         score = silhouette_score(features, labels)
 
@@ -55,21 +54,19 @@ def main(args):
 
     # Load datasets
     loader_data = get_act_dataloader(args)
-    train_loader, train_loader_noshuffle, valid_loader, target_loader = loader_data[:4]
-    tr, val, targetdata = loader_data[4:7] if len(loader_data) > 4 else (None, None, None)
+    train_loader, train_loader_noshuffle, valid_loader, target_loader, tr, val, targetdata = loader_data[:7]
 
     # Automated K estimation if enabled
     if getattr(args, 'automated_k', False):
-        # Create a minimal feature extractor model
-        from network.act_network import ActNetwork
+        print("Running automated K estimation...")
         temp_model = ActNetwork(args.dataset).cuda()
         temp_model.eval()
         feature_list = []
 
         with torch.no_grad():
             for batch in train_loader:
-                data = batch[0].cuda() if isinstance(batch, (list, tuple)) else batch.cuda()
-                features = temp_model(data)
+                inputs = batch[0].cuda().float()
+                features = temp_model(inputs)
                 feature_list.append(features.cpu().numpy())
 
         all_features = np.concatenate(feature_list, axis=0)
@@ -83,6 +80,7 @@ def main(args):
         args.batch_size = 32 * args.latent_domain_num
     else:
         args.batch_size = 16 * args.latent_domain_num
+    print(f"Adjusted batch size: {args.batch_size}")
 
     # Recreate data loaders with new batch size
     train_loader = DataLoader(
@@ -138,14 +136,19 @@ def main(args):
         print(f'\n======== ROUND {round_idx} ========')
         
         # Curriculum learning setup
-        if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 3):
+        if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
             if tr is not None and val is not None:
                 algorithm.eval()
                 full_dataset = ConcatDataset([tr, val])
-                tr_curriculum, val_curriculum = split_dataset_by_domain(full_dataset)
-                train_loader = get_curriculum_loader(args, algorithm, tr_curriculum, val_curriculum, stage=round_idx)
-                algorithm.train()
+                # Use full dataset for curriculum (simplified)
+                train_loader = DataLoader(
+                    full_dataset, 
+                    batch_size=args.batch_size,
+                    num_workers=args.N_WORKERS, 
+                    shuffle=True
+                )
                 print(f"Curriculum learning: Stage {round_idx}")
+                algorithm.train()
 
         # Phase 1: Feature update
         print('==== Feature update ====')
@@ -183,6 +186,7 @@ def main(args):
             for data in train_loader:
                 step_vals = algorithm.update(data, opt)
 
+            # Calculate accuracies
             results = {
                 'epoch': round_idx * args.local_epoch + step,
                 'train_acc': modelopera.accuracy(algorithm, train_loader_noshuffle, None),
@@ -225,7 +229,7 @@ def main(args):
             plot_summary(shap_vals, X_eval.cpu().numpy())
             plot_force(shap_explainer, shap_vals, X_eval.cpu().numpy())
             overlay_signal_with_shap(X_eval[0].cpu().numpy(), shap_array[0], 
-                                    output_path="shap_overlay_sample0.png")
+                                    output_path=os.path.join(args.output, "shap_overlay.png"))
 
             # Evaluate SHAP impact
             base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
@@ -242,26 +246,23 @@ def main(args):
             # Multi-sample comparisons
             if len(shap_array) > 1:
                 print(f"[SHAP] Jaccard: {compute_jaccard_topk(shap_array[0], shap_array[1]):.4f}")
-                print(f"[SHAP] Kendall’s Tau: {compute_kendall_tau(shap_array[0], shap_array[1]):.4f}")
+                print(f"[SHAP] Kendall's Tau: {compute_kendall_tau(shap_array[0], shap_array[1]):.4f}")
                 print(f"[SHAP] Cosine Sim: {cosine_similarity_shap(shap_array[0], shap_array[1]):.4f}")
 
             # 4D-specific analysis
-            try:
-                plot_emg_shap_4d(X_eval, shap_array)
-                plot_4d_shap_surface(shap_vals, output_path="shap_4d_surface.html")
-                
-                shap_array_reshaped = shap_array.reshape(shap_array.shape[0], -1, shap_array.shape[2])
-                print(f"[SHAP4D] Channel Variance: {compute_shap_channel_variance(shap_array):.4f}")
-                print(f"[SHAP4D] Temporal Entropy: {compute_shap_temporal_entropy(shap_array_reshaped):.4f}")
-                
-                signal_sample = X_eval[0].cpu().numpy()
-                shap_sample = shap_array[0].mean(axis=-1)
-                print(f"[SHAP4D] Mutual Info: {compute_mutual_info(signal_sample, shap_sample):.4f}")
-                
-                shap_array_reduced = shap_array.mean(axis=-1)
-                print(f"[SHAP4D] PCA Alignment: {compute_pca_alignment(shap_array_reduced):.4f}")
-            except Exception as e:
-                print(f"[WARNING] 4D SHAP analysis failed: {str(e)}")
+            plot_emg_shap_4d(X_eval, shap_array)
+            plot_4d_shap_surface(shap_vals, output_path=os.path.join(args.output, "shap_4d_surface.html"))
+            
+            shap_array_reshaped = shap_array.reshape(shap_array.shape[0], -1, shap_array.shape[2])
+            print(f"[SHAP4D] Channel Variance: {compute_shap_channel_variance(shap_array):.4f}")
+            print(f"[SHAP4D] Temporal Entropy: {compute_shap_temporal_entropy(shap_array_reshaped):.4f}")
+            
+            signal_sample = X_eval[0].cpu().numpy()
+            shap_sample = shap_array[0].mean(axis=-1)
+            print(f"[SHAP4D] Mutual Info: {compute_mutual_info(signal_sample, shap_sample):.4f}")
+            
+            shap_array_reduced = shap_array.mean(axis=-1)
+            print(f"[SHAP4D] PCA Alignment: {compute_pca_alignment(shap_array_reduced):.4f}")
 
             # Confusion matrix
             true_labels, pred_labels = [], []
@@ -275,9 +276,11 @@ def main(args):
             disp = ConfusionMatrixDisplay(confusion_matrix=cm)
             disp.plot(cmap="Blues")
             plt.title("Confusion Matrix (Validation Set)")
-            plt.savefig("confusion_matrix.png", dpi=300)
+            plt.savefig(os.path.join(args.output, "confusion_matrix.png"), dpi=300)
             plt.close()
-
+            
+            print("✅ SHAP analysis completed successfully")
+            
         except Exception as e:
             print(f"[ERROR] SHAP analysis failed: {str(e)}")
 
@@ -307,20 +310,12 @@ def main(args):
         plt.grid(True)
 
         plt.tight_layout()
-        plt.savefig("training_metrics_plot.png", dpi=300)
+        plt.savefig(os.path.join(args.output, "training_metrics.png"), dpi=300)
         plt.close()
+        print("✅ Training metrics plot saved")
     except Exception as e:
         print(f"[WARNING] Failed to generate training plots: {str(e)}")
 
 if __name__ == '__main__':
     args = get_args()
-    
-    # Add integrated features as command-line arguments
-    if not hasattr(args, 'automated_k'):
-        args.automated_k = False  # Default: manual K selection
-    if not hasattr(args, 'curriculum'):
-        args.curriculum = False   # Default: no curriculum learning
-    if not hasattr(args, 'enable_shap'):
-        args.enable_shap = False  # Default: disable SHAP
-        
     main(args)

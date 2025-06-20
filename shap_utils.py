@@ -280,7 +280,7 @@ def compute_aopc(model, inputs, shap_values, steps=10):
 def compute_shap_entropy(shap_values):
     """Compute entropy of SHAP value distribution"""
     abs_vals = np.abs(to_numpy(shap_values.values))
-    normalized = abs_vals / (abs_vals.sum(axis=(1, 2, 3), keepdims=True) + 1e-10
+    normalized = abs_vals / (abs_vals.sum(axis=(1, 2, 3), keepdims=True)) + 1e-10
     ent = entropy(normalized.reshape(normalized.shape[0], -1))
     return np.mean(ent)
 

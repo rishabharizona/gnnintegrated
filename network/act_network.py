@@ -10,6 +10,13 @@ var_size = {
     }
 }
 
+# Function to disable inplace ReLU operations
+def disable_inplace_relu(model):
+    """Disable inplace operations in ReLU layers"""
+    for module in model.modules():
+        if isinstance(module, torch.nn.ReLU):
+            module.inplace = False
+
 class ActNetwork(nn.Module):
     """
     Convolutional neural network for sensor-based activity recognition
@@ -33,7 +40,7 @@ class ActNetwork(nn.Module):
                 padding=(0, var_size[taskname]['ker_size']//2)  # Add padding to maintain temporal dimension
             ),
             nn.BatchNorm2d(16),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),  # Removed inplace=True
             nn.MaxPool2d(kernel_size=(1, 2), stride=2)
         )
         
@@ -46,12 +53,15 @@ class ActNetwork(nn.Module):
                 padding=(0, var_size[taskname]['ker_size']//2)
             ),
             nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),  # Removed inplace=True
             nn.MaxPool2d(kernel_size=(1, 2), stride=2)
         )
         
         # Calculate output size dynamically
         self.in_features = self._calculate_output_size()
+        
+        # Disable inplace operations in all ReLU layers
+        disable_inplace_relu(self)
 
     def _calculate_output_size(self):
         """Calculate output size dynamically using a dummy input"""

@@ -103,9 +103,22 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
 def plot_summary(shap_values, features, output_path, max_display=20):
     """Global feature importance summary plot (detached)"""
     plt.figure(figsize=(10, 6))
+    
+    # Reshape data for summary plot
+    # Flatten all dimensions except batch: (batch, channels, 1, time_steps) -> (batch, channels * time_steps)
+    flat_features = features.reshape(features.shape[0], -1)
+    flat_shap_values = shap_values.values.reshape(shap_values.values.shape[0], -1)
+    
+    # Create feature names for EMG data
+    feature_names = []
+    for ch in range(features.shape[1]):  # Channels
+        for t in range(features.shape[3]):  # Time steps
+            feature_names.append(f"CH{ch+1}_T{t}")
+    
     shap.summary_plot(
-        shap_values.values, 
-        features,
+        flat_shap_values, 
+        flat_features,
+        feature_names=feature_names,
         plot_type="bar",
         max_display=max_display,
         show=False
@@ -120,18 +133,20 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     signal = to_numpy(signal)
     shap_vals = to_numpy(shap_vals)
     
+    # For EMG data: signal shape (channels, 1, time_steps)
     plt.figure(figsize=(12, 6))
     
     # Plot original signal
     plt.subplot(2, 1, 1)
-    plt.plot(signal[0, 0, 0], label='EMG Channel 1')
+    for ch in range(signal.shape[1]):
+        plt.plot(signal[0, ch, 0], label=f'Channel {ch+1}')
     plt.title("Original Signal")
     plt.legend()
     
     # Plot SHAP overlay
     plt.subplot(2, 1, 2)
-    for i in range(min(8, shap_vals.shape[1])):
-        plt.plot(shap_vals[:, i, 0], alpha=0.7, label=f'SHAP Channel {i+1}')
+    for ch in range(shap_vals.shape[1]):
+        plt.plot(shap_vals[0, ch, 0], alpha=0.7, label=f'SHAP Channel {ch+1}')
     plt.title("SHAP Values Overlay")
     plt.legend()
     
@@ -144,10 +159,14 @@ def plot_shap_heatmap(shap_values, output_path):
     """Heatmap of SHAP values across time and channels"""
     plt.figure(figsize=(12, 8))
     
-    # Aggregate SHAP values across channels
-    aggregated = np.abs(to_numpy(shap_values.values)).mean(axis=0)
+    # For EMG data: shap_values shape (samples, channels, 1, time_steps)
+    # Aggregate across samples and spatial dim
+    aggregated = np.abs(to_numpy(shap_values.values)).mean(axis=0).squeeze()
     
-    plt.imshow(aggregated.squeeze().T, 
+    # Transpose to (channels, time_steps)
+    aggregated = aggregated.T
+    
+    plt.imshow(aggregated, 
                aspect='auto', 
                cmap='viridis',
                interpolation='nearest')
@@ -155,6 +174,10 @@ def plot_shap_heatmap(shap_values, output_path):
     plt.xlabel("Time Steps")
     plt.ylabel("EMG Channels")
     plt.title("SHAP Value Heatmap")
+    
+    # Add channel labels
+    if aggregated.shape[0] <= 8:  # Only label if reasonable number of channels
+        plt.yticks(range(aggregated.shape[0]), [f"CH{i+1}" for i in range(aggregated.shape[0])])
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
@@ -188,17 +211,14 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
     
     # Mask top-K important features for each sample
     for i in range(batch_size):
-        # Flatten SHAP values for this sample
-        sample_shap = shap_vals_np[i].reshape(n_channels, n_timesteps)
-        
-        # Calculate importance scores
-        importance = np.abs(sample_shap).mean(axis=0)
+        # Calculate importance per time step (average across channels)
+        importance = np.abs(shap_vals_np[i]).mean(axis=(0, 1))
         
         # Determine threshold for top K%
         k = int(n_timesteps * top_k)
         top_indices = np.argsort(importance)[-k:]
         
-        # Mask important timesteps
+        # Mask important timesteps across all channels
         masked_inputs[i, :, :, top_indices] = 0
     
     # Convert back to tensor
@@ -210,9 +230,9 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
         masked_preds = torch.softmax(masked_preds, dim=1)
     
     # Calculate accuracy drop
-    base_acc = (base_preds.argmax(dim=1) == base_preds.argmax(dim=1)).float().mean()
-    masked_acc = (base_preds.argmax(dim=1) == masked_preds.argmax(dim=1)).float().mean()
-    acc_drop = 100 * (base_acc - masked_acc).item()
+    base_classes = base_preds.argmax(dim=1)
+    masked_classes = masked_preds.argmax(dim=1)
+    acc_drop = 100 * (1 - (base_classes == masked_classes).float().mean().item())
     
     return to_numpy(base_preds), to_numpy(masked_preds), acc_drop
 
@@ -244,7 +264,7 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     aopc_scores = []
     
     for i in range(batch_size):
-        # Get importance scores
+        # Get importance scores (average across channels)
         importance = np.abs(shap_vals_np[i]).mean(axis=(0, 1))
         sorted_indices = np.argsort(importance)[::-1]  # Most important first
         
@@ -276,8 +296,10 @@ def compute_aopc(model, inputs, shap_values, steps=10):
 def compute_shap_entropy(shap_values):
     """Compute entropy of SHAP value distribution"""
     abs_vals = np.abs(to_numpy(shap_values.values))
-    normalized = abs_vals / (abs_vals.sum(axis=(1, 2, 3), keepdims=True)) + 1e-10
-    ent = entropy(normalized.reshape(normalized.shape[0], -1))
+    # Flatten spatial dimensions
+    flat_vals = abs_vals.reshape(abs_vals.shape[0], -1)
+    normalized = flat_vals / (flat_vals.sum(axis=1, keepdims=True) + 1e-10
+    ent = entropy(normalized, axis=1)
     return np.mean(ent)
 
 def compute_feature_coherence(shap_values):
@@ -287,10 +309,9 @@ def compute_feature_coherence(shap_values):
     # Compute channel-wise correlations
     channel_corrs = []
     for i in range(vals.shape[0]):
-        chan_vals = vals[i].squeeze()
-        if chan_vals.ndim == 1:
-            continue
-            
+        # Average across spatial dims (1 in EMG data)
+        chan_vals = vals[i].squeeze(axis=1)  # Shape: (channels, time_steps)
+        
         # Compute pairwise channel correlations
         corr_matrix = np.corrcoef(chan_vals)
         np.fill_diagonal(corr_matrix, 0)
@@ -301,6 +322,7 @@ def compute_feature_coherence(shap_values):
 def compute_pca_alignment(shap_values):
     """Measure how well SHAP values align with PCA components"""
     vals = to_numpy(shap_values.values)
+    # Flatten spatial dimensions
     flat_vals = vals.reshape(vals.shape[0], -1)
     
     # Compute PCA on absolute SHAP values
@@ -312,15 +334,20 @@ def compute_pca_alignment(shap_values):
 
 def evaluate_advanced_shap_metrics(shap_values, inputs):
     """Compute a suite of advanced SHAP metrics"""
+    # Flatten inputs and SHAP values for mutual info
+    flat_inputs = inputs.reshape(-1)
+    flat_shap = np.abs(shap_values.values).reshape(-1)
+    
+    # Create bins for mutual information calculation
+    input_bins = np.digitize(flat_inputs, bins=np.linspace(flat_inputs.min(), flat_inputs.max(), 10))
+    shap_bins = np.digitize(flat_shap, bins=np.linspace(0, flat_shap.max(), 10))
+    
     return {
         'shap_entropy': compute_shap_entropy(shap_values),
         'feature_coherence': compute_feature_coherence(shap_values),
         'channel_variance': np.var(to_numpy(shap_values.values), axis=(0, 2, 3)).mean(),
         'temporal_entropy': entropy(np.abs(to_numpy(shap_values.values)).mean(axis=(0, 1, 2))),
-        'mutual_info': mutual_info_score(
-            inputs.flatten() > inputs.mean(),
-            np.abs(shap_values.values.flatten()) > np.abs(shap_values.values).mean()
-        ),
+        'mutual_info': mutual_info_score(input_bins, shap_bins),
         'pca_alignment': compute_pca_alignment(shap_values)
     }
 
@@ -331,26 +358,29 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     inputs = to_numpy(inputs)
     shap_values = to_numpy(shap_values)
     
+    # For first sample only
+    sample_idx = 0
+    inputs = inputs[sample_idx]
+    shap_values = shap_values[sample_idx]
+    
     # Create interactive plot
     fig = plt.figure(figsize=(14, 10))
     ax = fig.add_subplot(111, projection='3d')
     
-    # Flatten data for plotting
-    time_steps = np.arange(inputs.shape[3])
-    channels = np.arange(inputs.shape[1])
+    # Prepare data
+    time_steps = np.arange(inputs.shape[2])
+    channels = np.arange(inputs.shape[0])
     
-    # Create grid
-    T, C = np.meshgrid(time_steps, channels)
-    
-    # Plot each channel with different color
-    for ch in range(inputs.shape[1]):
-        # Get average SHAP magnitude per time point
-        avg_shap = np.abs(shap_values[0, ch, 0]).mean(axis=0)
+    # Plot each channel
+    for ch in range(inputs.shape[0]):
+        # Get SHAP magnitude for this channel
+        shap_mag = np.abs(shap_values[ch, 0])
         
+        # Plot channel with different color
         ax.plot(
-            T[ch], 
-            C[ch], 
-            avg_shap, 
+            time_steps, 
+            np.full_like(time_steps, ch), 
+            shap_mag, 
             label=f'Channel {ch+1}',
             linewidth=2
         )
@@ -358,7 +388,7 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     ax.set_xlabel('Time Steps')
     ax.set_ylabel('EMG Channels')
     ax.set_zlabel('|SHAP Value|')
-    ax.set_title('4D SHAP Value Distribution')
+    ax.set_title('4D SHAP Value Distribution (Sample 0)')
     ax.legend()
     
     plt.savefig(output_path, dpi=300)
@@ -370,12 +400,12 @@ def plot_4d_shap_surface(shap_values, output_path):
     shap_values = to_numpy(shap_values.values)
     
     # Aggregate across samples and spatial dim
-    aggregated = np.abs(shap_values).mean(axis=(0, 2))
+    aggregated = np.abs(shap_values).mean(axis=(0, 2)).T  # (channels, time_steps)
     
     # Create grid
     channels = np.arange(aggregated.shape[0])
     time_steps = np.arange(aggregated.shape[1])
-    C, T = np.meshgrid(channels, time_steps)
+    T, C = np.meshgrid(time_steps, channels)
     
     # Create plot
     fig = plt.figure(figsize=(14, 10))
@@ -383,7 +413,7 @@ def plot_4d_shap_surface(shap_values, output_path):
     
     # Plot surface
     surf = ax.plot_surface(
-        T, C, aggregated.T, 
+        T, C, aggregated, 
         cmap='viridis',
         edgecolor='none',
         alpha=0.8
@@ -392,7 +422,7 @@ def plot_4d_shap_surface(shap_values, output_path):
     ax.set_xlabel('Time Steps')
     ax.set_ylabel('EMG Channels')
     ax.set_zlabel('|SHAP Value|')
-    ax.set_title('SHAP Value Surface')
+    ax.set_title('SHAP Value Surface (Avg Across Samples)')
     fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
     
     plt.savefig(output_path, dpi=300)

@@ -219,18 +219,8 @@ def main(args):
             background = get_background_batch(valid_loader, size=64).cuda()
             X_eval = background[:10]
             
-            # Save original model state
-            original_training = algorithm.training
-            
-            try:
-                # Set model to training mode for SHAP computation
-                algorithm.train()
-                
-                # Compute SHAP values safely
-                shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
-            finally:
-                # Restore original model state
-                algorithm.train(original_training)
+            # Compute SHAP values safely
+            shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
             
             # Generate core visualizations
             plot_summary(shap_vals, X_eval.cpu().numpy(), 
@@ -275,7 +265,7 @@ def main(args):
             for data in valid_loader:
                 x, y = data[0].cuda(), data[1]
                 with torch.no_grad():
-                    preds = algorithm.explain(x).cpu()
+                    preds = algorithm.predict(x).cpu()
                 true_labels.extend(y.cpu().numpy())
                 pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
 

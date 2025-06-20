@@ -45,6 +45,9 @@ def main(args):
     print_environ()
     print(s)
 
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output, exist_ok=True)
+
     # Load datasets
     loader_data = get_act_dataloader(args)
     train_loader, train_loader_noshuffle, valid_loader, target_loader, tr, val, targetdata = loader_data[:7]
@@ -212,56 +215,57 @@ def main(args):
     if getattr(args, 'enable_shap', False):
         print("\n📊 Running SHAP explainability...")
         try:
+            # Prepare background and evaluation data
             background = get_background_batch(valid_loader, size=64).cuda()
             X_eval = background[:10]
-            shap_explainer = get_shap_explainer(algorithm, background)
-            shap_vals = compute_shap_values(shap_explainer, X_eval)
-            shap_array = _get_shap_array(shap_vals)
-
-            # Generate SHAP visualizations
-            plot_summary(shap_vals, X_eval.cpu().numpy())
-            plot_force(shap_explainer, shap_vals, X_eval.cpu().numpy())
-            overlay_signal_with_shap(X_eval[0].cpu().numpy(), shap_array[0], 
+            
+            # Compute SHAP values safely
+            shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
+            
+            # Generate core visualizations
+            plot_summary(shap_vals, X_eval.cpu().numpy(), 
+                         output_path=os.path.join(args.output, "shap_summary.png"))
+            
+            plot_force(None, shap_vals, X_eval.cpu().numpy(),
+                       output_path=os.path.join(args.output, "shap_force.html"))
+            
+            overlay_signal_with_shap(X_eval[0].cpu().numpy(), shap_vals.values[0], 
                                     output_path=os.path.join(args.output, "shap_overlay.png"))
+            
+            plot_shap_heatmap(shap_vals, 
+                             output_path=os.path.join(args.output, "shap_heatmap.png"))
 
             # Evaluate SHAP impact
             base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
-            log_shap_numpy(shap_vals)
 
-            # Compute SHAP metrics
+            # Compute impact metrics
             print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
             print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
             print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
-            print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals, evaluate_shap_impact):.4f}")
-            print(f"[SHAP] Entropy: {compute_shap_entropy(shap_array):.4f}")
-            print(f"[SHAP] Coherence: {compute_feature_coherence(shap_array):.4f}")
+            print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals):.4f}")
 
-            # Multi-sample comparisons
-            if len(shap_array) > 1:
-                print(f"[SHAP] Jaccard: {compute_jaccard_topk(shap_array[0], shap_array[1]):.4f}")
-                print(f"[SHAP] Kendall's Tau: {compute_kendall_tau(shap_array[0], shap_array[1]):.4f}")
-                print(f"[SHAP] Cosine Sim: {cosine_similarity_shap(shap_array[0], shap_array[1]):.4f}")
+            # Compute advanced metrics
+            metrics = evaluate_advanced_shap_metrics(shap_vals, X_eval)
+            print(f"[SHAP] Entropy: {metrics.get('shap_entropy', 0):.4f}")
+            print(f"[SHAP] Coherence: {metrics.get('feature_coherence', 0):.4f}")
+            print(f"[SHAP] Channel Variance: {metrics.get('channel_variance', 0):.4f}")
+            print(f"[SHAP] Temporal Entropy: {metrics.get('temporal_entropy', 0):.4f}")
+            print(f"[SHAP] Mutual Info: {metrics.get('mutual_info', 0):.4f}")
+            print(f"[SHAP] PCA Alignment: {metrics.get('pca_alignment', 0):.4f}")
 
-            # 4D-specific analysis
-            plot_emg_shap_4d(X_eval, shap_array)
-            plot_4d_shap_surface(shap_vals, output_path=os.path.join(args.output, "shap_4d_surface.html"))
+            # Generate 4D visualizations
+            plot_emg_shap_4d(X_eval, shap_vals.values, 
+                             output_path=os.path.join(args.output, "shap_4d_scatter.html"))
             
-            shap_array_reshaped = shap_array.reshape(shap_array.shape[0], -1, shap_array.shape[2])
-            print(f"[SHAP4D] Channel Variance: {compute_shap_channel_variance(shap_array):.4f}")
-            print(f"[SHAP4D] Temporal Entropy: {compute_shap_temporal_entropy(shap_array_reshaped):.4f}")
-            
-            signal_sample = X_eval[0].cpu().numpy()
-            shap_sample = shap_array[0].mean(axis=-1)
-            print(f"[SHAP4D] Mutual Info: {compute_mutual_info(signal_sample, shap_sample):.4f}")
-            
-            shap_array_reduced = shap_array.mean(axis=-1)
-            print(f"[SHAP4D] PCA Alignment: {compute_pca_alignment(shap_array_reduced):.4f}")
+            plot_4d_shap_surface(shap_vals, 
+                                output_path=os.path.join(args.output, "shap_4d_surface.html"))
 
             # Confusion matrix
             true_labels, pred_labels = [], []
             for data in valid_loader:
                 x, y = data[0].cuda(), data[1]
-                preds = algorithm.predict(x).cpu()
+                with torch.no_grad():
+                    preds = algorithm.explain(x).cpu()
                 true_labels.extend(y.cpu().numpy())
                 pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
 
@@ -276,6 +280,8 @@ def main(args):
             
         except Exception as e:
             print(f"[ERROR] SHAP analysis failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     # Plot training metrics
     try:

@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from scipy.spatial.distance import cdist
-from torch.utils.data import ConcatDataset  # Added import
+from torch.utils.data import ConcatDataset
 
 from alg.modelopera import get_fea
 from network import Adver_network, common_network
@@ -24,7 +24,7 @@ class Diversify(Algorithm):
         self.ddiscriminator = Adver_network.Discriminator(
             args.bottleneck, args.dis_hidden, args.num_classes)
         self.dclassifier = common_network.feat_classifier(
-            int(args.latent_domain_num),  # Ensure integer
+            int(args.latent_domain_num),
             args.bottleneck, 
             args.classifier
         )
@@ -39,7 +39,7 @@ class Diversify(Algorithm):
         self.abottleneck = common_network.feat_bottleneck(
             self.featurizer.in_features, args.bottleneck, args.layer)
         self.aclassifier = common_network.feat_classifier(
-            int(args.num_classes * args.latent_domain_num),  # Ensure integer
+            int(args.num_classes * args.latent_domain_num),
             args.bottleneck, 
             args.classifier
         )
@@ -49,7 +49,9 @@ class Diversify(Algorithm):
             args.bottleneck, args.dis_hidden, args.latent_domain_num)
         
         self.args = args
-        self.criterion = nn.CrossEntropyLoss()  # Added from second version
+        self.criterion = nn.CrossEntropyLoss()
+        # Add flag for explainability mode
+        self.explain_mode = False  # New flag
 
     def update_d(self, minibatch, opt):
         """Update domain characterization components"""
@@ -59,6 +61,9 @@ class Diversify(Algorithm):
         
         # Forward pass
         z1 = self.dbottleneck(self.featurizer(all_x1))
+        # Clone output during explainability to prevent inplace modification
+        if self.explain_mode:
+            z1 = z1.clone()
         disc_in1 = Adver_network.ReverseLayerF.apply(z1, self.args.alpha1)
         disc_out1 = self.ddiscriminator(disc_in1)
         cd1 = self.dclassifier(z1)
@@ -123,7 +128,6 @@ class Diversify(Algorithm):
             dd = cdist(all_fea, initc, 'cosine')
             pred_label = dd.argmin(axis=1)
 
-        # ========== START: Added ConcatDataset handling ==========
         # Handle ConcatDataset
         if isinstance(loader.dataset, ConcatDataset):
             concat_dataset = loader.dataset
@@ -152,7 +156,6 @@ class Diversify(Algorithm):
                     )
         else:
             loader.dataset.set_labels_by_index(pred_label, all_index, 'pdlabel')
-        # ========== END: Added ConcatDataset handling ==========
         
         print(Counter(pred_label))
         
@@ -166,6 +169,9 @@ class Diversify(Algorithm):
         all_x = data[0].cuda().float()
         all_y = data[1].cuda().long()
         all_z = self.bottleneck(self.featurizer(all_x))
+        # Clone output during explainability to prevent inplace modification
+        if self.explain_mode:
+            all_z = all_z.clone()
         
         # Domain discrimination
         disc_input = Adver_network.ReverseLayerF.apply(all_z, self.args.alpha)
@@ -196,6 +202,9 @@ class Diversify(Algorithm):
         
         # Forward pass
         all_z = self.abottleneck(self.featurizer(all_x))
+        # Clone output during explainability to prevent inplace modification
+        if self.explain_mode:
+            all_z = all_z.clone()
         all_preds = self.aclassifier(all_z)
         
         # Loss calculation and optimization
@@ -208,14 +217,23 @@ class Diversify(Algorithm):
 
     def predict(self, x):
         """Main prediction method"""
-        return self.classifier(self.bottleneck(self.featurizer(x)))
+        # Clone output during explainability to prevent inplace modification
+        features = self.featurizer(x)
+        bottleneck_out = self.bottleneck(features)
+        if self.explain_mode:
+            bottleneck_out = bottleneck_out.clone()
+        return self.classifier(bottleneck_out)
     
     def predict1(self, x):
         """Domain discriminator prediction"""
-        return self.ddiscriminator(self.dbottleneck(self.featurizer(x)))
+        features = self.featurizer(x)
+        bottleneck_out = self.dbottleneck(features)
+        if self.explain_mode:
+            bottleneck_out = bottleneck_out.clone()
+        return self.ddiscriminator(bottleneck_out)
     
     def forward(self, batch):
-        """Forward pass with loss calculation (from second version)"""
+        """Forward pass with loss calculation"""
         inputs = batch[0]
         labels = batch[1]
         
@@ -228,3 +246,14 @@ class Diversify(Algorithm):
         class_loss = self.criterion(preds, labels)
         
         return {'class': class_loss}
+    
+    # New method for SHAP explainability
+    def explain(self, x):
+        """Safe forward pass for explainability tools"""
+        original_mode = self.explain_mode
+        try:
+            self.explain_mode = True
+            with torch.no_grad():
+                return self.predict(x)
+        finally:
+            self.explain_mode = original_mode

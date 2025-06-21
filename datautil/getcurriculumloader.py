@@ -4,7 +4,7 @@ import numpy as np
 
 def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     """
-    Create a curriculum-based DataLoader using validation loss per domain to select 'easier' domains first.
+    Enhanced curriculum learning with target-aware domain selection and balanced sampling
     """
     # Group validation indices by domain
     domain_indices = {}
@@ -12,39 +12,80 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         domain = val_dataset[idx][2]
         domain_indices.setdefault(domain, []).append(idx)
 
-    domain_losses = []
+    domain_metrics = []
 
+    # Compute both loss and accuracy for each domain
     for domain, indices in domain_indices.items():
         subset = Subset(val_dataset, indices)
         loader = DataLoader(subset, batch_size=args.batch_size, shuffle=False, num_workers=args.N_WORKERS)
 
         total_loss = 0.0
+        correct = 0
+        total = 0
         num_batches = 0
 
-        for batch in loader:
-            batch = tuple(item.cuda() for item in batch)
-            output = algorithm.forward(batch)
-            total_loss += output['class'].item()
-            num_batches += 1
+        algorithm.eval()
+        with torch.no_grad():
+            for batch in loader:
+                inputs, labels, domains = batch
+                inputs, labels = inputs.cuda(), labels.cuda()
+                
+                output = algorithm.predict(inputs)
+                loss = torch.nn.functional.cross_entropy(output, labels)
+                total_loss += loss.item()
+                
+                _, predicted = output.max(1)
+                correct += predicted.eq(labels).sum().item()
+                total += labels.size(0)
+                num_batches += 1
 
         avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
-        domain_losses.append((domain, avg_loss))
+        accuracy = correct / total if total > 0 else 0
+        domain_metrics.append((domain, avg_loss, accuracy))
+
+    # Create domain difficulty score (weighted combination)
+    losses = [m[1] for m in domain_metrics]
+    min_loss, max_loss = min(losses), max(losses)
+    accs = [m[2] for m in domain_metrics]
+    min_acc, max_acc = min(accs), max(accs)
+    
+    domain_scores = []
+    for domain, loss, acc in domain_metrics:
+        # Normalize metrics (0-1 range)
+        norm_loss = (loss - min_loss) / (max_loss - min_loss + 1e-10)
+        norm_acc = (acc - min_acc) / (max_acc - min_acc + 1e-10)
+        
+        # Difficulty score: higher = harder
+        difficulty = 0.7 * norm_loss + 0.3 * (1 - norm_acc)
+        domain_scores.append((domain, difficulty))
 
     # Sort by easiest domains first
-    domain_losses.sort(key=lambda x: x[1])
+    domain_scores.sort(key=lambda x: x[1])
     
-    # Print after sorting (to show domain difficulty order)
-    print("\n--- Domain Ranking by Difficulty (easiest to hardest) ---")
-    for rank, (domain, loss) in enumerate(domain_losses, 1):
-        print(f"{rank}. Domain {domain}: Avg Val Loss = {loss:.4f}")
+    # Print domain ranking
+    print("\n--- Domain Difficulty Ranking (easiest to hardest) ---")
+    for rank, (domain, difficulty) in enumerate(domain_scores, 1):
+        print(f"{rank}. Domain {domain}: Difficulty = {difficulty:.4f}")
 
-    # Curriculum progress
-    num_domains = len(domain_losses)
-    progress = min(1.0, ((stage + 1) / args.CL_PHASE_EPOCHS) ** 0.5)
-    num_selected = max(1, int(np.ceil(progress * num_domains)))
-    selected_domains = [domain for domain, _ in domain_losses[:num_selected]]
+    # Curriculum progression with adaptive pacing
+    num_domains = len(domain_scores)
+    
+    # Slower progression in later stages
+    progress = min(1.0, (stage + 1) / args.CL_PHASE_EPOCHS)
+    progress = np.sqrt(progress)  # Slower initial progression
+    
+    # Always include at least 2 domains
+    num_selected = max(2, min(num_domains, int(np.ceil(progress * num_domains * 0.8))))
+    
+    selected_domains = [domain for domain, _ in domain_scores[:num_selected]]
+    
+    # Add a random harder domain to maintain diversity
+    if len(domain_scores) > num_selected:
+        random_hard_domain = random.choice(domain_scores[num_selected:])[0]
+        selected_domains.append(random_hard_domain)
+        print(f"Adding random harder domain: {random_hard_domain}")
 
-    # Select training indices from the chosen domains
+    # Select training indices from chosen domains
     train_domain_indices = {}
     for idx in range(len(train_dataset)):
         domain = train_dataset[idx][2]
@@ -52,11 +93,19 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
 
     selected_indices = []
     for domain in selected_domains:
-        selected_indices.extend(train_domain_indices.get(domain, []))
+        if domain in train_domain_indices:
+            domain_indices = train_domain_indices[domain]
+            
+            # Sample proportional to domain size
+            n_samples = min(len(domain_indices), max(50, int(len(domain_indices) * 0.8)))
+            selected_indices.extend(random.sample(domain_indices, n_samples))
 
+    print(f"Selected {len(selected_indices)} samples from {len(selected_domains)} domains")
+    
     curriculum_subset = SubsetWithLabelSetter(train_dataset, selected_indices)
     curriculum_loader = DataLoader(curriculum_subset, batch_size=args.batch_size,
-                                   shuffle=True, num_workers=args.N_WORKERS)
+                                   shuffle=True, num_workers=args.N_WORKERS,
+                                   drop_last=True)  # Drop last for stable batch norm
 
     return curriculum_loader
     

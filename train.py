@@ -266,9 +266,9 @@ def main(args):
             print(f"[SHAP] Mutual Info: {metrics.get('mutual_info', 0):.4f}")
             print(f"[SHAP] PCA Alignment: {metrics.get('pca_alignment', 0):.4f}")
             if len(shap_array) > 1:
-            print(f"[SHAP] Jaccard: {compute_jaccard_topk(shap_array[0], shap_array[1]):.4f}")
-            print(f"[SHAP] Kendall’s Tau: {compute_kendall_tau(shap_array[0], shap_array[1]):.4f}")
-            print(f"[SHAP] Cosine Sim: {cosine_similarity_shap(shap_array[0], shap_array[1]):.4f}")
+                print(f"[SHAP] Jaccard: {compute_jaccard_topk(shap_array[0], shap_array[1]):.4f}")
+                print(f"[SHAP] Kendall’s Tau: {compute_kendall_tau(shap_array[0], shap_array[1]):.4f}")
+                print(f"[SHAP] Cosine Sim: {cosine_similarity_shap(shap_array[0], shap_array[1]):.4f}")
             # Generate 4D visualizations
             plot_emg_shap_4d(X_eval, shap_vals.values, 
                              output_path=os.path.join(args.output, "shap_4d_scatter.html"))

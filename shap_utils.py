@@ -422,13 +422,21 @@ def evaluate_advanced_shap_metrics(shap_values, inputs):
     else:
         shap_vals = to_numpy(shap_values.values)
     
+    # Ensure inputs are in numpy format
+    inputs_np = to_numpy(inputs)
+    
     # Flatten inputs and SHAP values for mutual info
-    flat_inputs = inputs.reshape(-1)
+    flat_inputs = inputs_np.reshape(-1)
     flat_shap = np.abs(shap_vals).reshape(-1)
     
     # Create bins for mutual information calculation
-    input_bins = np.digitize(flat_inputs, bins=np.linspace(flat_inputs.min(), flat_inputs.max(), 10))
-    shap_bins = np.digitize(flat_shap, bins=np.linspace(0, flat_shap.max(), 10))
+    input_min = np.min(flat_inputs)
+    input_max = np.max(flat_inputs)
+    input_bins = np.digitize(flat_inputs, bins=np.linspace(input_min, input_max, 10))
+    
+    shap_min = 0
+    shap_max = np.max(flat_shap)
+    shap_bins = np.digitize(flat_shap, bins=np.linspace(shap_min, shap_max, 10))
     
     return {
         'shap_entropy': compute_shap_entropy(shap_values),

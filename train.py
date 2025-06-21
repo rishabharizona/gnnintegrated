@@ -321,13 +321,13 @@ def main(args):
     
     # Use ResNet if high accuracy mode is enabled
     if getattr(args, 'high_accuracy_mode', True):
-    print("🚀 Using ResNet-50 for high accuracy training")
-    # Create ResNet model separately
-    resnet_model = ResNetModel(num_classes=num_classes, input_channels=tr[0][0].shape[0]).cuda()
-    # Initialize algorithm normally
-    algorithm = algorithm_class(args).cuda()
-    # Replace the default network with ResNet
-    algorithm.network = resnet_model
+        print("🚀 Using ResNet-50 for high accuracy training")
+        # Create ResNet model separately
+        resnet_model = ResNetModel(num_classes=num_classes, input_channels=tr[0][0].shape[0]).cuda()
+        # Initialize algorithm normally
+        algorithm = algorithm_class(args).cuda()
+        # Replace the default network with ResNet
+        algorithm.network = resnet_model
     else:
         print("Using standard ActNetwork")
         algorithm = algorithm_class(args).cuda()

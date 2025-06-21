@@ -325,17 +325,24 @@ def compute_aopc(model, inputs, shap_values, steps=10):
         
         # Gradually remove features
         confidences = [to_numpy(base_conf[i])]
-        current_input = inputs[i].clone()
+        
+        # Create a copy to ensure contiguous memory layout
+        current_input = inputs[i].clone().detach().contiguous()
         
         for step in range(1, steps + 1):
             # Mask top features proportionally
             k = int(n_timesteps * step / steps)
             mask_indices = sorted_indices[:k]
-            current_input[:, :, mask_indices] = 0
+            
+            # Create a new tensor for modification
+            modified_input = current_input.clone()
+            
+            # Apply masking to the clone
+            modified_input[:, :, mask_indices] = 0
             
             # Get prediction
             with torch.no_grad():
-                pred = model.predict(current_input.unsqueeze(0))
+                pred = model.predict(modified_input.unsqueeze(0))
                 conf = torch.softmax(pred, dim=1).max().item()
             
             confidences.append(conf)

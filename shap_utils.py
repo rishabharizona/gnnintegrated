@@ -486,19 +486,23 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     fig = plt.figure(figsize=(14, 10))
     ax = fig.add_subplot(111, projection='3d')
     
-    # Prepare data
-    time_steps = np.arange(inputs.shape[2])
-    channels = np.arange(inputs.shape[0])
+    # Prepare data - ensure correct dimensions
+    time_steps = np.arange(inputs.shape[-1])  # Time is last dimension
     
     # Plot each channel
-    for ch in range(inputs.shape[0]):
+    for ch in range(inputs.shape[0]):  # Channels dimension
         # Get SHAP magnitude for this channel
-        shap_mag = np.abs(shap_vals[ch, 0])
+        if shap_vals.ndim == 3:  # (channels, 1, time_steps)
+            shap_mag = np.abs(shap_vals[ch, 0])
+        elif shap_vals.ndim == 2:  # (channels, time_steps)
+            shap_mag = np.abs(shap_vals[ch])
+        else:
+            raise ValueError(f"Unexpected SHAP dimension: {shap_vals.ndim}")
         
         # Plot channel with different color
         ax.plot(
             time_steps, 
-            np.full_like(time_steps, ch), 
+            np.full_like(time_steps, ch),  # Constant channel index
             shap_mag, 
             label=f'Channel {ch+1}',
             linewidth=2
@@ -523,7 +527,12 @@ def plot_4d_shap_surface(shap_values, output_path):
         shap_vals = to_numpy(shap_values.values)
     
     # Aggregate across samples and spatial dim
-    aggregated = np.abs(shap_vals).mean(axis=(0, 2)).T  # (channels, time_steps)
+    if shap_vals.ndim == 4:  # (batch, channels, 1, time)
+        aggregated = np.abs(shap_vals).mean(axis=(0, 2)).T  # (channels, time_steps)
+    elif shap_vals.ndim == 3:  # (batch, channels, time)
+        aggregated = np.abs(shap_vals).mean(axis=0).T  # (channels, time_steps)
+    else:
+        raise ValueError(f"Unsupported SHAP dimension: {shap_vals.ndim}")
     
     # Create grid
     channels = np.arange(aggregated.shape[0])

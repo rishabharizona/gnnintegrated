@@ -30,11 +30,11 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         with torch.no_grad():
             for batch in loader:
                 # Handle variable-length batches
-                inputs = batch[0].cuda()
-                labels = batch[1].cuda()
+                inputs = batch[0].cuda().float()  # Ensure float32
+                labels = batch[1].cuda().long()   # Ensure int64 (long)
                 
                 output = algorithm.predict(inputs)
-                loss = torch.nn.functional.cross_entropy(output, labels)
+                loss = torch.nn.functional.cross_entropy(output.float(), labels)  # Convert output to float32
                 total_loss += loss.item()
                 
                 _, predicted = output.max(1)

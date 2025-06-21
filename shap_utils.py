@@ -489,18 +489,16 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     # Prepare data - ensure correct dimensions
     time_steps = np.arange(inputs.shape[-1])  # Time is last dimension
     
-    # Handle different SHAP value dimensions
-    if shap_vals.ndim == 4:
-        # (1, channels, 1, time_steps) -> squeeze to (channels, time_steps)
-        shap_vals = shap_vals.squeeze(0).squeeze(1)
+    # Safely reduce dimensions - remove all singleton dimensions
+    shap_vals = np.squeeze(shap_vals)
     
-    # After squeezing, should be 2D (channels, time_steps) or 3D (channels, 1, time_steps)
+    # If still 3D, average across spatial dimension
     if shap_vals.ndim == 3:
-        # Squeeze middle dimension
-        shap_vals = shap_vals.squeeze(1)
+        shap_vals = shap_vals.mean(axis=1)
     
+    # If still not 2D, use the first channel only
     if shap_vals.ndim != 2:
-        raise ValueError(f"SHAP values must be 2D after processing, got {shap_vals.ndim}D")
+        raise ValueError(f"SHAP values must be 2D after processing, got {shap_vals.ndim}D array with shape {shap_vals.shape}")
     
     n_channels, n_timesteps = shap_vals.shape
     
@@ -536,13 +534,24 @@ def plot_4d_shap_surface(shap_values, output_path):
     else:
         shap_vals = to_numpy(shap_values.values)
     
-    # Aggregate across samples and spatial dim
-    if shap_vals.ndim == 4:  # (batch, channels, 1, time)
-        aggregated = np.abs(shap_vals).mean(axis=(0, 2)).T  # (channels, time_steps)
-    elif shap_vals.ndim == 3:  # (batch, channels, time)
-        aggregated = np.abs(shap_vals).mean(axis=0).T  # (channels, time_steps)
+    # Safely reduce dimensions
+    shap_vals = np.squeeze(shap_vals)
+    
+    # If still 4D (batch, channels, spatial, time), average spatial dim
+    if shap_vals.ndim == 4:
+        shap_vals = shap_vals.mean(axis=2)
+    
+    # Aggregate across samples
+    if shap_vals.ndim == 3:  # (batch, channels, time)
+        aggregated = np.abs(shap_vals).mean(axis=0)  # (channels, time)
+    elif shap_vals.ndim == 2:  # (channels, time)
+        aggregated = np.abs(shap_vals)
     else:
         raise ValueError(f"Unsupported SHAP dimension: {shap_vals.ndim}")
+    
+    # Transpose to (channels, time_steps) if needed
+    if aggregated.shape[0] != 8:  # Assuming 8 channels
+        aggregated = aggregated.T
     
     # Create grid
     channels = np.arange(aggregated.shape[0])

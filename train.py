@@ -87,8 +87,7 @@ class SubsetWithLabelSetter(torch.utils.data.Subset):
     def __init__(self, dataset, indices, domain_label=None):
         super().__init__(dataset, indices)
         self.domain_label = domain_label
-        # Store the original indices
-        self.original_indices = indices  # Save as a list for direct access
+        self.original_indices = indices  # Store the original dataset indices
         
     def __getitem__(self, idx):
         data = self.dataset[self.original_indices[idx]]
@@ -96,18 +95,13 @@ class SubsetWithLabelSetter(torch.utils.data.Subset):
             return (data[0], data[1], self.domain_label)
         return data
         
-    def set_labels_by_index(self, labels, batch_indices, key):
+    def set_labels_by_index(self, labels, subset_indices, key):
         """
         Delegate label setting to the underlying dataset
-        batch_indices: indices within the current batch (0 to batch_size-1)
+        subset_indices: indices within this subset (0 to len(self)-1)
         """
-        # Map batch indices to original dataset indices
-        original_indices = []
-        for batch_idx in batch_indices:
-            # batch_idx is position in current batch
-            # self.original_indices[batch_idx] is the index in the original dataset
-            original_indices.append(self.original_indices[batch_idx])
-            
+        # Map subset indices to original dataset indices
+        original_indices = [self.original_indices[i] for i in subset_indices]
         self.dataset.set_labels_by_index(labels, original_indices, key)
 
 def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):

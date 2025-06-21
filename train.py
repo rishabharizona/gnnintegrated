@@ -16,7 +16,10 @@ from network.act_network import ActNetwork
 from shap_utils import (
     get_background_batch, safe_compute_shap_values, plot_summary,
     overlay_signal_with_shap, plot_shap_heatmap,
-    evaluate_shap_impact, compute_flip_rate, compute_confidence_change,
+    evaluate_shap_impact, compute_flip_rate, compute_jaccard_topk,
+    compute_kendall_tau,
+    cosine_similarity_shap,
+    log_shap_numpy, compute_confidence_change,
     compute_aopc, compute_feature_coherence, compute_shap_entropy,
     plot_emg_shap_4d, plot_4d_shap_surface, evaluate_advanced_shap_metrics
 )
@@ -247,7 +250,7 @@ def main(args):
 
             # Evaluate SHAP impact
             base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
-
+            log_shap_numpy(shap_vals)
             # Compute impact metrics
             print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
             print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
@@ -262,7 +265,10 @@ def main(args):
             print(f"[SHAP] Temporal Entropy: {metrics.get('temporal_entropy', 0):.4f}")
             print(f"[SHAP] Mutual Info: {metrics.get('mutual_info', 0):.4f}")
             print(f"[SHAP] PCA Alignment: {metrics.get('pca_alignment', 0):.4f}")
-
+            if len(shap_array) > 1:
+            print(f"[SHAP] Jaccard: {compute_jaccard_topk(shap_array[0], shap_array[1]):.4f}")
+            print(f"[SHAP] Kendall’s Tau: {compute_kendall_tau(shap_array[0], shap_array[1]):.4f}")
+            print(f"[SHAP] Cosine Sim: {cosine_similarity_shap(shap_array[0], shap_array[1]):.4f}")
             # Generate 4D visualizations
             plot_emg_shap_4d(X_eval, shap_vals.values, 
                              output_path=os.path.join(args.output, "shap_4d_scatter.html"))

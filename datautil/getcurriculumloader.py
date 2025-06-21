@@ -4,6 +4,14 @@ import numpy as np
 import torch
 import random
 
+class LabelableSubset(Subset):
+    """Custom Subset class that supports label-setting methods"""
+    def set_labels_by_index(self, labels, indices, key):
+        """Delegate label-setting to the underlying dataset"""
+        # Map subset indices to original dataset indices
+        original_indices = [self.indices[i] for i in indices]
+        self.dataset.set_labels_by_index(labels, original_indices, key)
+
 def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     """
     Enhanced curriculum learning with target-aware domain selection and balanced sampling
@@ -106,7 +114,8 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
 
     print(f"Selected {len(selected_indices)} samples from {len(selected_domains)} domains")
     
-    curriculum_subset = Subset(train_dataset, selected_indices)
+    # Use custom LabelableSubset instead of standard Subset
+    curriculum_subset = LabelableSubset(train_dataset, selected_indices)
     curriculum_loader = DataLoader(curriculum_subset, batch_size=args.batch_size,
                                    shuffle=True, num_workers=args.N_WORKERS,
                                    drop_last=True)  # Drop last for stable batch norm
@@ -131,9 +140,3 @@ def split_dataset_by_domain(dataset, val_ratio=0.2, seed=42):
         val_indices.extend(val_idx)
 
     return Subset(dataset, train_indices), Subset(dataset, val_indices)
-    
-    
-class SubsetWithLabelSetter(Subset):
-    def set_labels_by_index(self, labels, indices, key):
-        if hasattr(self.dataset, 'set_labels_by_index'):
-            self.dataset.set_labels_by_index(labels, indices, key)

@@ -13,7 +13,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     Accuracy-preserving curriculum learning with sample weighting
     """
     # Skip curriculum in later stages
-    if stage >= args.CL_PHASE_EPOCHS - 2:
+    if stage >= args.CL_PHASE_EPOCHS - 49:
         return DataLoader(train_dataset, batch_size=args.batch_size,
                           shuffle=True, num_workers=args.N_WORKERS)
 

@@ -1,0 +1,178 @@
+import numpy as np
+from torch.utils.data import DataLoader
+import datautil.actdata.util as actutil
+from datautil.util import combindataset, subdataset
+import datautil.actdata.cross_people as cross_people
+
+# Task mapping for activity recognition
+task_act = {'cross_people': cross_people}
+
+def get_dataloader(args, tr, val, tar):
+    """
+    Create data loaders for training, validation, and target datasets
+    Args:
+        args: Configuration arguments
+        tr: Training dataset
+        val: Validation dataset
+        tar: Target dataset
+    Returns:
+        Tuple of DataLoader objects
+    """
+    # Add label-setting capability to datasets
+    for dataset in [tr, val, tar]:
+        if not hasattr(dataset, 'set_labels_by_index'):
+            dataset.set_labels_by_index = lambda labels, indices, key: None
+    
+    train_loader = DataLoader(
+        dataset=tr, 
+        batch_size=args.batch_size,
+        num_workers=args.N_WORKERS, 
+        drop_last=False, 
+        shuffle=True
+    )
+    
+    train_loader_noshuffle = DataLoader(
+        dataset=tr, 
+        batch_size=args.batch_size, 
+        num_workers=args.N_WORKERS, 
+        drop_last=False, 
+        shuffle=False
+    )
+    
+    valid_loader = DataLoader(
+        dataset=val, 
+        batch_size=args.batch_size,
+        num_workers=args.N_WORKERS, 
+        drop_last=False, 
+        shuffle=False
+    )
+    
+    target_loader = DataLoader(
+        dataset=tar, 
+        batch_size=args.batch_size,
+        num_workers=args.N_WORKERS, 
+        drop_last=False, 
+        shuffle=False
+    )
+    
+    return train_loader, train_loader_noshuffle, valid_loader, target_loader
+
+def get_act_dataloader(args):
+    """
+    Prepare activity recognition datasets and data loaders
+    Args:
+        args: Configuration arguments
+    Returns:
+        Tuple of DataLoader objects and datasets
+    """
+    source_datasetlist = []
+    target_datalist = []
+    pcross_act = task_act[args.task]
+
+    # Get people configuration for the dataset
+    tmpp = args.act_people[args.dataset]
+    args.domain_num = len(tmpp)
+    
+    # Create datasets for each person group
+    for i, item in enumerate(tmpp):
+        tdata = pcross_act.ActList(
+            args, 
+            args.dataset, 
+            args.data_dir, 
+            item, 
+            i, 
+            transform=actutil.act_train()
+        )
+        
+        # Add label-setting capability
+        if not hasattr(tdata, 'set_labels_by_index'):
+            tdata.set_labels_by_index = self._make_set_labels_fn(tdata)
+        
+        if i in args.test_envs:
+            target_datalist.append(tdata)
+        else:
+            source_datasetlist.append(tdata)
+            # Adjust steps per epoch if needed
+            if len(tdata) / args.batch_size < args.steps_per_epoch:
+                args.steps_per_epoch = len(tdata) / args.batch_size
+    
+    # Split source data into train/validation
+    rate = 0.2  # Validation split ratio
+    args.steps_per_epoch = int(args.steps_per_epoch * (1 - rate))
+    
+    # Combine source datasets
+    tdata = combindataset(args, source_datasetlist)
+    
+    # Add label-setting capability to combined dataset
+    tdata.set_labels_by_index = self._make_set_labels_fn(tdata)
+    
+    l = len(tdata.labels)
+    indexall = np.arange(l)
+    
+    # Shuffle indices for train/validation split
+    np.random.seed(args.seed)
+    np.random.shuffle(indexall)
+    ted = int(l * rate)
+    indextr, indexval = indexall[ted:], indexall[:ted]
+    
+    # Create train and validation subsets
+    tr = subdataset(args, tdata, indextr)
+    val = subdataset(args, tdata, indexval)
+    
+    # Add label-setting capability to subsets
+    tr.set_labels_by_index = self._make_set_labels_fn(tr)
+    val.set_labels_by_index = self._make_set_labels_fn(val)
+    
+    # Combine target datasets
+    targetdata = combindataset(args, target_datalist)
+    targetdata.set_labels_by_index = self._make_set_labels_fn(targetdata)
+    
+    # Create data loaders
+    loaders = get_dataloader(args, tr, val, targetdata)
+    return (*loaders, tr, val, targetdata)
+
+def _make_set_labels_fn(dataset):
+    """Create a function to set domain labels for a dataset"""
+    def set_labels_by_index(labels, indices, key):
+        """Set domain labels for specific indices"""
+        if key == 'pdlabel':  # Pseudo domain label
+            for i, idx in enumerate(indices):
+                if idx < len(dataset):
+                    # Convert sample to mutable list
+                    sample = list(dataset[idx])
+                    
+                    # Ensure we have a domain position
+                    if len(sample) < 3:
+                        sample.append(None)  # Add domain position if missing
+                    
+                    # Update domain label at position 2
+                    sample[2] = labels[i]
+                    
+                    # Update dataset sample
+                    if hasattr(dataset, 'samples'):
+                        dataset.samples[idx] = tuple(sample)
+                    elif hasattr(dataset, 'data'):
+                        dataset.data[idx] = tuple(sample)
+    return set_labels_by_index
+
+def get_shap_batch(loader, size=100):
+    """
+    Extract a batch of data for SHAP analysis
+    Args:
+        loader: DataLoader to extract from
+        size: Number of samples to extract
+    Returns:
+        Concatenated tensor of input samples
+    """
+    X_val = []
+    for batch in loader:
+        # Extract inputs from batch (could be tuple or tensor)
+        inputs = batch[0] if isinstance(batch, (list, tuple)) else batch
+        X_val.append(inputs)
+        
+        # Stop when we have enough samples
+        if len(torch.cat(X_val)) >= size:
+            break
+    
+    # Return exactly size samples
+    return torch.cat(X_val)[:size]

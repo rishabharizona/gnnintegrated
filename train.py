@@ -11,7 +11,7 @@ from utils.util import set_random_seed, get_args, print_row, print_args, train_v
 from datautil.getdataloader_single import get_act_dataloader
 from torch.utils.data import DataLoader, ConcatDataset
 from network.act_network import ActNetwork
-
+from sklearn.metrics import davies_bouldin_score
 # Unified SHAP utilities import
 from shap_utils import (
     get_background_batch, safe_compute_shap_values, plot_summary,
@@ -25,20 +25,39 @@ from shap_utils import (
 )
 
 def automated_k_estimation(features, k_min=2, k_max=10):
-    """Automatically determine optimal cluster count using silhouette score"""
+    """Automatically determine optimal cluster count using silhouette score and Davies-Bouldin Index"""
     best_k = k_min
     best_score = -1
-
+    scores = []
+    
     for k in range(k_min, k_max + 1):
         kmeans = KMeans(n_clusters=k, random_state=42, n_init=10).fit(features)
         labels = kmeans.labels_
-        score = silhouette_score(features, labels)
-
-        if score > best_score:
+        
+        # Skip if only one cluster exists
+        if len(np.unique(labels)) < 2:
+            silhouette = -1
+            dbi = float('inf')
+        else:
+            silhouette = silhouette_score(features, labels)
+            dbi = davies_bouldin_score(features, labels)
+        
+        # Combine scores: higher silhouette is better, lower DBI is better
+        # Normalize and combine (silhouette in [-1,1], DBI in [0,inf])
+        norm_silhouette = (silhouette + 1) / 2  # Map to [0,1]
+        norm_dbi = 1 / (1 + dbi)  # Map to (0,1] where higher is better
+        
+        # Combined score gives equal weight to both metrics
+        combined_score = (norm_silhouette + norm_dbi) / 2
+        scores.append((k, silhouette, dbi, combined_score))
+        
+        print(f"K={k}: Silhouette={silhouette:.4f}, DBI={dbi:.4f}, Combined={combined_score:.4f}")
+        
+        if combined_score > best_score:
             best_k = k
-            best_score = score
+            best_score = combined_score
 
-    print(f"[INFO] Optimal K determined as {best_k} (Silhouette Score: {best_score:.4f})")
+    print(f"[INFO] Optimal K determined as {best_k} (Combined Score: {best_score:.4f})")
     return best_k
 
 def main(args):

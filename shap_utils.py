@@ -486,31 +486,50 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     fig = plt.figure(figsize=(14, 10))
     ax = fig.add_subplot(111, projection='3d')
     
-    # Prepare data - ensure correct dimensions
-    time_steps = np.arange(inputs.shape[-1])  # Time is last dimension
-    
     # Safely reduce dimensions - remove all singleton dimensions
     shap_vals = np.squeeze(shap_vals)
     
-    # If still 3D, average across spatial dimension
-    if shap_vals.ndim == 3:
-        shap_vals = shap_vals.mean(axis=1)
+    # Get the number of time steps from input shape
+    n_timesteps = inputs.shape[-1]
     
-    # If still not 2D, use the first channel only
-    if shap_vals.ndim != 2:
-        raise ValueError(f"SHAP values must be 2D after processing, got {shap_vals.ndim}D array with shape {shap_vals.shape}")
+    # If SHAP values have more dimensions than expected, take first n_timesteps
+    if shap_vals.ndim == 1:
+        # If 1D, assume it's for all time steps
+        shap_vals = shap_vals.reshape(1, -1)
+    elif shap_vals.ndim > 1:
+        # Flatten spatial dimensions and take first n_timesteps
+        shap_vals = shap_vals.reshape(shap_vals.shape[0], -1)
+        shap_vals = shap_vals[:, :n_timesteps]
     
-    n_channels, n_timesteps = shap_vals.shape
+    # Ensure we have 2D array (channels, time_steps)
+    if shap_vals.ndim == 1:
+        shap_vals = shap_vals.reshape(1, n_timesteps)
+    elif shap_vals.ndim > 2:
+        shap_vals = shap_vals.reshape(-1, n_timesteps)
+    
+    n_channels = shap_vals.shape[0]
+    
+    # Create time steps array
+    time_steps = np.arange(n_timesteps)
     
     # Plot each channel
     for ch in range(n_channels):
         # Get SHAP magnitude for this channel
         shap_mag = np.abs(shap_vals[ch])
         
+        # Ensure arrays have same length
+        if len(shap_mag) != len(time_steps):
+            # Truncate to min length
+            min_len = min(len(shap_mag), len(time_steps))
+            shap_mag = shap_mag[:min_len]
+            ch_time_steps = time_steps[:min_len]
+        else:
+            ch_time_steps = time_steps
+        
         # Plot channel with different color
         ax.plot(
-            time_steps, 
-            np.full_like(time_steps, ch),  # Constant channel index
+            ch_time_steps, 
+            np.full_like(ch_time_steps, ch),  # Constant channel index
             shap_mag, 
             label=f'Channel {ch+1}',
             linewidth=2

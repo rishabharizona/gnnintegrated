@@ -301,17 +301,16 @@ def compute_confidence_change(base_preds, masked_preds):
     return conf_change
 
 def compute_aopc(model, inputs, shap_values, steps=10):
-    """Compute Area Over Perturbation Curve"""
     model.eval()
     inputs_np = to_numpy(inputs)
     
-    # Handle multi-class SHAP values
     if isinstance(shap_values.values, list):
         shap_vals_np = to_numpy(shap_values.values[0])
     else:
         shap_vals_np = to_numpy(shap_values.values)
     
     batch_size, n_channels, _, n_timesteps = inputs_np.shape
+    device = inputs.device
     
     with torch.no_grad():
         base_preds = model.predict(inputs)
@@ -324,38 +323,27 @@ def compute_aopc(model, inputs, shap_values, steps=10):
         importance = np.abs(shap_vals_np[i]).mean(axis=(0, 1))
         sorted_indices = np.argsort(importance)[::-1]  # Most important first
         
-        # Gradually remove features
+        current_input = inputs[i].clone().detach()
         confidences = [to_numpy(base_conf[i])]
         
-        # Create a clean copy of the input tensor
-        current_input = inputs[i].clone().detach().contiguous()
-        
+        # Gradually remove features
         for step in range(1, steps + 1):
-            # Mask top features proportionally
             k = int(n_timesteps * step / steps)
             mask_indices = sorted_indices[:k]
             
-            # Create a new tensor for this masking step
             modified_input = current_input.clone()
-            
-            # Convert to numpy to avoid tensor memory layout issues
-            modified_np = to_numpy(modified_input)
-            
-            # Apply masking in numpy
-            modified_np[:, :, mask_indices] = 0
-            
-            # Convert back to tensor
-            modified_tensor = torch.tensor(modified_np, dtype=inputs.dtype, device=inputs.device)
+            modified_input[:, :, mask_indices] = 0
             
             # Get prediction
             with torch.no_grad():
-                pred = model.predict(modified_tensor.unsqueeze(0))
+                pred = model.predict(modified_input.unsqueeze(0))
                 conf = torch.softmax(pred, dim=1).max().item()
             
             confidences.append(conf)
         
-        # Calculate AOPC
-        aopc = np.mean(confidences[0] - np.array(confidences[1:]))
+        # Calculate AOPC as cumulative drop
+        drops = [confidences[0] - conf for conf in confidences[1:]]
+        aopc = np.mean(drops)
         aopc_scores.append(aopc)
     
     return np.mean(aopc_scores)

@@ -10,6 +10,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # Group validation indices by domain
     domain_indices = {}
     for idx in range(len(val_dataset)):
+        # Extract domain from the third element (index 2)
         domain = val_dataset[idx][2]
         domain_indices.setdefault(domain, []).append(idx)
 
@@ -28,8 +29,9 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         algorithm.eval()
         with torch.no_grad():
             for batch in loader:
-                inputs, labels, domains = batch
-                inputs, labels = inputs.cuda(), labels.cuda()
+                # Handle variable-length batches
+                inputs = batch[0].cuda()
+                labels = batch[1].cuda()
                 
                 output = algorithm.predict(inputs)
                 loss = torch.nn.functional.cross_entropy(output, labels)
@@ -89,7 +91,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # Select training indices from chosen domains
     train_domain_indices = {}
     for idx in range(len(train_dataset)):
-        domain = train_dataset[idx][2]
+        domain = train_dataset[idx][2]  # Domain is at index 2
         train_domain_indices.setdefault(domain, []).append(idx)
 
     selected_indices = []
@@ -103,7 +105,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
 
     print(f"Selected {len(selected_indices)} samples from {len(selected_domains)} domains")
     
-    curriculum_subset = SubsetWithLabelSetter(train_dataset, selected_indices)
+    curriculum_subset = Subset(train_dataset, selected_indices)
     curriculum_loader = DataLoader(curriculum_subset, batch_size=args.batch_size,
                                    shuffle=True, num_workers=args.N_WORKERS,
                                    drop_last=True)  # Drop last for stable batch norm

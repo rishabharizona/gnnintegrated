@@ -253,7 +253,7 @@ def main(args):
             
             # Save SHAP values
             save_path = os.path.join(args.output, "shap_values.npy")
-            log_shap_numpy(shap_vals, save_path=save_path)
+            save_shap_numpy(shap_vals, save_path=save_path)
             
             # Compute impact metrics
             print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")

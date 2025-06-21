@@ -163,28 +163,45 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     signal = to_numpy(signal)
     shap_vals = to_numpy(shap_vals)
     
-    # For EMG data: signal shape (channels, 1, time_steps)
+    # Handle different dimensions
+    if signal.ndim > 1:
+        signal = signal.squeeze()
+    if shap_vals.ndim > 1:
+        shap_vals = shap_vals.squeeze()
+    
+    # Flatten both arrays
+    signal_flat = signal.reshape(-1)
+    shap_vals_flat = np.abs(shap_vals).reshape(-1)  # Use absolute SHAP values
+    
+    # Truncate to same length
+    min_len = min(len(signal_flat), len(shap_vals_flat))
+    signal_flat = signal_flat[:min_len]
+    shap_vals_flat = shap_vals_flat[:min_len]
+    
+    # Create plot
     plt.figure(figsize=(12, 6))
     
-    # Plot original signal
-    plt.subplot(2, 1, 1)
-    for ch in range(signal.shape[1]):
-        plt.plot(signal[0, ch, 0], label=f'Channel {ch+1}')
-    plt.title("Original Signal")
-    plt.legend()
+    # Plot signal and SHAP overlay
+    plt.plot(signal_flat, label="Signal", color="steelblue", alpha=0.7, linewidth=1.5)
+    plt.fill_between(
+        np.arange(min_len), 
+        0, 
+        shap_vals_flat, 
+        color="red", 
+        alpha=0.3, 
+        label="|SHAP|"
+    )
     
-    # Plot SHAP overlay
-    plt.subplot(2, 1, 2)
-    for ch in range(shap_vals.shape[1]):
-        plt.plot(shap_vals[0, ch, 0], alpha=0.7, label=f'SHAP Channel {ch+1}')
-    plt.title("SHAP Values Overlay")
+    plt.title("Signal with SHAP Overlay")
+    plt.xlabel("Flattened Feature Index")
+    plt.ylabel("Value")
     plt.legend()
+    plt.grid(True, alpha=0.2)
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
     print(f"✅ Saved signal overlay: {output_path}")
-
 def plot_shap_heatmap(shap_values, output_path):
     """Heatmap of SHAP values across time and channels"""
     # Handle multi-class SHAP values

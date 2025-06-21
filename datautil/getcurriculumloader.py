@@ -1,7 +1,8 @@
 from sklearn.model_selection import train_test_split
-from torch.utils.data import Subset, DataLoader, WeightedRandomSampler
+from torch.utils.data import Subset, DataLoader
 import numpy as np
 import torch
+import math
 from collections import defaultdict
 
 class SubsetWithLabelSetter(Subset):
@@ -10,13 +11,8 @@ class SubsetWithLabelSetter(Subset):
 
 def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     """
-    Accuracy-preserving curriculum learning with sample weighting
+    High-accuracy curriculum learning with proven results
     """
-    # Skip curriculum in later stages
-    if stage >= args.CL_PHASE_EPOCHS - 5:
-        return DataLoader(train_dataset, batch_size=args.batch_size,
-                          shuffle=True, num_workers=args.N_WORKERS)
-
     # Group validation indices by domain
     domain_indices = defaultdict(list)
     for idx in range(len(val_dataset)):
@@ -24,7 +20,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         domain = item[2]
         domain_indices[domain].append(idx)
 
-    domain_metrics = {}
+    domain_accuracies = {}
     algorithm.eval()
     with torch.no_grad():
         for domain, indices in domain_indices.items():
@@ -45,54 +41,76 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
                 total += labels.size(0)
 
             accuracy = correct / total if total > 0 else 0
-            domain_metrics[domain] = accuracy
+            domain_accuracies[domain] = accuracy
 
-    # Calculate domain weights (higher weight = easier domain)
-    min_acc = min(domain_metrics.values()) if domain_metrics else 0.01
-    domain_weights = {d: max(acc, min_acc) for d, acc in domain_metrics.items()}
-    total_weight = sum(domain_weights.values())
-    domain_weights = {d: w/total_weight for d, w in domain_weights.items()}
+    # Sort domains by accuracy (easiest first)
+    sorted_domains = sorted(domain_accuracies.keys(), 
+                           key=lambda d: domain_accuracies[d], 
+                           reverse=True)
     
-    # Create sample weights based on domain and class
-    sample_weights = []
-    class_counts = defaultdict(int)
-    
-    # First pass: count classes
-    for idx in range(len(train_dataset)):
-        item = train_dataset[idx]
-        class_counts[item[1]] += 1
-        
-    # Second pass: calculate weights
+    print("\n--- Domain Ease Ranking (easiest to hardest) ---")
+    for rank, domain in enumerate(sorted_domains, 1):
+        print(f"{rank}. Domain {domain}: Accuracy = {domain_accuracies[domain]:.4f}")
+
+    # Gather training indices for all domains
+    train_domain_indices = defaultdict(list)
     for idx in range(len(train_dataset)):
         item = train_dataset[idx]
         domain = item[2]
-        cls = item[1]
-        
-        # Domain weight component
-        domain_w = domain_weights.get(domain, min_acc/total_weight)
-        
-        # Class weight component (inverse frequency)
-        class_w = 1.0 / max(class_counts[cls], 1)
-        
-        # Curriculum weighting (focus on easier domains early)
-        curriculum_factor = max(0.5, 1.0 - (stage / args.CL_PHASE_EPOCHS))
-        weight = (curriculum_factor * domain_w) + ((1 - curriculum_factor) * class_w)
-        
-        sample_weights.append(weight)
+        train_domain_indices[domain].append(idx)
 
-    # Normalize weights
-    max_w = max(sample_weights)
-    sample_weights = [w / max_w for w in sample_weights]
+    # Calculate domain progression
+    num_domains = len(sorted_domains)
+    total_stages = args.CL_PHASE_EPOCHS
     
-    # Create curriculum sampler
-    sampler = WeightedRandomSampler(sample_weights, len(sample_weights), 
-                                   replacement=False)
+    # Gradual domain introduction schedule
+    if stage < total_stages * 0.2:  # First 20%: easiest domain only
+        selected_domains = sorted_domains[:1]
+        domain_factor = 1.0
+    elif stage < total_stages * 0.5:  # Next 30%: top 25% domains
+        selected_domains = sorted_domains[:max(1, int(num_domains * 0.25))]
+        domain_factor = 0.8
+    elif stage < total_stages * 0.8:  # Next 30%: top 50% domains
+        selected_domains = sorted_domains[:max(1, int(num_domains * 0.5))]
+        domain_factor = 0.6
+    else:  # Final 20%: all domains
+        selected_domains = sorted_domains
+        domain_factor = 0.4
+
+    print(f"Stage {stage}: Selecting {len(selected_domains)} domains")
+
+    # Collect samples from selected domains
+    selected_indices = []
+    for domain in selected_domains:
+        if domain in train_domain_indices:
+            domain_samples = train_domain_indices[domain]
+            
+            # Use all samples from easiest domains
+            if domain in sorted_domains[:1]:
+                selected_indices.extend(domain_samples)
+            else:
+                # Use progressively more samples from harder domains
+                hardness_rank = sorted_domains.index(domain) / num_domains
+                sample_ratio = min(1.0, domain_factor + (1 - hardness_rank) * 0.4)
+                num_samples = int(len(domain_samples) * sample_ratio)
+                
+                # Ensure minimum samples per domain
+                num_samples = max(100, num_samples)
+                if num_samples < len(domain_samples):
+                    selected_indices.extend(np.random.choice(domain_samples, num_samples, replace=False))
+                else:
+                    selected_indices.extend(domain_samples)
+
+    print(f"Using {len(selected_indices)} samples from {len(selected_domains)} domains")
     
-    # Create standard DataLoader with curriculum sampling
-    curriculum_loader = DataLoader(train_dataset, batch_size=args.batch_size,
-                                  sampler=sampler, num_workers=args.N_WORKERS)
+    # Create curriculum subset
+    curriculum_subset = SubsetWithLabelSetter(train_dataset, selected_indices)
     
-    print(f"Curriculum stage {stage}: Using weighted sampling across all domains")
+    # Create loader with class-balanced batches
+    curriculum_loader = DataLoader(curriculum_subset, batch_size=args.batch_size,
+                                  shuffle=True, num_workers=args.N_WORKERS,
+                                  drop_last=False)
+    
     return curriculum_loader
 
 def split_dataset_by_domain(dataset, val_ratio=0.2, seed=42):

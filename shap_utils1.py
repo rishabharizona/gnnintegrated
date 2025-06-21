@@ -11,19 +11,10 @@ from scipy.spatial.distance import cosine
 from scipy.stats import kendalltau, pearsonr, entropy as scipy_entropy
 from sklearn.metrics import accuracy_score, mutual_info_score
 from sklearn.decomposition import PCA
+from tqdm import tqdm
 import os
 import warnings
-
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
-import shap
-import os
-import json
-from tqdm import tqdm
 from scipy.stats import entropy
-from sklearn.metrics import mutual_info_score
-from sklearn.decomposition import PCA
 
 # Helper function to safely convert tensors to numpy
 def to_numpy(tensor):
@@ -109,7 +100,6 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
         base_values=explainer.expected_value,
         data=to_numpy(inputs)
     )
-
 # ================= Visualization Functions =================
 
 def plot_summary(shap_values, features, output_path, max_display=20):
@@ -640,20 +630,3 @@ def plot_4d_shap_surface(shap_values, output_path):
     # Save as HTML
     fig.write_html(output_path, include_plotlyjs='cdn')
     print(f"✅ Saved interactive SHAP surface plot: {output_path}")
-
-# ✅ Similarity metrics
-def compute_jaccard_topk(shap1, shap2, k=10):
-    top1 = set(np.argsort(-np.abs(shap1.flatten()))[:k])
-    top2 = set(np.argsort(-np.abs(shap2.flatten()))[:k])
-    return len(top1 & top2) / len(top1 | top2)
-
-def compute_kendall_tau(shap1, shap2):
-    return kendalltau(shap1.flatten(), shap2.flatten())[0]
-
-def cosine_similarity_shap(shap1, shap2):
-    return 1 - cosine(shap1.flatten(), shap2.flatten())
-
-# ✅ Save SHAP values
-def log_shap_numpy(shap_values, save_path="shap_values.npy"):
-    shap_array = _get_shap_array(shap_values)
-    np.save(save_path, shap_array)

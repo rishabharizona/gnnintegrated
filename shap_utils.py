@@ -424,7 +424,7 @@ def compute_pca_alignment(shap_values):
     return pca.explained_variance_ratio_.sum()
 
 def evaluate_advanced_shap_metrics(shap_values, inputs):
-    """Compute a suite of advanced SHAP metrics"""
+    """Compute a suite of advanced SHAP metrics and return Python floats"""
     # Handle multi-class SHAP values
     if isinstance(shap_values.values, list):
         shap_vals = to_numpy(shap_values.values[0])
@@ -453,14 +453,18 @@ def evaluate_advanced_shap_metrics(shap_values, inputs):
     shap_max = np.max(flat_shap) + 1e-10  # Avoid division by zero
     shap_bins = np.digitize(flat_shap, bins=np.linspace(shap_min, shap_max, 10))
     
-    return {
+    # Compute all metrics
+    metrics = {
         'shap_entropy': compute_shap_entropy(shap_values),
         'feature_coherence': compute_feature_coherence(shap_values),
         'channel_variance': np.var(shap_vals, axis=(0, 2, 3)).mean(),
-        'temporal_entropy': entropy(np.abs(shap_vals).mean(axis=(0, 1, 2))),
+        'temporal_entropy': entropy(np.abs(shap_vals).mean(axis=(0, 1, 2)).ravel()),
         'mutual_info': mutual_info_score(input_bins, shap_bins),
         'pca_alignment': compute_pca_alignment(shap_values)
     }
+    
+    # Convert all values to Python floats for safe formatting
+    return {k: float(v) for k, v in metrics.items()}
 # ================== 4D Visualizations =====================
 
 def plot_emg_shap_4d(inputs, shap_values, output_path):

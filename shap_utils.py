@@ -489,15 +489,25 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     # Prepare data - ensure correct dimensions
     time_steps = np.arange(inputs.shape[-1])  # Time is last dimension
     
+    # Handle different SHAP value dimensions
+    if shap_vals.ndim == 4:
+        # (1, channels, 1, time_steps) -> squeeze to (channels, time_steps)
+        shap_vals = shap_vals.squeeze(0).squeeze(1)
+    
+    # After squeezing, should be 2D (channels, time_steps) or 3D (channels, 1, time_steps)
+    if shap_vals.ndim == 3:
+        # Squeeze middle dimension
+        shap_vals = shap_vals.squeeze(1)
+    
+    if shap_vals.ndim != 2:
+        raise ValueError(f"SHAP values must be 2D after processing, got {shap_vals.ndim}D")
+    
+    n_channels, n_timesteps = shap_vals.shape
+    
     # Plot each channel
-    for ch in range(inputs.shape[0]):  # Channels dimension
+    for ch in range(n_channels):
         # Get SHAP magnitude for this channel
-        if shap_vals.ndim == 3:  # (channels, 1, time_steps)
-            shap_mag = np.abs(shap_vals[ch, 0])
-        elif shap_vals.ndim == 2:  # (channels, time_steps)
-            shap_mag = np.abs(shap_vals[ch])
-        else:
-            raise ValueError(f"Unexpected SHAP dimension: {shap_vals.ndim}")
+        shap_mag = np.abs(shap_vals[ch])
         
         # Plot channel with different color
         ax.plot(

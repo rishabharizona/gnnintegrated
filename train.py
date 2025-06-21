@@ -11,6 +11,7 @@ from alg import alg, modelopera
 from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ, disable_inplace_relu
 from datautil.getdataloader_single import get_act_dataloader
 from torch.utils.data import DataLoader, ConcatDataset
+from torch.utils.data import Subset
 from datautil.getcurriculumloader import get_curriculum_loader
 from network.act_network import ActNetwork
 from sklearn.metrics import davies_bouldin_score
@@ -108,7 +109,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     algorithm.eval()
     with torch.no_grad():
         for domain, indices in domain_indices.items():
-            subset = Subset(val_dataset, indices)
+            subset = torch.utils.data.Subset(val_dataset, indices)
             loader = DataLoader(subset, batch_size=args.batch_size, 
                                shuffle=False, num_workers=args.N_WORKERS)
 

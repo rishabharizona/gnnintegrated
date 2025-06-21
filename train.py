@@ -317,7 +317,7 @@ def main(args):
     algorithm_class = alg.get_algorithm_class(args.algorithm)
     
     # Determine number of classes
-    num_classes = len(np.unique([y for _, y, _ in tr]))
+    num_classes = len(np.unique([item[1] for item in tr]))
     
     # Use ResNet if high accuracy mode is enabled
     if getattr(args, 'high_accuracy_mode', True):

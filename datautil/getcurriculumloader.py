@@ -1,9 +1,10 @@
 from sklearn.model_selection import train_test_split
-from torch.utils.data import Subset, DataLoader
+from torch.utils.data import Subset, DataLoader, WeightedRandomSampler
 import numpy as np
 import torch
 import math
 from collections import defaultdict
+import copy
 
 class SubsetWithLabelSetter(Subset):
     def set_labels_by_index(self, labels, indices, key):
@@ -11,7 +12,7 @@ class SubsetWithLabelSetter(Subset):
 
 def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     """
-    Robust curriculum learning with gradual exposure and distribution preservation
+    Stable curriculum learning with gradual exposure and importance weighting
     """
     # Group validation indices by domain
     domain_indices = defaultdict(list)
@@ -20,9 +21,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         domain = item[2]  # Domain index
         domain_indices[domain].append(idx)
 
-    domain_metrics = []
-
-    # Compute accuracy for each domain
+    domain_accuracies = {}
     algorithm.eval()
     with torch.no_grad():
         for domain, indices in domain_indices.items():
@@ -43,32 +42,39 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
                 total += labels.size(0)
 
             accuracy = correct / total if total > 0 else 0
-            domain_metrics.append((domain, accuracy))
+            domain_accuracies[domain] = accuracy
 
-    # Sort by easiest domains first (highest accuracy)
-    domain_metrics.sort(key=lambda x: x[1], reverse=True)
+    # Get all domains sorted by accuracy (easiest first)
+    sorted_domains = sorted(domain_accuracies.keys(), 
+                           key=lambda d: domain_accuracies[d], 
+                           reverse=True)
     
     print("\n--- Domain Ease Ranking (easiest to hardest) ---")
-    for rank, (domain, accuracy) in enumerate(domain_metrics, 1):
-        print(f"{rank}. Domain {domain}: Accuracy = {accuracy:.4f}")
+    for rank, domain in enumerate(sorted_domains, 1):
+        print(f"{rank}. Domain {domain}: Accuracy = {domain_accuracies[domain]:.4f}")
 
     # Conservative curriculum progression
-    num_domains = len(domain_metrics)
+    num_domains = len(sorted_domains)
     
-    # Slower progression: start with 1 domain, gradually include more
-    progress = min(1.0, (stage + 1) / args.CL_PHASE_EPOCHS)
+    # Calculate domain inclusion based on training progress
+    progress = min(1.0, stage / max(1, args.CL_PHASE_EPOCHS - 1))
     
-    # Start with easiest domain only in first stage
-    if stage < 3:
-        num_selected = 1
-    else:
-        # Gradually include more domains
-        num_selected = min(num_domains, 1 + int(progress * (num_domains - 1)))
+    # Always include the easiest domain
+    min_domains = 1
     
-    selected_domains = [domain for domain, _ in domain_metrics[:num_selected]]
-    print(f"Selecting domains: {selected_domains}")
+    # Gradually include more domains
+    if stage < 3:  # First 3 stages: easiest domain only
+        selected_domains = sorted_domains[:1]
+    elif stage < 7:  # Next 4 stages: top 25% easiest domains
+        selected_domains = sorted_domains[:max(min_domains, int(num_domains * 0.25))]
+    elif stage < 12:  # Next 5 stages: top 50% easiest domains
+        selected_domains = sorted_domains[:max(min_domains, int(num_domains * 0.5))]
+    else:  # Full dataset
+        selected_domains = sorted_domains
+    
+    print(f"Stage {stage}: Selecting {len(selected_domains)} domains")
 
-    # Gather ALL training indices from selected domains
+    # Gather training indices from selected domains
     train_domain_indices = defaultdict(list)
     for idx in range(len(train_dataset)):
         item = train_dataset[idx]
@@ -85,9 +91,24 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     
     # Create curriculum subset
     curriculum_subset = SubsetWithLabelSetter(train_dataset, selected_indices)
-    curriculum_loader = DataLoader(curriculum_subset, batch_size=args.batch_size,
-                                   shuffle=True, num_workers=args.N_WORKERS,
-                                   drop_last=False)  # Preserve all samples
+    
+    # Create a weighted sampler to balance classes
+    class_counts = {}
+    for idx in selected_indices:
+        item = train_dataset[idx]
+        label = item[1]
+        class_counts[label] = class_counts.get(label, 0) + 1
+        
+    # Skip weighting if we have too few classes or samples
+    if len(class_counts) < 2 or len(selected_indices) < 100:
+        curriculum_loader = DataLoader(curriculum_subset, batch_size=args.batch_size,
+                                      shuffle=True, num_workers=args.N_WORKERS)
+    else:
+        weights = [1.0 / class_counts[train_dataset[idx][1]] for idx in selected_indices]
+        sampler = WeightedRandomSampler(weights, len(weights), replacement=True)
+        
+        curriculum_loader = DataLoader(curriculum_subset, batch_size=args.batch_size,
+                                      sampler=sampler, num_workers=args.N_WORKERS)
 
     return curriculum_loader
 

@@ -87,7 +87,10 @@ class SubsetWithLabelSetter(torch.utils.data.Subset):
     def __init__(self, dataset, indices, domain_label=None):
         super().__init__(dataset, indices)
         self.domain_label = domain_label
-        self.original_indices = indices  # Store the original dataset indices
+        # Store the original indices
+        self.original_indices = indices
+        # Create a mapping from original index to subset index
+        self.original_to_subset = {orig_idx: subset_idx for subset_idx, orig_idx in enumerate(indices)}
         
     def __getitem__(self, idx):
         data = self.dataset[self.original_indices[idx]]
@@ -95,11 +98,22 @@ class SubsetWithLabelSetter(torch.utils.data.Subset):
             return (data[0], data[1], self.domain_label)
         return data
         
-    def set_labels_by_index(self, labels, subset_indices, key):
+    def set_labels_by_index(self, labels, indices, key):
         """
-        Delegate label setting to the underlying dataset
-        subset_indices: indices within this subset (0 to len(self)-1)
+        Robust method that handles both subset indices and original dataset indices
         """
+        subset_indices = []
+        for idx in indices:
+            # Check if this is an original dataset index
+            if idx in self.original_to_subset:
+                subset_indices.append(self.original_to_subset[idx])
+            # Check if this is a valid subset index
+            elif 0 <= idx < len(self.original_indices):
+                subset_indices.append(idx)
+            else:
+                print(f"Warning: Index {idx} out of range. Skipping.")
+                continue
+        
         # Map subset indices to original dataset indices
         original_indices = [self.original_indices[i] for i in subset_indices]
         self.dataset.set_labels_by_index(labels, original_indices, key)

@@ -128,94 +128,94 @@ def main(args):
     best_valid_acc, target_acc = 0, 0
 
     # Main training loop
-global_step = 0  # Initialize global step counter
-for round_idx in range(args.max_epoch):
-    print(f'\n======== ROUND {round_idx} ========')
+    global_step = 0  # Initialize global step counter
+    for round_idx in range(args.max_epoch):
+        print(f'\n======== ROUND {round_idx} ========')
+        
+        # Determine epochs for this round
+        if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
+            current_epochs = args.CL_PHASE_EPOCHS
+            print(f"Curriculum learning: Stage {round_idx} (using {current_epochs} epochs)")
+        else:
+            current_epochs = args.local_epoch
+        
+        # Curriculum learning setup
+        if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
+            if tr is not None and val is not None:
+                algorithm.eval()
+                full_dataset = ConcatDataset([tr, val])
+                # Use full dataset for curriculum
+                train_loader = DataLoader(
+                    full_dataset, 
+                    batch_size=args.batch_size,
+                    num_workers=args.N_WORKERS, 
+                    shuffle=True
+                )
+                algorithm.train()
     
-    # Determine epochs for this round
-    if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
-        current_epochs = args.CL_PHASE_EPOCHS
-        print(f"Curriculum learning: Stage {round_idx} (using {current_epochs} epochs)")
-    else:
-        current_epochs = args.local_epoch
+        # Phase 1: Feature update
+        print('==== Feature update ====')
+        print_row(['epoch', 'class_loss'], colwidth=15)
+        for step in range(current_epochs):  # CHANGED: args.local_epoch -> current_epochs
+            for data in train_loader:
+                loss_result_dict = algorithm.update_a(data, opta)
+            print_row([step, loss_result_dict['class']], colwidth=15)
+            logs['class_loss'].append(loss_result_dict['class'])
     
-    # Curriculum learning setup
-    if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
-        if tr is not None and val is not None:
-            algorithm.eval()
-            full_dataset = ConcatDataset([tr, val])
-            # Use full dataset for curriculum
-            train_loader = DataLoader(
-                full_dataset, 
-                batch_size=args.batch_size,
-                num_workers=args.N_WORKERS, 
-                shuffle=True
-            )
-            algorithm.train()
-
-    # Phase 1: Feature update
-    print('==== Feature update ====')
-    print_row(['epoch', 'class_loss'], colwidth=15)
-    for step in range(current_epochs):  # CHANGED: args.local_epoch -> current_epochs
-        for data in train_loader:
-            loss_result_dict = algorithm.update_a(data, opta)
-        print_row([step, loss_result_dict['class']], colwidth=15)
-        logs['class_loss'].append(loss_result_dict['class'])
-
-    # Phase 2: Latent domain characterization
-    print('==== Latent domain characterization ====')
-    print_row(['epoch', 'total_loss', 'dis_loss', 'ent_loss'], colwidth=15)
-    for step in range(current_epochs):  # CHANGED: args.local_epoch -> current_epochs
-        for data in train_loader:
-            loss_result_dict = algorithm.update_d(data, optd)
-        print_row([step, loss_result_dict['total'], loss_result_dict['dis'], loss_result_dict['ent']], colwidth=15)
-        logs['dis_loss'].append(loss_result_dict['dis'])
-        logs['ent_loss'].append(loss_result_dict['ent'])
-        logs['total_loss'].append(loss_result_dict['total'])
-
-    algorithm.set_dlabel(train_loader)
-
-    # Phase 3: Domain-invariant learning
-    print('==== Domain-invariant feature learning ====')
-    loss_list = alg_loss_dict(args)
-    eval_dict = train_valid_target_eval_names(args)
-    print_key = ['epoch'] + [f"{item}_loss" for item in loss_list] + \
-               [f"{item}_acc" for item in eval_dict] + ['total_cost_time']
-    print_row(print_key, colwidth=15)
-
-    round_start_time = time.time()
-    for step in range(current_epochs):  # CHANGED: args.local_epoch -> current_epochs
-        step_start_time = time.time()
-        for data in train_loader:
-            step_vals = algorithm.update(data, opt)
-
-        # Calculate accuracies
-        results = {
-            'epoch': global_step,  # CHANGED: Use global step
-            'train_acc': modelopera.accuracy(algorithm, train_loader_noshuffle, None),
-            'valid_acc': modelopera.accuracy(algorithm, valid_loader, None),
-            'target_acc': modelopera.accuracy(algorithm, target_loader, None),
-            'total_cost_time': time.time() - step_start_time
-        }
-        
-        # Log losses
-        for key in loss_list:
-            results[f"{key}_loss"] = step_vals[key]
-            logs[f"{key}_loss"].append(step_vals[key])
-        
-        # Log metrics
-        for metric in ['train_acc', 'valid_acc', 'target_acc']:
-            logs[metric].append(results[metric])
-        
-        # Update best validation accuracy
-        if results['valid_acc'] > best_valid_acc:
-            best_valid_acc = results['valid_acc']
-            target_acc = results['target_acc']
-        
-        print_row([results[key] for key in print_key], colwidth=15)
-        global_step += 1  # Increment global step
-
-    logs['total_cost_time'].append(time.time() - round_start_time)
+        # Phase 2: Latent domain characterization
+        print('==== Latent domain characterization ====')
+        print_row(['epoch', 'total_loss', 'dis_loss', 'ent_loss'], colwidth=15)
+        for step in range(current_epochs):  # CHANGED: args.local_epoch -> current_epochs
+            for data in train_loader:
+                loss_result_dict = algorithm.update_d(data, optd)
+            print_row([step, loss_result_dict['total'], loss_result_dict['dis'], loss_result_dict['ent']], colwidth=15)
+            logs['dis_loss'].append(loss_result_dict['dis'])
+            logs['ent_loss'].append(loss_result_dict['ent'])
+            logs['total_loss'].append(loss_result_dict['total'])
+    
+        algorithm.set_dlabel(train_loader)
+    
+        # Phase 3: Domain-invariant learning
+        print('==== Domain-invariant feature learning ====')
+        loss_list = alg_loss_dict(args)
+        eval_dict = train_valid_target_eval_names(args)
+        print_key = ['epoch'] + [f"{item}_loss" for item in loss_list] + \
+                   [f"{item}_acc" for item in eval_dict] + ['total_cost_time']
+        print_row(print_key, colwidth=15)
+    
+        round_start_time = time.time()
+        for step in range(current_epochs):  # CHANGED: args.local_epoch -> current_epochs
+            step_start_time = time.time()
+            for data in train_loader:
+                step_vals = algorithm.update(data, opt)
+    
+            # Calculate accuracies
+            results = {
+                'epoch': global_step,  # CHANGED: Use global step
+                'train_acc': modelopera.accuracy(algorithm, train_loader_noshuffle, None),
+                'valid_acc': modelopera.accuracy(algorithm, valid_loader, None),
+                'target_acc': modelopera.accuracy(algorithm, target_loader, None),
+                'total_cost_time': time.time() - step_start_time
+            }
+            
+            # Log losses
+            for key in loss_list:
+                results[f"{key}_loss"] = step_vals[key]
+                logs[f"{key}_loss"].append(step_vals[key])
+            
+            # Log metrics
+            for metric in ['train_acc', 'valid_acc', 'target_acc']:
+                logs[metric].append(results[metric])
+            
+            # Update best validation accuracy
+            if results['valid_acc'] > best_valid_acc:
+                best_valid_acc = results['valid_acc']
+                target_acc = results['target_acc']
+            
+            print_row([results[key] for key in print_key], colwidth=15)
+            global_step += 1  # Increment global step
+    
+        logs['total_cost_time'].append(time.time() - round_start_time)
     print(f'\n🎯 Final Target Accuracy: {target_acc:.4f}')
 
     # SHAP explainability analysis

@@ -18,6 +18,7 @@ from sklearn.metrics import davies_bouldin_score
 import torchvision.transforms as transforms
 from torchvision.models import resnet50
 from collections import defaultdict
+import torch.nn.functional as F
 
 # Unified SHAP utilities import
 from shap_utils import (
@@ -123,7 +124,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
                 labels = batch[1].cuda().long()
                 
                 output = algorithm.predict(inputs)
-                loss = F.cross_entropy(output, labels)
+                loss = torch.nn.functional.cross_entropy(output, labels)
                 total_loss += loss.item()
                 
                 _, predicted = output.max(1)

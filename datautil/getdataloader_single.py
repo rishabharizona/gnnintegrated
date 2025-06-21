@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from torch.utils.data import DataLoader
 import datautil.actdata.util as actutil
 from datautil.util import combindataset, subdataset
@@ -57,6 +58,35 @@ def get_dataloader(args, tr, val, tar):
     
     return train_loader, train_loader_noshuffle, valid_loader, target_loader
 
+def _make_set_labels_fn(dataset):
+    """Create a function to set domain labels for a dataset"""
+    def set_labels_by_index(labels, indices, key):
+        """Set domain labels for specific indices"""
+        if key == 'pdlabel':  # Pseudo domain label
+            for i, idx in enumerate(indices):
+                if idx < len(dataset):
+                    # Convert sample to mutable list
+                    if hasattr(dataset, 'samples'):
+                        sample = list(dataset.samples[idx])
+                    elif hasattr(dataset, 'data'):
+                        sample = list(dataset.data[idx])
+                    else:
+                        return  # Can't update without sample storage
+                    
+                    # Ensure we have a domain position
+                    if len(sample) < 3:
+                        sample.append(None)  # Add domain position if missing
+                    
+                    # Update domain label at position 2
+                    sample[2] = labels[i]
+                    
+                    # Update dataset sample
+                    if hasattr(dataset, 'samples'):
+                        dataset.samples[idx] = tuple(sample)
+                    elif hasattr(dataset, 'data'):
+                        dataset.data[idx] = tuple(sample)
+    return set_labels_by_index
+
 def get_act_dataloader(args):
     """
     Prepare activity recognition datasets and data loaders
@@ -86,7 +116,7 @@ def get_act_dataloader(args):
         
         # Add label-setting capability
         if not hasattr(tdata, 'set_labels_by_index'):
-            tdata.set_labels_by_index = self._make_set_labels_fn(tdata)
+            tdata.set_labels_by_index = _make_set_labels_fn(tdata)
         
         if i in args.test_envs:
             target_datalist.append(tdata)
@@ -104,7 +134,8 @@ def get_act_dataloader(args):
     tdata = combindataset(args, source_datasetlist)
     
     # Add label-setting capability to combined dataset
-    tdata.set_labels_by_index = self._make_set_labels_fn(tdata)
+    if not hasattr(tdata, 'set_labels_by_index'):
+        tdata.set_labels_by_index = _make_set_labels_fn(tdata)
     
     l = len(tdata.labels)
     indexall = np.arange(l)
@@ -120,40 +151,19 @@ def get_act_dataloader(args):
     val = subdataset(args, tdata, indexval)
     
     # Add label-setting capability to subsets
-    tr.set_labels_by_index = self._make_set_labels_fn(tr)
-    val.set_labels_by_index = self._make_set_labels_fn(val)
+    if not hasattr(tr, 'set_labels_by_index'):
+        tr.set_labels_by_index = _make_set_labels_fn(tr)
+    if not hasattr(val, 'set_labels_by_index'):
+        val.set_labels_by_index = _make_set_labels_fn(val)
     
     # Combine target datasets
     targetdata = combindataset(args, target_datalist)
-    targetdata.set_labels_by_index = self._make_set_labels_fn(targetdata)
+    if not hasattr(targetdata, 'set_labels_by_index'):
+        targetdata.set_labels_by_index = _make_set_labels_fn(targetdata)
     
     # Create data loaders
     loaders = get_dataloader(args, tr, val, targetdata)
     return (*loaders, tr, val, targetdata)
-
-def _make_set_labels_fn(dataset):
-    """Create a function to set domain labels for a dataset"""
-    def set_labels_by_index(labels, indices, key):
-        """Set domain labels for specific indices"""
-        if key == 'pdlabel':  # Pseudo domain label
-            for i, idx in enumerate(indices):
-                if idx < len(dataset):
-                    # Convert sample to mutable list
-                    sample = list(dataset[idx])
-                    
-                    # Ensure we have a domain position
-                    if len(sample) < 3:
-                        sample.append(None)  # Add domain position if missing
-                    
-                    # Update domain label at position 2
-                    sample[2] = labels[i]
-                    
-                    # Update dataset sample
-                    if hasattr(dataset, 'samples'):
-                        dataset.samples[idx] = tuple(sample)
-                    elif hasattr(dataset, 'data'):
-                        dataset.data[idx] = tuple(sample)
-    return set_labels_by_index
 
 def get_shap_batch(loader, size=100):
     """

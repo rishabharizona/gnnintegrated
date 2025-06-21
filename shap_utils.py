@@ -6,6 +6,7 @@ import seaborn as sns
 import wandb
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from scipy.spatial.distance import cosine
 from scipy.stats import kendalltau, pearsonr, entropy as scipy_entropy
 from sklearn.metrics import accuracy_score, mutual_info_score
@@ -468,7 +469,11 @@ def evaluate_advanced_shap_metrics(shap_values, inputs):
 # ================== 4D Visualizations =====================
 
 def plot_emg_shap_4d(inputs, shap_values, output_path):
-    """4D scatter plot of SHAP values (channels x time x value)"""
+    """4D interactive plot of SHAP values using Plotly"""
+    # Ensure HTML format
+    if not output_path.endswith('.html'):
+        output_path = os.path.splitext(output_path)[0] + ".html"
+    
     inputs = to_numpy(inputs)
     
     # Handle multi-class SHAP values
@@ -482,10 +487,6 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     inputs = inputs[sample_idx]
     shap_vals = shap_vals[sample_idx]
     
-    # Create interactive plot
-    fig = plt.figure(figsize=(14, 10))
-    ax = fig.add_subplot(111, projection='3d')
-    
     # Safely reduce dimensions - remove all singleton dimensions
     shap_vals = np.squeeze(shap_vals)
     
@@ -494,10 +495,8 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     
     # If SHAP values have more dimensions than expected, take first n_timesteps
     if shap_vals.ndim == 1:
-        # If 1D, assume it's for all time steps
         shap_vals = shap_vals.reshape(1, -1)
     elif shap_vals.ndim > 1:
-        # Flatten spatial dimensions and take first n_timesteps
         shap_vals = shap_vals.reshape(shap_vals.shape[0], -1)
         shap_vals = shap_vals[:, :n_timesteps]
     
@@ -512,41 +511,52 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     # Create time steps array
     time_steps = np.arange(n_timesteps)
     
-    # Plot each channel
+    # Create Plotly figure
+    fig = make_subplots(rows=1, cols=1, specs=[[{'type': 'scatter3d'}]])
+    
+    # Add traces for each channel
     for ch in range(n_channels):
-        # Get SHAP magnitude for this channel
         shap_mag = np.abs(shap_vals[ch])
         
         # Ensure arrays have same length
         if len(shap_mag) != len(time_steps):
-            # Truncate to min length
             min_len = min(len(shap_mag), len(time_steps))
             shap_mag = shap_mag[:min_len]
             ch_time_steps = time_steps[:min_len]
         else:
             ch_time_steps = time_steps
         
-        # Plot channel with different color
-        ax.plot(
-            ch_time_steps, 
-            np.full_like(ch_time_steps, ch),  # Constant channel index
-            shap_mag, 
-            label=f'Channel {ch+1}',
-            linewidth=2
-        )
+        fig.add_trace(go.Scatter3d(
+            x=ch_time_steps,
+            y=np.full_like(ch_time_steps, ch),  # Constant channel index
+            z=shap_mag,
+            mode='lines',
+            name=f'Channel {ch+1}',
+            line=dict(width=4)
+        ))
     
-    ax.set_xlabel('Time Steps')
-    ax.set_ylabel('EMG Channels')
-    ax.set_zlabel('|SHAP Value|')
-    ax.set_title('4D SHAP Value Distribution (Sample 0)')
-    ax.legend()
+    # Set layout
+    fig.update_layout(
+        title='4D SHAP Value Distribution (Sample 0)',
+        scene=dict(
+            xaxis_title='Time Steps',
+            yaxis_title='EMG Channels',
+            zaxis_title='|SHAP Value|'
+        ),
+        height=800,
+        width=1000
+    )
     
-    plt.savefig(output_path, dpi=300)
-    plt.close()
-    print(f"✅ Saved 4D SHAP plot: {output_path}")
+    # Save as HTML
+    fig.write_html(output_path, include_plotlyjs='cdn')
+    print(f"✅ Saved interactive 4D SHAP plot: {output_path}")
 
 def plot_4d_shap_surface(shap_values, output_path):
-    """Surface plot of aggregated SHAP values"""
+    """Interactive surface plot of aggregated SHAP values using Plotly"""
+    # Ensure HTML format
+    if not output_path.endswith('.html'):
+        output_path = os.path.splitext(output_path)[0] + ".html"
+    
     # Handle multi-class SHAP values
     if isinstance(shap_values.values, list):
         shap_vals = to_numpy(shap_values.values[0])
@@ -556,45 +566,67 @@ def plot_4d_shap_surface(shap_values, output_path):
     # Safely reduce dimensions
     shap_vals = np.squeeze(shap_vals)
     
-    # If still 4D (batch, channels, spatial, time), average spatial dim
+    # Handle different dimensions
     if shap_vals.ndim == 4:
+        # Average across spatial dimension: (batch, channels, spatial, time) -> (batch, channels, time)
         shap_vals = shap_vals.mean(axis=2)
     
     # Aggregate across samples
-    if shap_vals.ndim == 3:  # (batch, channels, time)
-        aggregated = np.abs(shap_vals).mean(axis=0)  # (channels, time)
-    elif shap_vals.ndim == 2:  # (channels, time)
+    if shap_vals.ndim == 3:
+        # (batch, channels, time) -> (channels, time)
+        aggregated = np.abs(shap_vals).mean(axis=0)
+    elif shap_vals.ndim == 2:
+        # (channels, time)
         aggregated = np.abs(shap_vals)
     else:
         raise ValueError(f"Unsupported SHAP dimension: {shap_vals.ndim}")
     
-    # Transpose to (channels, time_steps) if needed
-    if aggregated.shape[0] != 8:  # Assuming 8 channels
+    # Ensure proper orientation: (channels, time)
+    if aggregated.shape[0] > aggregated.shape[1]:
         aggregated = aggregated.T
     
     # Create grid
     channels = np.arange(aggregated.shape[0])
     time_steps = np.arange(aggregated.shape[1])
-    T, C = np.meshgrid(time_steps, channels)
+    X, Y = np.meshgrid(time_steps, channels)
     
-    # Create plot
-    fig = plt.figure(figsize=(14, 10))
-    ax = fig.add_subplot(111, projection='3d')
+    # Create Plotly surface plot
+    fig = go.Figure(data=[
+        go.Surface(
+            z=aggregated,
+            x=X,  # Time steps
+            y=Y,  # Channels
+            colorscale='Viridis',
+            opacity=0.9,
+            contours={
+                "z": {"show": True, "usecolormap": True, "highlightcolor": "limegreen", "project_z": True}
+            }
+        )
+    ])
     
-    # Plot surface
-    surf = ax.plot_surface(
-        T, C, aggregated, 
-        cmap='viridis',
-        edgecolor='none',
-        alpha=0.8
+    # Customize layout
+    fig.update_layout(
+        title='SHAP Value Surface (Avg Across Samples)',
+        scene=dict(
+            xaxis_title='Time Steps',
+            yaxis_title='EMG Channels',
+            zaxis_title='|SHAP Value|',
+            camera=dict(
+                eye=dict(x=1.5, y=-1.5, z=0.5)  # Adjust camera angle for better view
+            )
+        ),
+        margin=dict(l=0, r=0, b=0, t=40),
+        height=800,
+        width=1000
     )
     
-    ax.set_xlabel('Time Steps')
-    ax.set_ylabel('EMG Channels')
-    ax.set_zlabel('|SHAP Value|')
-    ax.set_title('SHAP Value Surface (Avg Across Samples)')
-    fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
+    # Add colorbar
+    fig.update_layout(coloraxis_colorbar=dict(
+        title="|SHAP|",
+        thickness=15,
+        len=0.5
+    ))
     
-    plt.savefig(output_path, dpi=300)
-    plt.close()
-    print(f"✅ Saved SHAP surface plot: {output_path}")
+    # Save as HTML
+    fig.write_html(output_path, include_plotlyjs='cdn')
+    print(f"✅ Saved interactive SHAP surface plot: {output_path}")

@@ -18,7 +18,7 @@ from shap_utils import (
     overlay_signal_with_shap, plot_shap_heatmap,
     evaluate_shap_impact, compute_flip_rate, compute_jaccard_topk,
     compute_kendall_tau,
-    cosine_similarity_shap,
+    cosine_similarity_shap, save_shap_numpy, 
     compute_confidence_change,
     compute_aopc, compute_feature_coherence, compute_shap_entropy,
     plot_emg_shap_4d, plot_4d_shap_surface, evaluate_advanced_shap_metrics

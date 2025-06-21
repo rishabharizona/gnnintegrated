@@ -21,7 +21,7 @@ from shap_utils import (
     plot_emg_shap_4d, plot_4d_shap_surface, evaluate_advanced_shap_metrics
 )
 
-def automated_k_estimation(features, k_min=2, k_max=26):
+def automated_k_estimation(features, k_min=2, k_max=10):
     """Automatically determine optimal cluster count using silhouette score"""
     best_k = k_min
     best_score = -1

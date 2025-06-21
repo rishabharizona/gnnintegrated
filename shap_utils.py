@@ -321,7 +321,9 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     for i in range(batch_size):
         # Get importance scores (average across channels)
         importance = np.abs(shap_vals_np[i]).mean(axis=(0, 1))
-        sorted_indices = np.argsort(importance)[::-1]  # Most important first
+        
+        # Ensure contiguous array
+        sorted_indices = np.argsort(importance)[::-1].copy()  # Add .copy() to fix stride issue
         
         current_input = inputs[i].clone().detach()
         confidences = [to_numpy(base_conf[i])]
@@ -329,7 +331,9 @@ def compute_aopc(model, inputs, shap_values, steps=10):
         # Gradually remove features
         for step in range(1, steps + 1):
             k = int(n_timesteps * step / steps)
-            mask_indices = sorted_indices[:k]
+            
+            # Convert to tensor to avoid negative stride issues
+            mask_indices = torch.from_numpy(sorted_indices[:k]).to(device)
             
             modified_input = current_input.clone()
             modified_input[:, :, mask_indices] = 0

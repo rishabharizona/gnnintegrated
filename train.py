@@ -23,7 +23,19 @@ from shap_utils import (
     compute_aopc, compute_feature_coherence, compute_shap_entropy,
     plot_emg_shap_4d, plot_4d_shap_surface, evaluate_advanced_shap_metrics
 )
-
+# Add this class definition at the top of your file
+class SubsetWithLabelSetter(torch.utils.data.Subset):
+    """Subset that allows setting domain labels"""
+    def __init__(self, dataset, indices, domain_label=None):
+        super().__init__(dataset, indices)
+        self.domain_label = domain_label
+        
+    def __getitem__(self, idx):
+        data = self.dataset[self.indices[idx]]
+        if self.domain_label is not None:
+            # Return (x, y, new_domain_label) instead of original domain
+            return (data[0], data[1], self.domain_label)
+        return data
 def automated_k_estimation(features, k_min=2, k_max=10):
     """Automatically determine optimal cluster count using silhouette score and Davies-Bouldin Index"""
     best_k = k_min
@@ -162,18 +174,28 @@ def main(args):
             current_epochs = args.local_epoch
         
         # Curriculum learning setup
+        # Then modify the curriculum learning section in your main training loop:
         if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
-            if tr is not None and val is not None:
-                algorithm.eval()
-                full_dataset = ConcatDataset([tr, val])
-                # Use full dataset for curriculum
-                train_loader = DataLoader(
-                    full_dataset, 
-                    batch_size=args.batch_size,
-                    num_workers=args.N_WORKERS, 
-                    shuffle=True
-                )
-                algorithm.train()
+            print(f"Curriculum learning: Stage {round_idx}")
+            
+            # Use advanced domain-based curriculum loader
+            train_loader = get_curriculum_loader(
+                args, 
+                algorithm, 
+                tr, 
+                val, 
+                stage=round_idx
+            )
+            
+            # Update the no-shuffle loader as well (optional)
+            train_loader_noshuffle = DataLoader(
+                train_loader.dataset, 
+                batch_size=args.batch_size, 
+                shuffle=False,
+                num_workers=args.N_WORKERS
+            )
+            
+            algorithm.train()
     
         # Phase 1: Feature update
         print('==== Feature update ====')

@@ -386,9 +386,18 @@ def compute_feature_coherence(shap_values):
     # Compute channel-wise correlations
     channel_corrs = []
     for i in range(vals.shape[0]):
-        # Average across spatial dims (1 in EMG data)
-        chan_vals = vals[i].squeeze(axis=1)  # Shape: (channels, time_steps)
+        # Remove singleton dimensions and ensure 2D shape
+        chan_vals = vals[i].squeeze()  # Remove all singleton dimensions
         
+        # If still more than 2D, flatten spatial dimensions
+        if chan_vals.ndim > 2:
+            chan_vals = chan_vals.reshape(chan_vals.shape[0], -1)
+        
+        # If we have only 1 channel, skip correlation calculation
+        if chan_vals.shape[0] == 1:
+            channel_corrs.append(1.0)  # Perfect correlation with itself
+            continue
+            
         # Compute pairwise channel correlations
         corr_matrix = np.corrcoef(chan_vals)
         np.fill_diagonal(corr_matrix, 0)
@@ -429,13 +438,19 @@ def evaluate_advanced_shap_metrics(shap_values, inputs):
     flat_inputs = inputs_np.reshape(-1)
     flat_shap = np.abs(shap_vals).reshape(-1)
     
+    # Limit to 1000 points to avoid memory issues
+    if len(flat_inputs) > 1000:
+        idx = np.random.choice(len(flat_inputs), 1000, replace=False)
+        flat_inputs = flat_inputs[idx]
+        flat_shap = flat_shap[idx]
+    
     # Create bins for mutual information calculation
     input_min = np.min(flat_inputs)
     input_max = np.max(flat_inputs)
     input_bins = np.digitize(flat_inputs, bins=np.linspace(input_min, input_max, 10))
     
     shap_min = 0
-    shap_max = np.max(flat_shap)
+    shap_max = np.max(flat_shap) + 1e-10  # Avoid division by zero
     shap_bins = np.digitize(flat_shap, bins=np.linspace(shap_min, shap_max, 10))
     
     return {
@@ -446,7 +461,6 @@ def evaluate_advanced_shap_metrics(shap_values, inputs):
         'mutual_info': mutual_info_score(input_bins, shap_bins),
         'pca_alignment': compute_pca_alignment(shap_values)
     }
-
 # ================== 4D Visualizations =====================
 
 def plot_emg_shap_4d(inputs, shap_values, output_path):

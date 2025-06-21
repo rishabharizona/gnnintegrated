@@ -640,3 +640,20 @@ def plot_4d_shap_surface(shap_values, output_path):
     # Save as HTML
     fig.write_html(output_path, include_plotlyjs='cdn')
     print(f"✅ Saved interactive SHAP surface plot: {output_path}")
+
+# ✅ Similarity metrics
+def compute_jaccard_topk(shap1, shap2, k=10):
+    top1 = set(np.argsort(-np.abs(shap1.flatten()))[:k])
+    top2 = set(np.argsort(-np.abs(shap2.flatten()))[:k])
+    return len(top1 & top2) / len(top1 | top2)
+
+def compute_kendall_tau(shap1, shap2):
+    return kendalltau(shap1.flatten(), shap2.flatten())[0]
+
+def cosine_similarity_shap(shap1, shap2):
+    return 1 - cosine(shap1.flatten(), shap2.flatten())
+
+# ✅ Save SHAP values
+def log_shap_numpy(shap_values, save_path="shap_values.npy"):
+    shap_array = _get_shap_array(shap_values)
+    np.save(save_path, shap_array)

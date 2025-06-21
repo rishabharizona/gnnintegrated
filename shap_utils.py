@@ -314,26 +314,24 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     
     with torch.no_grad():
         base_preds = model.predict(inputs)
-        base_conf = torch.softmax(base_preds, dim=1).max(dim=1).values
+        base_conf = torch.softmax(base_preds, dim=1).max(dim=1).values.cpu().numpy()
     
     aopc_scores = []
     
     for i in range(batch_size):
         # Get importance scores (average across channels)
         importance = np.abs(shap_vals_np[i]).mean(axis=(0, 1))
-        
-        # Ensure contiguous array
-        sorted_indices = np.argsort(importance)[::-1].copy()  # Add .copy() to fix stride issue
+        sorted_indices = np.argsort(importance)[::-1].copy()
+        mask_indices_tensor = torch.from_numpy(sorted_indices).to(device)
         
         current_input = inputs[i].clone().detach()
-        confidences = [to_numpy(base_conf[i])]
+        original_conf = base_conf[i]
+        confidences = [original_conf]
         
         # Gradually remove features
         for step in range(1, steps + 1):
             k = int(n_timesteps * step / steps)
-            
-            # Convert to tensor to avoid negative stride issues
-            mask_indices = torch.from_numpy(sorted_indices[:k]).to(device)
+            mask_indices = mask_indices_tensor[:k]
             
             modified_input = current_input.clone()
             modified_input[:, :, mask_indices] = 0
@@ -342,12 +340,15 @@ def compute_aopc(model, inputs, shap_values, steps=10):
             with torch.no_grad():
                 pred = model.predict(modified_input.unsqueeze(0))
                 conf = torch.softmax(pred, dim=1).max().item()
-            
             confidences.append(conf)
         
-        # Calculate AOPC as cumulative drop
-        drops = [confidences[0] - conf for conf in confidences[1:]]
-        aopc = np.mean(drops)
+        # Calculate AOPC as average of incremental drops
+        incremental_drops = []
+        for j in range(1, len(confidences)):
+            incremental_drop = confidences[j-1] - confidences[j]
+            incremental_drops.append(incremental_drop)
+        
+        aopc = np.mean(incremental_drops) if incremental_drops else 0
         aopc_scores.append(aopc)
     
     return np.mean(aopc_scores)

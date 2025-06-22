@@ -115,7 +115,11 @@ def main(args):
         print_row(['epoch', 'class_loss'], colwidth=15)
         for step in range(current_epochs):
             for data in train_loader:
-                loss_result_dict = algorithm.update_a(data, opta)
+                x, y, _ = data
+                x, y = x.cuda(), y.cuda()
+                mixed_x, y_a, y_b, lam = mixup_data(x, y, alpha=0.4)
+                loss_result_dict = algorithm.update_a_mixup(mixed_x, y_a, y_b, lam, opta)
+
             print_row([step, loss_result_dict['class']], colwidth=15)
             logs['class_loss'].append(loss_result_dict['class'])
 

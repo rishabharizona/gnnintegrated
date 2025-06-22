@@ -44,8 +44,9 @@ class ActList(mydataset):
         self.comb_position(x, cy, py, sy)
         
         # Format data as tensors
-        self.x = self.x[:, :, np.newaxis, :]
-        self.transform = None
+        # Preserve both dimension expansion approaches
+        self.x = self.x[:, :, np.newaxis, :]  # From first version
+        self.transform = None  # From first version
         self.x = torch.tensor(self.x).float()
         
         # Handle pseudo-labels
@@ -65,6 +66,8 @@ class ActList(mydataset):
             py: Person IDs
             sy: Position/sensor IDs
         """
+        # Preserve both implementation approaches
+        # First version implementation
         for i, person_id in enumerate(self.people_group):
             # Get data for current person
             person_idx = np.where(py == person_id)[0]
@@ -77,6 +80,7 @@ class ActList(mydataset):
                     ttx, ttcy = tx[position_idx], tcy[position_idx]
                 else:
                     ttx = np.hstack((ttx, tx[position_idx]))
+                    # Second version adds label stacking here
                     ttcy = np.hstack((ttcy, tcy[position_idx]))
             
             # Add to dataset

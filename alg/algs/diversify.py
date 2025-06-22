@@ -12,7 +12,6 @@ from alg.algs.base import Algorithm
 from loss.common_loss import Entropylogits
 
 class Diversify(Algorithm):
-
     def __init__(self, args):
         super(Diversify, self).__init__(args)
         # Feature extractor

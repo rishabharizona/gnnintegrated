@@ -8,9 +8,8 @@ import torchvision
 import PIL
 from collections import defaultdict
 
-# Function to disable inplace ReLU operations
 def disable_inplace_relu(model):
-    """Disable inplace operations in ReLU layers"""
+    """Disable inplace operations in ReLU layers for compatibility"""
     for module in model.modules():
         if isinstance(module, torch.nn.ReLU):
             module.inplace = False
@@ -38,8 +37,7 @@ def train_valid_target_eval_names(args):
 def alg_loss_dict(args):
     """Get loss names for different algorithms"""
     loss_dict = {
-        'diversify': ['class', 'dis', 'total'],
-        # Add other algorithms here as needed
+        'diversify': ['class', 'dis', 'total']
     }
     return loss_dict.get(args.algorithm, ['total'])
 
@@ -105,8 +103,8 @@ def act_param_init(args):
         'emg': ((8, 1, 200), 6, 10)  # (input_shape, num_classes, grid_size)
     }
     
-    # Set parameters based on dataset - FIXED THIS LINE
-    params = dataset_params.get(args.dataset, ((0, 0, 0), 0, 0))
+    # Set parameters based on dataset
+    params = dataset_params.get(args.dataset, ((0, 0, 0), 0, 0)
     args.input_shape = params[0]
     args.num_classes = params[1]
     args.grid_size = params[2]

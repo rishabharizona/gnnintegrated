@@ -6,14 +6,14 @@ import numpy as np
 from scipy.spatial.distance import cdist
 
 from alg.modelopera import get_fea
-from network import Adver_network, common_network
+from network.common_network import CommonNetwork
 from alg.algs.base import Algorithm
 from loss.common_loss import Entropylogits
 
 class Diversify(Algorithm):
     def __init__(self, args):
         super(Diversify, self).__init__(args)
-        self.featurizer = common_network(args.dataset).cuda()
+        self.featurizer = CommonNetwork(args.dataset).cuda()
         self.classifier = nn.Linear(self.featurizer.output_num(), args.class_num).cuda()
         self.discriminator = Adver_network(args.latent_domain_num).cuda()
         self.args = args

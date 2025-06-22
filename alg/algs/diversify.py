@@ -5,11 +5,59 @@ import torch.nn.functional as F
 import numpy as np
 from scipy.spatial.distance import cdist
 from torch.utils.data import ConcatDataset
+from torch_geometric.nn import GCNConv, GATConv  # Add GNN layers
 
 from alg.modelopera import get_fea
 from network import Adver_network, common_network
 from alg.algs.base import Algorithm
 from loss.common_loss import Entropylogits
+
+class GNNModel(nn.Module):
+    """GNN model for activity recognition"""
+    def __init__(self, input_dim, hidden_dim, num_classes, gnn_type='gcn'):
+        super().__init__()
+        self.gnn_type = gnn_type
+        
+        if gnn_type == 'gcn':
+            self.conv1 = GCNConv(input_dim, hidden_dim)
+            self.conv2 = GCNConv(hidden_dim, hidden_dim)
+        elif gnn_type == 'gat':
+            self.conv1 = GATConv(input_dim, hidden_dim, heads=4)
+            self.conv2 = GATConv(hidden_dim*4, hidden_dim, heads=1)
+        else:
+            raise ValueError(f"Unsupported GNN type: {gnn_type}")
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, num_classes)
+        )
+    
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+        
+        # First GNN layer
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, p=0.5, training=self.training)
+        
+        # Second GNN layer
+        x = self.conv2(x, edge_index)
+        x = F.relu(x)
+        
+        # Global pooling
+        x = torch.stack([x[batch == i].mean(0) for i in torch.unique(batch)])
+        
+        return self.classifier(x)
+
+def init_gnn_model(args, input_dim, num_classes):
+    """Initialize GNN model based on configuration"""
+    return GNNModel(
+        input_dim=input_dim,
+        hidden_dim=args.gnn_hidden_dim,
+        num_classes=num_classes,
+        gnn_type=args.gnn_arch
+    )
 
 class Diversify(Algorithm):
     def __init__(self, args):

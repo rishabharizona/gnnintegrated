@@ -9,10 +9,10 @@ from alg.opt import *
 from alg import alg, modelopera
 from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ, disable_inplace_relu
 from datautil.getdataloader_single import get_act_dataloader
-from torch.utils.data import DataLoader, ConcatDataset
-from datautil.getcurriculumloader import get_curriculum_loader
+from torch.utils.data import DataLoader, ConcatDataset, get_curriculum_loader 
 from network.act_network import ActNetwork
 from sklearn.metrics import davies_bouldin_score
+from sklearn.linear_model import LogisticRegression
 # Unified SHAP utilities import
 from shap_utils import (
     get_background_batch, safe_compute_shap_values, plot_summary,
@@ -37,6 +37,15 @@ class SubsetWithLabelSetter(torch.utils.data.Subset):
             # Return (x, y, new_domain_label) instead of original domain
             return (data[0], data[1], self.domain_label)
         return data
+
+# GNN model import
+try:
+    from gnn.temporal_gcn import TemporalGCN
+    GNN_AVAILABLE = True
+except ImportError:
+    GNN_AVAILABLE = False
+    print("[WARNING] GNN module not available. Falling back to CNN.")
+
 def automated_k_estimation(features, k_min=2, k_max=10):
     """Automatically determine optimal cluster count using silhouette score and Davies-Bouldin Index"""
     best_k = k_min
@@ -73,6 +82,47 @@ def automated_k_estimation(features, k_min=2, k_max=10):
     print(f"[INFO] Optimal K determined as {best_k} (Combined Score: {best_score:.4f})")
     return best_k
 
+# H-Divergence calculation function
+def calculate_h_divergence(features_source, features_target):
+    """
+    Calculate h-divergence between source and target domain features
+    Args:
+        features_source: Features from source domain (numpy array)
+        features_target: Features from target domain (numpy array)
+    Returns:
+        h_divergence: Domain discrepancy measure
+    """
+    # Create domain labels: 0 for source, 1 for target
+    labels_source = np.zeros(features_source.shape[0])
+    labels_target = np.ones(features_target.shape[0])
+    
+    # Combine features and labels
+    X = np.vstack([features_source, features_target])
+    y = np.hstack([labels_source, labels_target])
+    
+    # Shuffle the data
+    indices = np.random.permutation(len(X))
+    X = X[indices]
+    y = y[indices]
+    
+    # Split into train and test sets (80-20)
+    split = int(0.8 * len(X))
+    X_train, X_test = X[:split], X[split:]
+    y_train, y_test = y[:split], y[split:]
+    
+    # Train a simple domain classifier
+    from sklearn.linear_model import LogisticRegression
+    domain_classifier = LogisticRegression(max_iter=1000, random_state=42)
+    domain_classifier.fit(X_train, y_train)
+    
+    # Evaluate on test set
+    domain_acc = domain_classifier.score(X_test, y_test)
+    
+    # Calculate h-divergence: d = 2(1 - 2ε)
+    # Where ε is the error rate of the domain classifier
+    h_divergence = 2 * (1 - 2 * (1 - domain_acc))
+    return h_divergence, domain_acc
+
 def main(args):
     s = print_args(args, [])
     set_random_seed(args.seed)
@@ -90,13 +140,28 @@ def main(args):
     # Automated K estimation if enabled
     if getattr(args, 'automated_k', False):
         print("Running automated K estimation...")
-        temp_model = ActNetwork(args.dataset).cuda()
+        # Use GNN if enabled, otherwise use standard CNN
+        if args.use_gnn and GNN_AVAILABLE:
+            print("Using GNN for feature extraction")
+            temp_model = TemporalGCN(
+                input_dim=8,  # EMG channels
+                hidden_dim=args.gnn_hidden_dim,
+                output_dim=args.gnn_output_dim
+            ).cuda()
+        else:
+            temp_model = ActNetwork(args.dataset).cuda()
+            
         temp_model.eval()
         feature_list = []
 
         with torch.no_grad():
             for batch in train_loader:
                 inputs = batch[0].cuda().float()
+                
+                # Handle GNN input format if needed
+                if args.use_gnn and GNN_AVAILABLE:
+                    inputs = inputs.squeeze(2).permute(0, 2, 1)  # Convert to (batch, time, features)
+                
                 features = temp_model(inputs)
                 feature_list.append(features.cpu().numpy())
 
@@ -149,6 +214,44 @@ def main(args):
     # Initialize algorithm
     algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).cuda()
+    
+    # GNN Pretraining if enabled
+    if args.use_gnn and GNN_AVAILABLE and hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:
+        print("\n==== GNN Pretraining ====")
+        # Extract the GNN model from the algorithm
+        gnn_model = algorithm.featurizer
+        gnn_optimizer = torch.optim.Adam(
+            gnn_model.parameters(),
+            lr=args.gnn_lr,
+            weight_decay=args.gnn_weight_decay
+        )
+        
+        for epoch in range(args.gnn_pretrain_epochs):
+            gnn_model.train()
+            total_loss = 0
+            
+            for batch in train_loader:
+                x = batch[0].cuda().float()
+                x = x.squeeze(2).permute(0, 2, 1)  # Convert to (batch, time, features)
+                
+                # Forward pass
+                features = gnn_model(x)
+                
+                # Simple reconstruction loss for pretraining
+                reconstructed = gnn_model.reconstruct(features)
+                loss = torch.nn.functional.mse_loss(reconstructed, x)
+                
+                # Optimization step
+                gnn_optimizer.zero_grad()
+                loss.backward()
+                gnn_optimizer.step()
+                
+                total_loss += loss.item()
+            
+            print(f'GNN Pretrain Epoch {epoch+1}/{args.gnn_pretrain_epochs}: Loss {total_loss/len(train_loader):.4f}')
+        
+        print("GNN pretraining complete. Starting main training.")
+
     algorithm.train()
 
     # Setup optimizers
@@ -159,8 +262,16 @@ def main(args):
     # Training metrics logging
     logs = {k: [] for k in ['epoch', 'class_loss', 'dis_loss', 'ent_loss', 
                            'total_loss', 'train_acc', 'valid_acc', 'target_acc', 
-                           'total_cost_time']}
+                           'total_cost_time', 'h_divergence', 'domain_acc']}
     best_valid_acc, target_acc = 0, 0
+
+    # Create entire source loader for h-divergence calculation
+    entire_source_loader = DataLoader(
+        tr, 
+        batch_size=args.batch_size, 
+        shuffle=False, 
+        num_workers=args.N_WORKERS
+    )
 
     # Main training loop
     global_step = 0  # Initialize global step counter
@@ -175,7 +286,6 @@ def main(args):
             current_epochs = args.local_epoch
         
         # Curriculum learning setup
-        # Then modify the curriculum learning section in your main training loop:
         if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
             print(f"Curriculum learning: Stage {round_idx}")
             
@@ -201,8 +311,13 @@ def main(args):
         # Phase 1: Feature update
         print('==== Feature update ====')
         print_row(['epoch', 'class_loss'], colwidth=15)
-        for step in range(current_epochs):  # CHANGED: args.local_epoch -> current_epochs
+        for step in range(current_epochs):
             for data in train_loader:
+                # Handle GNN input format
+                if args.use_gnn and GNN_AVAILABLE:
+                    data = list(data)
+                    data[0] = data[0].squeeze(2).permute(0, 2, 1)  # (batch, time, features)
+                
                 loss_result_dict = algorithm.update_a(data, opta)
             print_row([step, loss_result_dict['class']], colwidth=15)
             logs['class_loss'].append(loss_result_dict['class'])
@@ -210,8 +325,13 @@ def main(args):
         # Phase 2: Latent domain characterization
         print('==== Latent domain characterization ====')
         print_row(['epoch', 'total_loss', 'dis_loss', 'ent_loss'], colwidth=15)
-        for step in range(current_epochs):  # CHANGED: args.local_epoch -> current_epochs
+        for step in range(current_epochs):
             for data in train_loader:
+                # Handle GNN input format
+                if args.use_gnn and GNN_AVAILABLE:
+                    data = list(data)
+                    data[0] = data[0].squeeze(2).permute(0, 2, 1)  # (batch, time, features)
+                
                 loss_result_dict = algorithm.update_d(data, optd)
             print_row([step, loss_result_dict['total'], loss_result_dict['dis'], loss_result_dict['ent']], colwidth=15)
             logs['dis_loss'].append(loss_result_dict['dis'])
@@ -229,17 +349,30 @@ def main(args):
         print_row(print_key, colwidth=15)
     
         round_start_time = time.time()
-        for step in range(current_epochs):  # CHANGED: args.local_epoch -> current_epochs
+        for step in range(current_epochs):
             step_start_time = time.time()
             for data in train_loader:
+                # Handle GNN input format
+                if args.use_gnn and GNN_AVAILABLE:
+                    data = list(data)
+                    data[0] = data[0].squeeze(2).permute(0, 2, 1)  # (batch, time, features)
+                
                 step_vals = algorithm.update(data, opt)
     
             # Calculate accuracies
+            # Create transform wrapper for GNN if needed
+            transform_fn = None
+            if args.use_gnn and GNN_AVAILABLE:
+                def gnn_transform(x):
+                    return x.squeeze(2).permute(0, 2, 1)
+            else:
+                gnn_transform = None
+                
             results = {
-                'epoch': global_step,  # CHANGED: Use global step
-                'train_acc': modelopera.accuracy(algorithm, train_loader_noshuffle, None),
-                'valid_acc': modelopera.accuracy(algorithm, valid_loader, None),
-                'target_acc': modelopera.accuracy(algorithm, target_loader, None),
+                'epoch': global_step,
+                'train_acc': modelopera.accuracy(algorithm, train_loader_noshuffle, None, transform_fn=gnn_transform),
+                'valid_acc': modelopera.accuracy(algorithm, valid_loader, None, transform_fn=gnn_transform),
+                'target_acc': modelopera.accuracy(algorithm, target_loader, None, transform_fn=gnn_transform),
                 'total_cost_time': time.time() - step_start_time
             }
             
@@ -261,6 +394,42 @@ def main(args):
             global_step += 1  # Increment global step
     
         logs['total_cost_time'].append(time.time() - round_start_time)
+        
+        # Calculate h-divergence every 5 epochs
+        if round_idx % 5 == 0:
+            print("\nCalculating h-divergence...")
+            algorithm.eval()
+            
+            # Extract features for source domain
+            source_features = []
+            with torch.no_grad():
+                for data in entire_source_loader:
+                    x = data[0].cuda().float()
+                    if args.use_gnn and GNN_AVAILABLE:
+                        x = x.squeeze(2).permute(0, 2, 1)
+                    features = algorithm.featurizer(x).detach().cpu().numpy()
+                    source_features.append(features)
+            source_features = np.concatenate(source_features, axis=0)
+            
+            # Extract features for target domain
+            target_features = []
+            with torch.no_grad():
+                for data in target_loader:
+                    x = data[0].cuda().float()
+                    if args.use_gnn and GNN_AVAILABLE:
+                        x = x.squeeze(2).permute(0, 2, 1)
+                    features = algorithm.featurizer(x).detach().cpu().numpy()
+                    target_features.append(features)
+            target_features = np.concatenate(target_features, axis=0)
+            
+            # Calculate h-divergence
+            h_div, domain_acc = calculate_h_divergence(source_features, target_features)
+            logs['h_divergence'].append(h_div)
+            logs['domain_acc'].append(domain_acc)
+            print(f"  H-Divergence: {h_div:.4f}, Domain Classifier Acc: {domain_acc:.4f}")
+            
+            algorithm.train()
+            
     print(f'\n🎯 Final Target Accuracy: {target_acc:.4f}')
 
     # SHAP explainability analysis
@@ -274,8 +443,16 @@ def main(args):
             # Disable inplace operations in the model
             disable_inplace_relu(algorithm)
             
-            # Compute SHAP values safely
-            shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
+            # Create transform wrapper for GNN if needed
+            transform_fn = None
+            if args.use_gnn and GNN_AVAILABLE:
+                def gnn_transform(x):
+                    return x.squeeze(2).permute(0, 2, 1)
+            else:
+                gnn_transform = None
+                
+            # Compute SHAP values safely with optional transform
+            shap_vals = safe_compute_shap_values(algorithm, background, X_eval, transform_fn=gnn_transform)
             
             # Convert to numpy safely before visualization
             X_eval_np = X_eval.detach().cpu().numpy()
@@ -291,7 +468,7 @@ def main(args):
                              output_path=os.path.join(args.output, "shap_heatmap.png"))
 
             # Evaluate SHAP impact
-            base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
+            base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals, transform_fn=gnn_transform)
             
             # Save SHAP values
             save_path = os.path.join(args.output, "shap_values.npy")
@@ -301,7 +478,7 @@ def main(args):
             print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
             print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
             print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
-            print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals):.4f}")
+            print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals, transform_fn=gnn_transform):.4f}")
 
             # Compute advanced metrics
             metrics = evaluate_advanced_shap_metrics(shap_vals, X_eval)
@@ -337,6 +514,9 @@ def main(args):
             for data in valid_loader:
                 x, y = data[0].cuda(), data[1]
                 with torch.no_grad():
+                    # Apply transform for GNN if needed
+                    if args.use_gnn and GNN_AVAILABLE:
+                        x = x.squeeze(2).permute(0, 2, 1)
                     preds = algorithm.predict(x).cpu()
                 true_labels.extend(y.cpu().numpy())
                 pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
@@ -357,6 +537,7 @@ def main(args):
 
     # Plot training metrics
     try:
+        # Main training metrics plot
         plt.figure(figsize=(12, 8))
         plt.subplot(2, 1, 1)
         epochs = list(range(len(logs['class_loss'])))
@@ -384,9 +565,41 @@ def main(args):
         plt.savefig(os.path.join(args.output, "training_metrics.png"), dpi=300)
         plt.close()
         print("✅ Training metrics plot saved")
+        
+        # H-Divergence plot
+        if logs['h_divergence']:
+            plt.figure(figsize=(10, 6))
+            h_epochs = [i * 5 for i in range(len(logs['h_divergence']))]
+            plt.plot(h_epochs, logs['h_divergence'], 'o-', label='H-Divergence')
+            plt.plot(h_epochs, logs['domain_acc'], 's-', label='Domain Classifier Acc')
+            plt.title("Domain Discrepancy over Training")
+            plt.xlabel("Epoch")
+            plt.ylabel("Value")
+            plt.legend()
+            plt.grid(True)
+            plt.savefig(os.path.join(args.output, "domain_discrepancy.png"), dpi=300)
+            plt.close()
+            print("✅ Domain discrepancy plot saved")
     except Exception as e:
         print(f"[WARNING] Failed to generate training plots: {str(e)}")
 
 if __name__ == '__main__':
     args = get_args()
+    
+    # Add GNN-specific parameters to args
+    if not hasattr(args, 'use_gnn'):
+        args.use_gnn = False  # Default to CNN if not specified
+        
+    if args.use_gnn:
+        if not GNN_AVAILABLE:
+            print("[WARNING] GNN requested but not available. Falling back to CNN.")
+            args.use_gnn = False
+        else:
+            # GNN hyperparameters
+            args.gnn_hidden_dim = getattr(args, 'gnn_hidden_dim', 32)
+            args.gnn_output_dim = getattr(args, 'gnn_output_dim', 128)
+            args.gnn_lr = getattr(args, 'gnn_lr', 1e-3)
+            args.gnn_weight_decay = getattr(args, 'gnn_weight_decay', 1e-4)
+            args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)
+    
     main(args)

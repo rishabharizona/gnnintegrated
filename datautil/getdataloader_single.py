@@ -6,6 +6,8 @@ from torch.utils.data import DataLoader, Subset
 import datautil.actdata.util as actutil
 from datautil.util import combindataset, subdataset
 import datautil.actdata.cross_people as cross_people
+from torch_geometric.data import Batch
+from datautil.graph_utils import convert_to_graph
 
 # Task mapping for activity recognition
 task_act = {'cross_people': cross_people}
@@ -15,6 +17,25 @@ class SubsetWithLabelSetter(Subset):
     def set_labels_by_index(self, labels, indices, key):
         """Pass indices to underlying dataset for label setting"""
         self.dataset.set_labels_by_index(labels, indices, key)
+
+# ==================== GNN SUPPORT ADDITIONS ====================
+def gnn_collate_fn(batch):
+    """Custom collate function for GNN graph batching"""
+    graphs, labels, domains = zip(*batch)
+    batched_graph = Batch.from_data_list(graphs)
+    return batched_graph, torch.tensor(labels), torch.tensor(domains)
+
+def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
+    """Create GNN-specific data loader"""
+    return DataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        collate_fn=gnn_collate_fn,
+        num_workers=num_workers,
+        shuffle=shuffle,
+        drop_last=shuffle  # Only drop last for training
+    )
+# ==================== END GNN ADDITIONS ====================
 
 def get_dataloader(args, tr, val, tar):
     """
@@ -27,6 +48,23 @@ def get_dataloader(args, tr, val, tar):
     Returns:
         Tuple of DataLoader objects
     """
+    # ======= GNN-SPECIFIC LOADERS =======
+    if hasattr(args, 'model_type') and args.model_type == 'gnn':
+        train_loader = get_gnn_dataloader(
+            tr, args.batch_size, args.N_WORKERS, shuffle=True)
+        
+        train_loader_noshuffle = get_gnn_dataloader(
+            tr, args.batch_size, args.N_WORKERS, shuffle=False)
+        
+        valid_loader = get_gnn_dataloader(
+            val, args.batch_size, args.N_WORKERS, shuffle=False)
+        
+        target_loader = get_gnn_dataloader(
+            tar, args.batch_size, args.N_WORKERS, shuffle=False)
+        
+        return train_loader, train_loader_noshuffle, valid_loader, target_loader
+    
+    # ======= ORIGINAL LOADERS =======
     train_loader = DataLoader(
         dataset=tr, 
         batch_size=args.batch_size,
@@ -79,13 +117,19 @@ def get_act_dataloader(args):
     
     # Create datasets for each person group
     for i, item in enumerate(tmpp):
+        # ===== GNN TRANSFORM SELECTION =====
+        if hasattr(args, 'model_type') and args.model_type == 'gnn':
+            transform = actutil.act_to_graph_transform(args)
+        else:
+            transform = actutil.act_train()
+        
         tdata = pcross_act.ActList(
             args, 
             args.dataset, 
             args.data_dir, 
             item, 
             i, 
-            transform=actutil.act_train()
+            transform=transform
         )
         
         if i in args.test_envs:
@@ -247,9 +291,25 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     print(f"Selected {len(selected_indices)} samples from {len(selected_domains)} domains")
     
     curriculum_subset = SubsetWithLabelSetter(train_dataset, selected_indices)
-    curriculum_loader = DataLoader(curriculum_subset, batch_size=args.batch_size,
-                                   shuffle=True, num_workers=args.N_WORKERS,
-                                   drop_last=True)
+    
+    # ===== GNN-SPECIFIC CURRICULUM LOADER =====
+    if hasattr(args, 'model_type') and args.model_type == 'gnn':
+        curriculum_loader = DataLoader(
+            curriculum_subset, 
+            batch_size=args.batch_size,
+            collate_fn=gnn_collate_fn,
+            shuffle=True, 
+            num_workers=args.N_WORKERS,
+            drop_last=True
+        )
+    else:
+        curriculum_loader = DataLoader(
+            curriculum_subset, 
+            batch_size=args.batch_size,
+            shuffle=True, 
+            num_workers=args.N_WORKERS,
+            drop_last=True
+        )
 
     return curriculum_loader
 

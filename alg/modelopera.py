@@ -1,22 +1,38 @@
 import torch
 from network import act_network
+from gnn.temporal_gcn import TemporalGCN  # Import moved to top level
 
 def get_fea(args):
-    """Initialize feature extractor network"""
-    return act_network.ActNetwork(args.dataset)
+    """Initialize feature extractor network with GNN support"""
+    if hasattr(args, 'use_gnn') and args.use_gnn:
+        # Default values if not present
+        input_dim = 8  # EMG channels
+        hidden_dim = getattr(args, 'gnn_hidden_dim', 32)
+        output_dim = getattr(args, 'gnn_output_dim', 128)
+        
+        net = TemporalGCN(input_dim, hidden_dim, output_dim)
+        net.in_features = output_dim  # Needed for downstream bottleneck
+        return net
+    else:
+        return act_network.ActNetwork(args.dataset)
 
 def accuracy(network, loader, weights=None, usedpredict='p'):
     """
-    Calculate accuracy for a given data loader
+    Calculate accuracy for a given data loader with support for:
+    - Sample weighting
+    - Multiple prediction methods
+    - Both binary and multiclass classification
+    - Handling of different dimensional outputs
+    
     Args:
         network: Model to evaluate
-        loader: Data loader
+        loader: Data loader (returns 0.0 if None)
         weights: Sample weights (optional)
-        usedpredict: Which prediction method to use ('p' for predict, otherwise predict1)
+        usedpredict: Prediction method ('p' for predict, otherwise predict1)
+        
     Returns:
         Accuracy score (float)
     """
-    # Handle case where loader is None
     if loader is None:
         return 0.0
     
@@ -35,6 +51,10 @@ def accuracy(network, loader, weights=None, usedpredict='p'):
                 p = network.predict(x)
             else:
                 p = network.predict1(x)
+            
+            # Handle multi-dimensional outputs
+            if p.dim() > 2:
+                p = p.squeeze(1)
             
             # Handle sample weights
             if weights is None:
@@ -58,10 +78,12 @@ def accuracy(network, loader, weights=None, usedpredict='p'):
 
 def predict_proba(network, x):
     """
-    Predict class probabilities
+    Predict class probabilities with safety checks
+    
     Args:
         network: Model to use for prediction
         x: Input tensor
+        
     Returns:
         Class probabilities tensor
     """
@@ -69,6 +91,11 @@ def predict_proba(network, x):
     with torch.no_grad():
         x = x.cuda().float()
         logits = network.predict(x)
+        
+        # Handle multi-dimensional outputs
+        if logits.dim() > 2:
+            logits = logits.squeeze(1)
+            
         probs = torch.nn.functional.softmax(logits, dim=1)
     network.train()
     return probs

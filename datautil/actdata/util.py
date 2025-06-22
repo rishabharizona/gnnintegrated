@@ -1,12 +1,42 @@
 from torchvision import transforms
 import numpy as np
+import torch
+from datautil.graph_utils import convert_to_graph
 
+class StandardScaler:
+    """Normalize sensor data channel-wise"""
+    def __call__(self, tensor):
+        # tensor shape: [channels, timesteps, features]
+        for c in range(tensor.size(0)):
+            for f in range(tensor.size(2)):
+                channel_data = tensor[c, :, f]
+                mean = channel_data.mean()
+                std = channel_data.std()
+                if std > 0:
+                    tensor[c, :, f] = (channel_data - mean) / std
+                else:
+                    tensor[c, :, f] = channel_data - mean
+        return tensor
 
 def act_train():
+    """Original transformation for activity data"""
     return transforms.Compose([
-        transforms.ToTensor()
+        transforms.ToTensor(),
+        StandardScaler(),
+        lambda x: torch.tensor(x, dtype=torch.float32)
     ])
 
+def act_to_graph_transform(args):
+    """Transformation pipeline for GNN models"""
+    return transforms.Compose([
+        transforms.ToTensor(),
+        StandardScaler(),
+        lambda x: convert_to_graph(
+            torch.tensor(x, dtype=torch.float32), 
+            adjacency_strategy=args.adjacency_strategy,
+            threshold=args.correlation_threshold
+        )
+    ])
 
 def loaddata_from_numpy(dataset='dsads', task='cross_people', root_dir='./data/act/'):
     if dataset == 'pamap' and task == 'cross_people':

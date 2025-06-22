@@ -70,7 +70,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     for domain, loss, acc in domain_metrics:
         norm_loss = (loss - mean_loss) / std_loss
         norm_acc = (acc - mean_acc) / std_acc
-        difficulty = 0.7 * norm_loss - 0.3 * norm_acc
+        difficulty = 0.8 * norm_loss - 0.2 * norm_acc  # give more weight to loss
         domain_scores.append((domain, difficulty))
 
     domain_scores.sort(key=lambda x: x[1])
@@ -79,26 +79,30 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     for rank, (domain, difficulty) in enumerate(domain_scores, 1):
         print(f"{rank}. Domain {domain}: Difficulty = {difficulty:.4f}")
 
+    # Use smooth curriculum: increase number of hard domains gradually
     num_domains = len(domain_scores)
-    progress = min(1.0, (stage + 1) / args.CL_PHASE_EPOCHS)
-    progress = np.sqrt(progress)
-    num_selected = max(2, min(num_domains, int(np.ceil(progress * num_domains * 0.8))))
-    selected_domains = [domain for domain, _ in domain_scores[:num_selected]]
+    total_curriculum_epochs = getattr(args, 'CL_PHASE_EPOCHS', 10)
+    progress = min(1.0, (stage + 1) / total_curriculum_epochs)
+    progress = np.power(progress, 2.5)  # More slow progression
 
-    if stage > args.CL_PHASE_EPOCHS // 2 and len(domain_scores) > num_selected:
-        hardest_domain = domain_scores[-1][0]
-        selected_domains.append(hardest_domain)
-        print(f"Adding hardest domain for challenge: {hardest_domain}")
+    easy_pct = max(0.2, 1.0 - progress)  # Start from 100% easy, reduce over time
+    num_easy = max(1, int(easy_pct * num_domains))
+    selected_domains = [domain for domain, _ in domain_scores[:num_easy]]
 
-    if not hasattr(args, 'selected_domain_history'):
-        args.selected_domain_history = set()
-    args.selected_domain_history.update(selected_domains)
-    selected_domains = list(args.selected_domain_history)
+    # Gradually introduce mid and hard domains
+    if progress > 0.3:
+        mid_start = num_easy
+        mid_end = min(num_domains, mid_start + int(num_domains * 0.3))
+        selected_domains += [domain for domain, _ in domain_scores[mid_start:mid_end]]
+    if progress > 0.6:
+        selected_domains += [domain for domain, _ in domain_scores[mid_end:]]
 
-    train_domain_indices = {}
+    selected_domains = list(set(selected_domains))
+
+    train_domain_indices = defaultdict(list)
     for idx in range(len(train_dataset)):
         domain = train_dataset[idx][2]
-        train_domain_indices.setdefault(domain, []).append(idx)
+        train_domain_indices[domain].append(idx)
 
     domain_difficulty_dict = dict(domain_scores)
     selected_indices = []
@@ -110,10 +114,11 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
                 label = train_dataset[idx][1]
                 label_indices[label].append(idx)
 
-            weight = 1 - domain_difficulty_dict.get(domain, 0.5)
-            n_samples = int(min(len(domain_idxs), max(50, len(domain_idxs) * (0.5 + weight))))
-            samples_per_class = max(1, n_samples // len(label_indices))
+            difficulty = domain_difficulty_dict.get(domain, 0.5)
+            retain_ratio = max(0.3, 1.0 - 0.5 * difficulty)
+            n_samples = int(retain_ratio * len(domain_idxs))
 
+            samples_per_class = max(1, n_samples // len(label_indices))
             for label, idxs in label_indices.items():
                 sampled = random.sample(idxs, min(len(idxs), samples_per_class))
                 selected_indices.extend(sampled)

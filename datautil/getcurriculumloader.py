@@ -1,75 +1,120 @@
-import torch
-import numpy as np
-import random
-from torch.utils.data import Subset, DataLoader
 from sklearn.model_selection import train_test_split
+from torch.utils.data import Subset, DataLoader
+import numpy as np
+import torch
+import random
 
 class SubsetWithLabelSetter(Subset):
     def set_labels_by_index(self, labels, indices, key):
         self.dataset.set_labels_by_index(labels, indices, key)
 
-def mixup_data(x, y, alpha=0.4):
-    """Compute the mixup data. Return mixed inputs, pairs of targets, and lambda"""
+def mixup_data(x, y, alpha=1.0):
     if alpha > 0:
         lam = np.random.beta(alpha, alpha)
     else:
         lam = 1
-
     batch_size = x.size()[0]
     index = torch.randperm(batch_size).cuda()
-
     mixed_x = lam * x + (1 - lam) * x[index, :]
     y_a, y_b = y, y[index]
     return mixed_x, y_a, y_b, lam
 
-def get_samplewise_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
-    """Constructs a curriculum dataloader by selecting easy samples based on individual sample losses."""
+def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
+    domain_indices = {}
+    for idx in range(len(val_dataset)):
+        domain = val_dataset[idx][2]
+        domain_indices.setdefault(domain, []).append(idx)
+
+    domain_metrics = []
     algorithm.eval()
-    sample_losses = []
-
-    # Create a loader for the validation dataset to estimate sample difficulty
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.N_WORKERS)
-
-    print("[INFO] Evaluating sample-level difficulty from validation data...")
     with torch.no_grad():
-        base_idx = 0
-        for batch in val_loader:
-            x, y, _ = batch
-            x, y = x.cuda().float(), y.cuda().long()
-            outputs = algorithm.predict(x)
-            losses = torch.nn.functional.cross_entropy(outputs, y, reduction='none')
-            for i, l in enumerate(losses):
-                sample_losses.append((base_idx + i, l.item()))
-            base_idx += x.size(0)
+        for domain, indices in domain_indices.items():
+            subset = Subset(val_dataset, indices)
+            loader = DataLoader(subset, batch_size=args.batch_size, shuffle=False, num_workers=args.N_WORKERS)
 
-    # Sort samples by loss (ascending = easiest first)
-    sample_losses.sort(key=lambda x: x[1])
+            total_loss, correct, total, num_batches = 0.0, 0, 0, 0
+            for batch in loader:
+                inputs = batch[0].cuda().float()
+                labels = batch[1].cuda().long()
+                output = algorithm.predict(inputs)
+                loss = torch.nn.functional.cross_entropy(output, labels)
+                total_loss += loss.item()
+                _, predicted = output.max(1)
+                correct += predicted.eq(labels).sum().item()
+                total += labels.size(0)
+                num_batches += 1
 
-    # Curriculum progression: slowly introduce harder examples
+            avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
+            accuracy = correct / total if total > 0 else 0
+            domain_metrics.append((domain, avg_loss, accuracy))
+
+    losses = [m[1] for m in domain_metrics]
+    min_loss, max_loss = min(losses), max(losses)
+    accs = [m[2] for m in domain_metrics]
+    min_acc, max_acc = min(accs), max(accs)
+
+    domain_scores = []
+    for domain, loss, acc in domain_metrics:
+        norm_loss = (loss - min_loss) / (max_loss - min_loss + 1e-10)
+        norm_acc = (acc - min_acc) / (max_acc - min_acc + 1e-10)
+        difficulty = 0.7 * norm_loss + 0.3 * (1 - norm_acc)
+        domain_scores.append((domain, difficulty))
+
+    domain_scores.sort(key=lambda x: x[1])
+    print("\n--- Domain Difficulty Ranking (easiest to hardest) ---")
+    for rank, (domain, difficulty) in enumerate(domain_scores, 1):
+        print(f"{rank}. Domain {domain}: Difficulty = {difficulty:.4f}")
+
+    num_domains = len(domain_scores)
     progress = min(1.0, (stage + 1) / args.CL_PHASE_EPOCHS)
-    num_selected = int(len(sample_losses) * progress)
-    easy_indices = [idx for idx, _ in sample_losses[:num_selected]]
+    progress = np.sqrt(progress)
+    num_selected = max(2, min(num_domains, int(np.ceil(progress * num_domains * 0.8))))
+    selected_domains = [domain for domain, _ in domain_scores[:num_selected]]
 
-    # Introduce a few hard samples (top 10%) for diversity
-    hard_pool = sample_losses[-int(0.1 * len(sample_losses)):] if len(sample_losses) > 10 else []
-    hard_samples = random.sample(hard_pool, min(10, len(hard_pool)))
-    hard_indices = [idx for idx, _ in hard_samples]
+    if len(domain_scores) > num_selected:
+        random_hard_domain = random.choice(domain_scores[num_selected:])[0]
+        selected_domains.append(random_hard_domain)
+        print(f"Adding random harder domain: {random_hard_domain}")
 
-    selected_indices = list(set(easy_indices + hard_indices))
+    train_domain_indices = {}
+    for idx in range(len(train_dataset)):
+        domain = train_dataset[idx][2]
+        train_domain_indices.setdefault(domain, []).append(idx)
 
-    print(f"\n📚 Curriculum Stage {stage+1}: Selected {len(selected_indices)} samples (Progress: {progress*100:.1f}%)")
+    selected_indices = []
+    for domain in selected_domains:
+        if domain in train_domain_indices:
+            domain_indices = train_domain_indices[domain]
+            n_samples = min(len(domain_indices), max(50, int(len(domain_indices) * 0.8)))
+            selected_indices.extend(random.sample(domain_indices, n_samples))
 
-    # Create DataLoader from selected samples
+    print(f"Selected {len(selected_indices)} samples from {len(selected_domains)} domains")
     curriculum_subset = SubsetWithLabelSetter(train_dataset, selected_indices)
-    curriculum_loader = DataLoader(
-        curriculum_subset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.N_WORKERS,
-        drop_last=True
-    )
-
+    curriculum_loader = DataLoader(curriculum_subset, batch_size=args.batch_size,
+                                   shuffle=True, num_workers=args.N_WORKERS, drop_last=True)
     return curriculum_loader
+
+def get_samplewise_curriculum_loader(train_dataset, algorithm, stage, total_stages=5, alpha=1.0):
+    scores = []
+    loader = DataLoader(train_dataset, batch_size=256, shuffle=False)
+    algorithm.eval()
+    with torch.no_grad():
+        for idx, (x, y, _) in enumerate(loader):
+            x = x.cuda().float()
+            y = y.cuda().long()
+            logits = algorithm.predict(x)
+            loss = torch.nn.functional.cross_entropy(logits, y, reduction='none')
+            for i in range(len(x)):
+                scores.append((loss[i].item(), idx * 256 + i))
+
+    scores.sort(key=lambda x: x[0])
+    progress = (stage + 1) / total_stages
+    cutoff = int(len(scores) * progress)
+    selected_indices = [i for _, i in scores[:cutoff]]
+
+    print(f"[Sample-wise CL] Stage {stage}, selected top {cutoff} samples")
+    subset = Subset(train_dataset, selected_indices)
+    return DataLoader(subset, batch_size=64, shuffle=True, num_workers=2)
 
 def split_dataset_by_domain(dataset, val_ratio=0.2, seed=42):
     domain_indices = {}

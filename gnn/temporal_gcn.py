@@ -1,57 +1,62 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch_geometric.nn import GCNConv, GATConv
 
 class TemporalGCN(nn.Module):
+    """
+    Temporal Graph Convolutional Network for sensor-based activity recognition
+    Combines 1D convolutions for temporal features with GCN for spatial features
+    """
     def __init__(self, input_dim, hidden_dim, output_dim):
-        super(TemporalGCN, self).__init__()
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
+        super().__init__()
+        # Temporal feature extractor
+        self.temporal_conv = nn.Sequential(
+            nn.Conv1d(input_dim, 16, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(16, 32, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.MaxPool1d(2)
+        )
         
-        # Graph convolutional layers
-        self.gc1 = nn.Linear(input_dim, hidden_dim)
-        self.gc2 = nn.Linear(hidden_dim, output_dim)
+        # Spatial graph convolutions
+        self.gcn1 = GCNConv(32, hidden_dim)
+        self.gcn2 = GCNConv(hidden_dim, hidden_dim)
         
-        # Batch normalization
-        self.bn1 = nn.BatchNorm1d(hidden_dim)
-        self.bn2 = nn.BatchNorm1d(output_dim)
+        # Classifier
+        self.fc = nn.Linear(hidden_dim, output_dim)
         
-        # Dropout layer
-        self.dropout = nn.Dropout(0.5)
+        # Store input/output dimensions for compatibility
+        self.in_features = input_dim
+        self.out_features = output_dim
         
-        # Reconstruction layer
-        self.reconstruct_layer = nn.Linear(output_dim, input_dim)
-
-    def forward(self, x):
-        """
-        Forward pass through the network
-        Args:
-            x: Input tensor of shape (batch_size, seq_len, input_dim)
-        Returns:
-            Output tensor of shape (batch_size, output_dim)
-        """
-        # Input shape: (batch_size, seq_len, input_dim)
+    def forward(self, data):
+        # Data is either a tuple (x, edge_index) or a PyG Data object
+        if isinstance(data, tuple):
+            x, edge_index = data
+            batch = None
+        else:
+            x = data.x
+            edge_index = data.edge_index
+            batch = data.batch
+            
+        # Temporal convolution: [batch, channels, timesteps]
+        x = x.permute(0, 2, 1)  # [batch, features, timesteps]
+        x = self.temporal_conv(x)
+        x = x.permute(0, 2, 1)  # [batch, timesteps, features]
         
-        # First graph convolution
-        x = F.relu(self.bn1(self.gc1(x).transpose(1, 2)).transpose(1, 2))
-        x = self.dropout(x)
+        # Prepare for GCN: flatten batch and timesteps
+        batch_size, timesteps, features = x.shape
+        x = x.reshape(batch_size * timesteps, features)
         
-        # Second graph convolution
-        x = F.relu(self.bn2(self.gc2(x).transpose(1, 2)).transpose(1, 2))
-        x = self.dropout(x)
+        # Graph convolution
+        x = F.relu(self.gcn1(x, edge_index))
+        x = F.relu(self.gcn2(x, edge_index))
         
-        # Global average pooling over temporal dimension
-        x = torch.mean(x, dim=1)
+        # Pool over time
+        x = x.reshape(batch_size, timesteps, -1)
+        x = torch.mean(x, dim=1)  # Global average pooling over time
         
-        return x
-
-    def reconstruct(self, features):
-        """
-        Reconstruct input from features
-        Args:
-            features: Feature tensor from forward pass
-        Returns:
-            Reconstructed input
-        """
-        return self.reconstruct_layer(features)
+        # Classification
+        return self.fc(x)

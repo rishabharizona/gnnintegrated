@@ -10,7 +10,7 @@ from alg import alg, modelopera
 from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ, disable_inplace_relu
 from datautil.getdataloader_single import get_act_dataloader
 from torch.utils.data import DataLoader
-from datautil.getcurriculumloader import get_curriculum_loader
+from datautil.getcurriculumloader import get_curriculum_loader, get_samplewise_curriculum_loader
 from network.act_network import ActNetwork
 from sklearn.metrics import davies_bouldin_score
 from shap_utils import (
@@ -104,11 +104,23 @@ def main(args):
 
     for round_idx in range(args.max_epoch):
         print(f'\n======== ROUND {round_idx} ========')
-        if getattr(args, 'curriculum', False):
-            if round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
-                print(f"[Curriculum] Stage {round_idx}")
+        if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
+            print(f"[Curriculum] Stage {round_idx} ({args.curriculum_type})")
+        
+            if args.curriculum_type == 'domain':
                 train_loader = get_curriculum_loader(args, algorithm, tr, val, stage=round_idx)
-                train_loader_noshuffle = DataLoader(train_loader.dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.N_WORKERS)
+            elif args.curriculum_type == 'sample':
+                train_loader = get_samplewise_curriculum_loader(tr, algorithm, stage=round_idx, total_stages=args.CL_PHASE_EPOCHS)
+            else:
+                raise ValueError(f"Unknown curriculum_type: {args.curriculum_type}")
+        
+            train_loader_noshuffle = DataLoader(
+                train_loader.dataset,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=args.N_WORKERS
+            )
+
         current_epochs = args.CL_PHASE_EPOCHS if (getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5)) else args.local_epoch
 
         print('==== Feature update ====')

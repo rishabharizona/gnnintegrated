@@ -1,10 +1,10 @@
 import torch
 from network import act_network
-from gnn.temporal_gcn import TemporalGCN  # Import moved to top level
+from gnn.temporal_gcn import TemporalGCN
 
 def get_fea(args):
     """Initialize feature extractor network with GNN support"""
-    if hasattr(args, 'use_gnn') and args.use_gnn:
+    if hasattr(args, 'model_type') and args.model_type == 'gnn':
         # Default values if not present
         input_dim = 8  # EMG channels
         hidden_dim = getattr(args, 'gnn_hidden_dim', 32)

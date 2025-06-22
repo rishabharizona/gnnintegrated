@@ -78,23 +78,26 @@ class mydataset(object):
 
     def target_trans(self, y):
         """Apply target transformation if defined"""
-        return self.target_transform(y) if self.target_transform else y
+        if self.target_transform is not None:
+            return self.target_transform(y)
+        else:
+            return y
 
     def input_trans(self, x):
         """Apply input transformation if defined"""
-        return self.transform(x) if self.transform else x
+        if self.transform is not None:
+            return self.transform(x)
+        else:
+            return x
 
     def __getitem__(self, index):
         """Get item with all label types and transformations"""
         x = self.input_trans(self.x[index])
-        return (
-            x,
-            self.target_trans(self.labels[index]),
-            self.target_trans(self.dlabels[index]),
-            self.target_trans(self.pclabels[index]),
-            self.target_trans(self.pdlabels[index]),
-            index
-        )
+        ctarget = self.target_trans(self.labels[index])
+        dtarget = self.target_trans(self.dlabels[index])
+        pctarget = self.target_trans(self.pclabels[index])
+        pdtarget = self.target_trans(self.pdlabels[index])
+        return x, ctarget, dtarget, pctarget, pdtarget, index
 
     def __len__(self):
         return len(self.x)
@@ -102,7 +105,7 @@ class mydataset(object):
 class subdataset(mydataset):
     """Subset of a dataset defined by indices"""
     def __init__(self, args, dataset, indices):
-        super().__init__(args)
+        super(subdataset, self).__init__(args)
         self.x = dataset.x[indices]
         self.loader = dataset.loader
         self.labels = dataset.labels[indices]
@@ -117,7 +120,7 @@ class subdataset(mydataset):
 class combindataset(mydataset):
     """Combined dataset from multiple source datasets"""
     def __init__(self, args, datalist):
-        super().__init__(args)
+        super(combindataset, self).__init__(args)
         self.domain_num = len(datalist)
         self.loader = datalist[0].loader
         

@@ -187,26 +187,23 @@ def get_args():
                         help='Enable curriculum learning')
     parser.add_argument('--CL_PHASE_EPOCHS', type=int, default=5, 
                         help='Epochs to apply curriculum learning')
-    parser.add_argument('--use_gnn', action='store_true', 
-                        help='Use GNN instead of CNN as the feature extractor')
     parser.add_argument('--enable_shap', action='store_true', 
                         help='Enable SHAP explainability')
     parser.add_argument('--resume', type=str, default=None, 
                         help='Checkpoint path for SHAP evaluation')
 
-    # ======== ADD GNN PARAMETERS HERE ========
-    parser.add_argument('--use_gnn', action='store_true', 
-                        help='Use GNN instead of CNN as the feature extractor')
-    parser.add_argument('--gnn_hidden_dim', type=int, default=32,
-                        help='Hidden dimension size for GNN')
-    parser.add_argument('--gnn_output_dim', type=int, default=128,
-                        help='Output feature dimension for GNN')
-    parser.add_argument('--gnn_lr', type=float, default=0.001,
-                        help='Learning rate for GNN pretraining')
-    parser.add_argument('--gnn_weight_decay', type=float, default=0.0001,
-                        help='Weight decay for GNN')
-    parser.add_argument('--gnn_pretrain_epochs', type=int, default=5,
-                        help='Number of pretraining epochs for GNN')
+    # ======== GNN PARAMETERS ========
+    parser.add_argument('--model_type', choices=['cnn', 'gnn'], default='cnn', 
+                       help='Model architecture type')
+    parser.add_argument('--gnn_arch', choices=['gcn', 'gat'], default='gcn',
+                       help='GNN architecture type')
+    parser.add_argument('--gnn_hidden_dim', type=int, default=128,
+                       help='Hidden dimension for GNN layers')
+    parser.add_argument('--adjacency_strategy', default='fully_connected',
+                       choices=['fully_connected', 'correlation', 'knn'],
+                       help='Graph construction strategy for GNNs')
+    parser.add_argument('--correlation_threshold', type=float, default=0.5,
+                       help='Correlation threshold for graph edges')
     # ======== END GNN PARAMETERS ========
     
     # System parameters

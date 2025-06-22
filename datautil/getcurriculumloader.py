@@ -99,7 +99,8 @@ def get_samplewise_curriculum_loader(train_dataset, algorithm, stage, total_stag
     loader = DataLoader(train_dataset, batch_size=256, shuffle=False)
     algorithm.eval()
     with torch.no_grad():
-        for idx, (x, y, domain_label) in enumerate(loader):
+        for idx, (x, y, *_) in enumerate(loader):
+            domain_label = _[0] if _ else None
             x = x.cuda().float()
             y = y.cuda().long()
             logits = algorithm.predict(x)

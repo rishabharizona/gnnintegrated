@@ -2,10 +2,25 @@ import torch
 import numpy as np
 import random
 from torch.utils.data import Subset, DataLoader
+from sklearn.model_selection import train_test_split
 
 class SubsetWithLabelSetter(Subset):
     def set_labels_by_index(self, labels, indices, key):
         self.dataset.set_labels_by_index(labels, indices, key)
+
+def mixup_data(x, y, alpha=0.4):
+    """Compute the mixup data. Return mixed inputs, pairs of targets, and lambda"""
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+
+    batch_size = x.size()[0]
+    index = torch.randperm(batch_size).cuda()
+
+    mixed_x = lam * x + (1 - lam) * x[index, :]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
 
 def get_samplewise_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     """Constructs a curriculum dataloader by selecting easy samples based on individual sample losses."""

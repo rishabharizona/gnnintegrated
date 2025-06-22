@@ -13,14 +13,43 @@ from loss.common_loss import Entropylogits
 class Diversify(Algorithm):
     def __init__(self, args):
         super(Diversify, self).__init__(args)
-        self.featurizer = common_network(args.dataset).cuda()
-        self.classifier = nn.Linear(self.featurizer.output_num(), args.class_num).cuda()
-        self.discriminator = Adver_network(args.latent_domain_num).cuda()
+        # Feature extractor
+        self.featurizer = get_fea(args)
+        
+        # Domain characterization components
+        self.dbottleneck = common_network.feat_bottleneck(
+            self.featurizer.in_features, args.bottleneck, args.layer)
+        self.ddiscriminator = Adver_network.Discriminator(
+            args.bottleneck, args.dis_hidden, args.num_classes)
+        self.dclassifier = common_network.feat_classifier(
+            int(args.latent_domain_num),
+            args.bottleneck, 
+            args.classifier
+        )
+        
+        # Main classification components
+        self.bottleneck = common_network.feat_bottleneck(
+            self.featurizer.in_features, args.bottleneck, args.layer)
+        self.classifier = common_network.feat_classifier(
+            args.num_classes, args.bottleneck, args.classifier)
+        
+        # Auxiliary classification components
+        self.abottleneck = common_network.feat_bottleneck(
+            self.featurizer.in_features, args.bottleneck, args.layer)
+        self.aclassifier = common_network.feat_classifier(
+            int(args.num_classes * args.latent_domain_num),
+            args.bottleneck, 
+            args.classifier
+        )
+        
+        # Domain discrimination components
+        self.discriminator = Adver_network.Discriminator(
+            args.bottleneck, args.dis_hidden, args.latent_domain_num)
+        
         self.args = args
-
-    def predict(self, x):
-        features = self.featurizer(x)
-        return self.classifier(features)
+        self.criterion = nn.CrossEntropyLoss()
+        # Add flag for explainability mode
+        self.explain_mode = False  # New flag
 
     def update_a(self, data, optimizer):
         self.featurizer.train()

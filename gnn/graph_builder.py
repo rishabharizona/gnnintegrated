@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from scipy.spatial.distance import pdist, squareform
-from typing import Tuple, Union
+from typing import Tuple, Union, List
 import itertools
 
 class GraphBuilder:
@@ -42,16 +42,15 @@ class GraphBuilder:
         if threshold_type not in {'fixed', 'adaptive'}:
             raise ValueError(f"Invalid threshold_type '{threshold_type}'. Choose 'fixed' or 'adaptive'")
 
-    def build_graph(self, data_sample: np.ndarray) -> Tuple[torch.LongTensor, torch.FloatTensor]:
+    def build_graph(self, data_sample: np.ndarray) -> torch.LongTensor:
         """
-        Build graph edge indices and weights from EMG sample.
+        Build graph edge indices from EMG sample for batch processing.
         
         Args:
             data_sample: EMG time-series of shape (time_steps, channels)
             
         Returns:
             edge_index: Tensor of shape [2, num_edges]
-            edge_weights: Tensor of shape [num_edges]
         """
         # Validate input
         if not isinstance(data_sample, np.ndarray):
@@ -72,7 +71,7 @@ class GraphBuilder:
         # Determine threshold
         threshold = self._determine_threshold(similarity_matrix)
         
-        # Build edges and weights
+        # Build edges
         return self._create_edges(similarity_matrix, threshold, C)
 
     def _compute_similarity(self, data: np.ndarray) -> np.ndarray:
@@ -98,41 +97,37 @@ class GraphBuilder:
         median_val = np.median(abs_matrix[abs_matrix > 0])
         return median_val * self.adaptive_factor
 
-    def _create_edges(self, matrix: np.ndarray, threshold: float, num_channels: int) -> Tuple[torch.LongTensor, torch.FloatTensor]:
-        """Create edge connections with weights"""
+    def _create_edges(self, matrix: np.ndarray, threshold: float, num_channels: int) -> torch.LongTensor:
+        """Create edge connections without weights"""
         edges = []
-        weights = []
         
         # Create edges where absolute similarity exceeds threshold
         for i, j in itertools.combinations(range(num_channels), 2):
             similarity = matrix[i, j]
             if abs(similarity) > threshold:
                 edges.append([i, j])
-                weights.append(similarity)
+                edges.append([j, i])  # Undirected graph
                 
         # Handle no-edge case
         if not edges and self.fully_connected_fallback:
             return self._create_fully_connected(num_channels)
         
-        # Convert to tensors
+        # Convert to tensor
         edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
-        edge_weights = torch.tensor(weights, dtype=torch.float32)
         
-        return edge_index, edge_weights
+        return edge_index
 
-    def _create_fully_connected(self, num_channels: int) -> Tuple[torch.LongTensor, torch.FloatTensor]:
-        """Create fully connected graph with uniform weights"""
+    def _create_fully_connected(self, num_channels: int) -> torch.LongTensor:
+        """Create fully connected graph"""
         edges = []
         for i in range(num_channels):
             for j in range(num_channels):
                 if i != j:
                     edges.append([i, j])
         
-        edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
-        edge_weights = torch.ones(len(edges), dtype=torch.float32)
-        return edge_index, edge_weights
+        return torch.tensor(edges, dtype=torch.long).t().contiguous()
 
-    def batch_build(self, batch_data: np.ndarray) -> Tuple[torch.LongTensor, torch.FloatTensor]:
+    def build_graph_for_batch(self, batch_data: np.ndarray) -> List[torch.LongTensor]:
         """
         Build graphs for a batch of EMG samples.
         
@@ -140,18 +135,15 @@ class GraphBuilder:
             batch_data: EMG time-series of shape (batch_size, time_steps, channels)
             
         Returns:
-            batch_edge_index: List of edge_index tensors
-            batch_edge_weights: List of edge_weight tensors
+            edge_indices: List of edge_index tensors for each sample
         """
         if batch_data.ndim != 3:
             raise ValueError(f"Batch input must be 3D (batch, time, channels), got shape {batch_data.shape}")
             
-        batch_edges = []
-        batch_weights = []
+        edge_indices = []
         
         for sample in batch_data:
-            edge_index, edge_weights = self.build_graph(sample)
-            batch_edges.append(edge_index)
-            batch_weights.append(edge_weights)
+            edge_index = self.build_graph(sample)
+            edge_indices.append(edge_index)
             
-        return batch_edges, batch_weights
+        return edge_indices

@@ -10,9 +10,8 @@ var_size = {
     }
 }
 
-# Function to disable inplace ReLU operations
 def disable_inplace_relu(model):
-    """Disable inplace operations in ReLU layers"""
+    """Disable inplace operations in ReLU layers for compatibility"""
     for module in model.modules():
         if isinstance(module, torch.nn.ReLU):
             module.inplace = False
@@ -20,7 +19,7 @@ def disable_inplace_relu(model):
 class ActNetwork(nn.Module):
     """
     Convolutional neural network for sensor-based activity recognition
-    Specifically designed for EMG data processing
+    Specifically designed for EMG data processing with dynamic feature calculation
     """
     def __init__(self, taskname='emg'):
         """
@@ -37,10 +36,10 @@ class ActNetwork(nn.Module):
                 in_channels=var_size[taskname]['in_size'],
                 out_channels=16,
                 kernel_size=(1, var_size[taskname]['ker_size']),
-                padding=(0, var_size[taskname]['ker_size']//2)  # Add padding to maintain temporal dimension
+                padding=(0, var_size[taskname]['ker_size']//2)  # Maintain temporal dimension
             ),
             nn.BatchNorm2d(16),
-            nn.ReLU(),  # Removed inplace=True
+            nn.ReLU(),
             nn.MaxPool2d(kernel_size=(1, 2), stride=2)
         )
         
@@ -53,21 +52,27 @@ class ActNetwork(nn.Module):
                 padding=(0, var_size[taskname]['ker_size']//2)
             ),
             nn.BatchNorm2d(32),
-            nn.ReLU(),  # Removed inplace=True
+            nn.ReLU(),
             nn.MaxPool2d(kernel_size=(1, 2), stride=2)
         )
         
         # Calculate output size dynamically
         self.in_features = self._calculate_output_size()
         
-        # Disable inplace operations in all ReLU layers
+        # Disable inplace operations for compatibility
         disable_inplace_relu(self)
 
     def _calculate_output_size(self):
-        """Calculate output size dynamically using a dummy input"""
+        """Dynamically calculate output feature size using dummy input"""
         with torch.no_grad():
+            # Create dummy input with standard EMG dimensions
             dummy_input = torch.zeros(1, var_size[self.taskname]['in_size'], 1, 200)
-            features = self.conv2(self.conv1(dummy_input))
+            
+            # Pass through convolutional layers
+            features = self.conv1(dummy_input)
+            features = self.conv2(features)
+            
+            # Calculate total feature size
             return int(np.prod(features.shape[1:]))  # Channels × Height × Width
 
     def forward(self, x):

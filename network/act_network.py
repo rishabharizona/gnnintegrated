@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+from gnn.temporal_gcn import TemporalGCN  # Add GNN import
 
 # Configuration for different sensor modalities
 var_size = {
@@ -18,46 +19,61 @@ def disable_inplace_relu(model):
 
 class ActNetwork(nn.Module):
     """
-    Convolutional neural network for sensor-based activity recognition
-    Specifically designed for EMG data processing with dynamic feature calculation
+    Flexible network for sensor-based activity recognition
+    Supports both CNN for raw data and GNN for graph data
     """
-    def __init__(self, taskname='emg'):
+    def __init__(self, taskname='emg', args=None):
         """
         Initialize the network
         Args:
             taskname: Sensor modality (currently only 'emg' supported)
+            args: Configuration arguments
         """
         super(ActNetwork, self).__init__()
         self.taskname = taskname
+        self.args = args
         
-        # First convolutional block
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(
-                in_channels=var_size[taskname]['in_size'],
-                out_channels=16,
-                kernel_size=(1, var_size[taskname]['ker_size']),
-                padding=(0, var_size[taskname]['ker_size']//2)  # Maintain temporal dimension
-            ),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=(1, 2), stride=2)
-        )
-        
-        # Second convolutional block
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(
-                in_channels=16,
-                out_channels=32,
-                kernel_size=(1, var_size[taskname]['ker_size']),
-                padding=(0, var_size[taskname]['ker_size']//2)
-            ),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=(1, 2), stride=2)
-        )
-        
-        # Calculate output size dynamically
-        self.in_features = self._calculate_output_size()
+        # ===== GNN BRANCH =====
+        if hasattr(args, 'model_type') and args.model_type == 'gnn':
+            # Initialize GNN model
+            self.gnn = TemporalGCN(
+                input_dim=var_size[taskname]['in_size'],
+                hidden_dim=args.gnn_hidden_dim,
+                output_dim=args.bottleneck
+            )
+            self.in_features = args.bottleneck
+            self.is_gnn = True
+        # ===== CNN BRANCH =====
+        else:
+            # First convolutional block
+            self.conv1 = nn.Sequential(
+                nn.Conv2d(
+                    in_channels=var_size[taskname]['in_size'],
+                    out_channels=16,
+                    kernel_size=(1, var_size[taskname]['ker_size']),
+                    padding=(0, var_size[taskname]['ker_size']//2)  # Maintain temporal dimension
+                ),
+                nn.BatchNorm2d(16),
+                nn.ReLU(),
+                nn.MaxPool2d(kernel_size=(1, 2), stride=2)
+            )
+            
+            # Second convolutional block
+            self.conv2 = nn.Sequential(
+                nn.Conv2d(
+                    in_channels=16,
+                    out_channels=32,
+                    kernel_size=(1, var_size[taskname]['ker_size']),
+                    padding=(0, var_size[taskname]['ker_size']//2)
+                ),
+                nn.BatchNorm2d(32),
+                nn.ReLU(),
+                nn.MaxPool2d(kernel_size=(1, 2), stride=2)
+            )
+            
+            # Calculate output size dynamically
+            self.in_features = self._calculate_output_size()
+            self.is_gnn = False
         
         # Disable inplace operations for compatibility
         disable_inplace_relu(self)
@@ -79,11 +95,17 @@ class ActNetwork(nn.Module):
         """
         Forward pass through the network
         Args:
-            x: Input tensor of shape (batch, channels, 1, time_steps)
+            x: Input tensor - either raw data or graph data
         Returns:
             Flattened feature tensor of shape (batch, features)
         """
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = x.view(x.size(0), -1)  # Flatten while preserving batch dimension
-        return x
+        # ===== GNN PROCESSING =====
+        if self.is_gnn:
+            # For graph data: x is PyG Data object
+            return self.gnn(x)
+        # ===== CNN PROCESSING =====
+        else:
+            # For raw data: shape (batch, channels, 1, time_steps)
+            x = self.conv1(x)
+            x = self.conv2(x)
+            return x.view(x.size(0), -1)  # Flatten while preserving batch dimension

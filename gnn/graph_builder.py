@@ -1,60 +1,157 @@
 import torch
 import numpy as np
+from scipy.spatial.distance import pdist, squareform
+from typing import Tuple, Union
 import itertools
 
-def build_correlation_graph(data_sample, threshold=0.3):
-
+class GraphBuilder:
     """
-
-    Build edge_index from a single EMG sample of shape (T, C).
-
+    Builds dynamic correlation graphs from EMG time-series data with multiple
+    connectivity strategies and adaptive thresholding for biomedical research.
+    
+    Features:
+    - Multiple similarity metrics (correlation, covariance, Euclidean distance)
+    - Adaptive thresholding based on data distribution
+    - Edge weight preservation
+    - Batch processing support
+    - Comprehensive validation checks
+    
     Args:
-
-
-        data_sample: np.ndarray of shape (T, C) — time steps x channels
-
-
-        threshold: float — minimum absolute correlation to form an edge
-
-    Returns:
-
-
-        edge_index: torch.LongTensor of shape [2, num_edges]
-
-
+        method: Similarity metric ('correlation', 'covariance', 'euclidean')
+        threshold_type: 'fixed' or 'adaptive' (median-based)
+        default_threshold: Default threshold value for fixed method
+        adaptive_factor: Multiplier for adaptive threshold calculation
+        fully_connected_fallback: Use fully connected graph when no edges found
     """
+    
+    def __init__(self,
+                 method: str = 'correlation',
+                 threshold_type: str = 'adaptive',
+                 default_threshold: float = 0.3,
+                 adaptive_factor: float = 1.5,
+                 fully_connected_fallback: bool = True):
+        self.method = method
+        self.threshold_type = threshold_type
+        self.default_threshold = default_threshold
+        self.adaptive_factor = adaptive_factor
+        self.fully_connected_fallback = fully_connected_fallback
+        
+        if method not in {'correlation', 'covariance', 'euclidean'}:
+            raise ValueError(f"Invalid method '{method}'. Choose from 'correlation', 'covariance', or 'euclidean'")
+            
+        if threshold_type not in {'fixed', 'adaptive'}:
+            raise ValueError(f"Invalid threshold_type '{threshold_type}'. Choose 'fixed' or 'adaptive'")
 
-    assert len(data_sample.shape) == 2, "Input must be 2D (T, C)"
+    def build_graph(self, data_sample: np.ndarray) -> Tuple[torch.LongTensor, torch.FloatTensor]:
+        """
+        Build graph edge indices and weights from EMG sample.
+        
+        Args:
+            data_sample: EMG time-series of shape (time_steps, channels)
+            
+        Returns:
+            edge_index: Tensor of shape [2, num_edges]
+            edge_weights: Tensor of shape [num_edges]
+        """
+        # Validate input
+        if not isinstance(data_sample, np.ndarray):
+            raise TypeError(f"Input must be numpy array, got {type(data_sample)}")
+            
+        if data_sample.ndim != 2:
+            raise ValueError(f"Input must be 2D (time_steps, channels), got shape {data_sample.shape}")
+            
+        T, C = data_sample.shape
+        if T < 2:
+            raise ValueError(f"Need at least 2 time steps, got {T}")
+        if C < 2:
+            raise ValueError(f"Need at least 2 channels, got {C}")
 
-    sensors = data_sample.shape[1]
+        # Compute similarity matrix
+        similarity_matrix = self._compute_similarity(data_sample)
+        
+        # Determine threshold
+        threshold = self._determine_threshold(similarity_matrix)
+        
+        # Build edges and weights
+        return self._create_edges(similarity_matrix, threshold, C)
 
-    # Compute correlation matrix
+    def _compute_similarity(self, data: np.ndarray) -> np.ndarray:
+        """Compute similarity matrix based on selected method"""
+        if self.method == 'correlation':
+            return np.corrcoef(data.T)
+        elif self.method == 'covariance':
+            return np.cov(data.T)
+        elif self.method == 'euclidean':
+            dist_matrix = squareform(pdist(data.T, 'euclidean'))
+            # Convert distance to similarity (inverse relationship)
+            max_dist = np.max(dist_matrix)
+            return 1 - (dist_matrix / max_dist) if max_dist > 0 else np.ones_like(dist_matrix)
 
-    corr = np.corrcoef(data_sample.T)
+    def _determine_threshold(self, matrix: np.ndarray) -> float:
+        """Calculate appropriate threshold based on type"""
+        if self.threshold_type == 'fixed':
+            return self.default_threshold
+        
+        # Adaptive threshold based on median absolute similarity
+        abs_matrix = np.abs(matrix)
+        np.fill_diagonal(abs_matrix, 0)  # Ignore self-connections
+        median_val = np.median(abs_matrix[abs_matrix > 0])
+        return median_val * self.adaptive_factor
 
+    def _create_edges(self, matrix: np.ndarray, threshold: float, num_channels: int) -> Tuple[torch.LongTensor, torch.FloatTensor]:
+        """Create edge connections with weights"""
+        edges = []
+        weights = []
+        
+        # Create edges where absolute similarity exceeds threshold
+        for i, j in itertools.combinations(range(num_channels), 2):
+            similarity = matrix[i, j]
+            if abs(similarity) > threshold:
+                edges.append([i, j])
+                weights.append(similarity)
+                
+        # Handle no-edge case
+        if not edges and self.fully_connected_fallback:
+            return self._create_fully_connected(num_channels)
+        
+        # Convert to tensors
+        edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
+        edge_weights = torch.tensor(weights, dtype=torch.float32)
+        
+        return edge_index, edge_weights
 
-    edge_index = []
+    def _create_fully_connected(self, num_channels: int) -> Tuple[torch.LongTensor, torch.FloatTensor]:
+        """Create fully connected graph with uniform weights"""
+        edges = []
+        for i in range(num_channels):
+            for j in range(num_channels):
+                if i != j:
+                    edges.append([i, j])
+        
+        edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
+        edge_weights = torch.ones(len(edges), dtype=torch.float32)
+        return edge_index, edge_weights
 
-
-    # Create edges where absolute correlation exceeds threshold
-
-
-    for i, j in itertools.product(range(sensors), repeat=2):
-
-
-        if i != j and abs(corr[i, j]) > threshold:
-
-
-            edge_index.append([i, j])
-
-
-    # Fallback: fully connected graph if correlation fails
-
-    if len(edge_index) == 0:Add commentMore actions
-
-
-        edge_index = [[i, j] for i in range(sensors) for j in range(sensors) if i != j]
-
-    edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-
-    return edge_index
+    def batch_build(self, batch_data: np.ndarray) -> Tuple[torch.LongTensor, torch.FloatTensor]:
+        """
+        Build graphs for a batch of EMG samples.
+        
+        Args:
+            batch_data: EMG time-series of shape (batch_size, time_steps, channels)
+            
+        Returns:
+            batch_edge_index: List of edge_index tensors
+            batch_edge_weights: List of edge_weight tensors
+        """
+        if batch_data.ndim != 3:
+            raise ValueError(f"Batch input must be 3D (batch, time, channels), got shape {batch_data.shape}")
+            
+        batch_edges = []
+        batch_weights = []
+        
+        for sample in batch_data:
+            edge_index, edge_weights = self.build_graph(sample)
+            batch_edges.append(edge_index)
+            batch_weights.append(edge_weights)
+            
+        return batch_edges, batch_weights

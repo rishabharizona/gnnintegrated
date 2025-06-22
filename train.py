@@ -5,6 +5,7 @@ import os
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.linear_model import LogisticRegression  # For h-divergence
 from alg.opt import *
 from alg import alg, modelopera
 from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ, disable_inplace_relu
@@ -12,7 +13,6 @@ from datautil.getdataloader_single import get_act_dataloader, get_curriculum_loa
 from torch.utils.data import DataLoader, ConcatDataset
 from network.act_network import ActNetwork
 from sklearn.metrics import davies_bouldin_score
-from sklearn.linear_model import LogisticRegression
 # Unified SHAP utilities import
 from shap_utils import (
     get_background_batch, safe_compute_shap_values, plot_summary,
@@ -38,13 +38,17 @@ class SubsetWithLabelSetter(torch.utils.data.Subset):
             return (data[0], data[1], self.domain_label)
         return data
 
-# GNN model import
+# ======================= GNN INTEGRATION START =======================
 try:
     from gnn.temporal_gcn import TemporalGCN
+    from gnn.graph_builder import GraphBuilder
     GNN_AVAILABLE = True
-except ImportError:
+    print("GNN modules successfully imported")
+except ImportError as e:
+    print(f"[WARNING] GNN modules not available: {str(e)}")
+    print("Falling back to CNN architecture")
     GNN_AVAILABLE = False
-    print("[WARNING] GNN module not available. Falling back to CNN.")
+# ======================= GNN INTEGRATION END =======================
 
 def automated_k_estimation(features, k_min=2, k_max=10):
     """Automatically determine optimal cluster count using silhouette score and Davies-Bouldin Index"""
@@ -82,7 +86,6 @@ def automated_k_estimation(features, k_min=2, k_max=10):
     print(f"[INFO] Optimal K determined as {best_k} (Combined Score: {best_score:.4f})")
     return best_k
 
-# H-Divergence calculation function
 def calculate_h_divergence(features_source, features_target):
     """
     Calculate h-divergence between source and target domain features
@@ -91,6 +94,7 @@ def calculate_h_divergence(features_source, features_target):
         features_target: Features from target domain (numpy array)
     Returns:
         h_divergence: Domain discrepancy measure
+        domain_acc: Domain classifier accuracy
     """
     # Create domain labels: 0 for source, 1 for target
     labels_source = np.zeros(features_source.shape[0])
@@ -111,7 +115,6 @@ def calculate_h_divergence(features_source, features_target):
     y_train, y_test = y[:split], y[split:]
     
     # Train a simple domain classifier
-    from sklearn.linear_model import LogisticRegression
     domain_classifier = LogisticRegression(max_iter=1000, random_state=42)
     domain_classifier.fit(X_train, y_train)
     
@@ -143,10 +146,18 @@ def main(args):
         # Use GNN if enabled, otherwise use standard CNN
         if args.use_gnn and GNN_AVAILABLE:
             print("Using GNN for feature extraction")
+            # Initialize graph builder for feature extraction
+            graph_builder = GraphBuilder(
+                method='correlation',
+                threshold_type='adaptive',
+                default_threshold=0.3,
+                adaptive_factor=1.5
+            )
             temp_model = TemporalGCN(
                 input_dim=8,  # EMG channels
                 hidden_dim=args.gnn_hidden_dim,
-                output_dim=args.gnn_output_dim
+                output_dim=args.gnn_output_dim,
+                graph_builder=graph_builder
             ).cuda()
         else:
             temp_model = ActNetwork(args.dataset).cuda()
@@ -215,42 +226,65 @@ def main(args):
     algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).cuda()
     
-    # GNN Pretraining if enabled
-    if args.use_gnn and GNN_AVAILABLE and hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:
-        print("\n==== GNN Pretraining ====")
-        # Extract the GNN model from the algorithm
-        gnn_model = algorithm.featurizer
-        gnn_optimizer = torch.optim.Adam(
-            gnn_model.parameters(),
-            lr=args.gnn_lr,
-            weight_decay=args.gnn_weight_decay
+    # ======================= GNN INITIALIZATION START =======================
+    if args.use_gnn and GNN_AVAILABLE:
+        print("\n===== Initializing GNN Feature Extractor =====")
+        # Initialize graph builder with research-optimized parameters
+        graph_builder = GraphBuilder(
+            method='correlation',
+            threshold_type='adaptive',
+            default_threshold=0.3,
+            adaptive_factor=1.5,
+            fully_connected_fallback=True
         )
         
-        for epoch in range(args.gnn_pretrain_epochs):
-            gnn_model.train()
-            total_loss = 0
-            
-            for batch in train_loader:
-                x = batch[0].cuda().float()
-                x = x.squeeze(2).permute(0, 2, 1)  # Convert to (batch, time, features)
-                
-                # Forward pass
-                features = gnn_model(x)
-                
-                # Simple reconstruction loss for pretraining
-                reconstructed = gnn_model.reconstruct(features)
-                loss = torch.nn.functional.mse_loss(reconstructed, x)
-                
-                # Optimization step
-                gnn_optimizer.zero_grad()
-                loss.backward()
-                gnn_optimizer.step()
-                
-                total_loss += loss.item()
-            
-            print(f'GNN Pretrain Epoch {epoch+1}/{args.gnn_pretrain_epochs}: Loss {total_loss/len(train_loader):.4f}')
+        # Initialize Temporal GCN model
+        gnn_model = TemporalGCN(
+            input_dim=8,  # EMG channels
+            hidden_dim=args.gnn_hidden_dim,
+            output_dim=args.gnn_output_dim,
+            graph_builder=graph_builder
+        ).cuda()
         
-        print("GNN pretraining complete. Starting main training.")
+        # Replace CNN feature extractor with GNN
+        algorithm.featurizer = gnn_model
+        print(f"GNN initialized: hidden_dim={args.gnn_hidden_dim}, output_dim={args.gnn_output_dim}")
+        
+        # GNN Pretraining if enabled
+        if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:
+            print(f"\n==== GNN Pretraining ({args.gnn_pretrain_epochs} epochs) ====")
+            gnn_optimizer = torch.optim.Adam(
+                gnn_model.parameters(),
+                lr=args.gnn_lr,
+                weight_decay=args.gnn_weight_decay
+            )
+            
+            for epoch in range(args.gnn_pretrain_epochs):
+                gnn_model.train()
+                total_loss = 0
+                
+                for batch in train_loader:
+                    x = batch[0].cuda().float()
+                    # Convert to (batch, time, features) format
+                    x = x.squeeze(2).permute(0, 2, 1)
+                    
+                    # Forward pass
+                    features = gnn_model(x)
+                    
+                    # Reconstruction loss
+                    reconstructed = gnn_model.reconstruct(features)
+                    loss = torch.nn.functional.mse_loss(reconstructed, x)
+                    
+                    # Optimization
+                    gnn_optimizer.zero_grad()
+                    loss.backward()
+                    gnn_optimizer.step()
+                    
+                    total_loss += loss.item()
+                
+                print(f'GNN Pretrain Epoch {epoch+1}/{args.gnn_pretrain_epochs}: Loss {total_loss/len(train_loader):.4f}')
+            print("GNN pretraining complete")
+    # ======================= GNN INITIALIZATION END =======================
 
     algorithm.train()
 
@@ -313,10 +347,12 @@ def main(args):
         print_row(['epoch', 'class_loss'], colwidth=15)
         for step in range(current_epochs):
             for data in train_loader:
-                # Handle GNN input format
+                # ======================= GNN INPUT TRANSFORMATION =======================
                 if args.use_gnn and GNN_AVAILABLE:
                     data = list(data)
-                    data[0] = data[0].squeeze(2).permute(0, 2, 1)  # (batch, time, features)
+                    # Convert from (batch, channels, 1, time) to (batch, time, channels)
+                    data[0] = data[0].squeeze(2).permute(0, 2, 1)
+                # ========================================================================
                 
                 loss_result_dict = algorithm.update_a(data, opta)
             print_row([step, loss_result_dict['class']], colwidth=15)
@@ -327,10 +363,11 @@ def main(args):
         print_row(['epoch', 'total_loss', 'dis_loss', 'ent_loss'], colwidth=15)
         for step in range(current_epochs):
             for data in train_loader:
-                # Handle GNN input format
+                # ======================= GNN INPUT TRANSFORMATION =======================
                 if args.use_gnn and GNN_AVAILABLE:
                     data = list(data)
-                    data[0] = data[0].squeeze(2).permute(0, 2, 1)  # (batch, time, features)
+                    data[0] = data[0].squeeze(2).permute(0, 2, 1)
+                # ========================================================================
                 
                 loss_result_dict = algorithm.update_d(data, optd)
             print_row([step, loss_result_dict['total'], loss_result_dict['dis'], loss_result_dict['ent']], colwidth=15)
@@ -352,10 +389,11 @@ def main(args):
         for step in range(current_epochs):
             step_start_time = time.time()
             for data in train_loader:
-                # Handle GNN input format
+                # ======================= GNN INPUT TRANSFORMATION =======================
                 if args.use_gnn and GNN_AVAILABLE:
                     data = list(data)
-                    data[0] = data[0].squeeze(2).permute(0, 2, 1)  # (batch, time, features)
+                    data[0] = data[0].squeeze(2).permute(0, 2, 1)
+                # ========================================================================
                 
                 step_vals = algorithm.update(data, opt)
     
@@ -405,8 +443,10 @@ def main(args):
             with torch.no_grad():
                 for data in entire_source_loader:
                     x = data[0].cuda().float()
+                    # ======================= GNN INPUT TRANSFORMATION =======================
                     if args.use_gnn and GNN_AVAILABLE:
                         x = x.squeeze(2).permute(0, 2, 1)
+                    # ========================================================================
                     features = algorithm.featurizer(x).detach().cpu().numpy()
                     source_features.append(features)
             source_features = np.concatenate(source_features, axis=0)
@@ -416,8 +456,10 @@ def main(args):
             with torch.no_grad():
                 for data in target_loader:
                     x = data[0].cuda().float()
+                    # ======================= GNN INPUT TRANSFORMATION =======================
                     if args.use_gnn and GNN_AVAILABLE:
                         x = x.squeeze(2).permute(0, 2, 1)
+                    # ========================================================================
                     features = algorithm.featurizer(x).detach().cpu().numpy()
                     target_features.append(features)
             target_features = np.concatenate(target_features, axis=0)
@@ -598,8 +640,8 @@ if __name__ == '__main__':
             # GNN hyperparameters
             args.gnn_hidden_dim = getattr(args, 'gnn_hidden_dim', 32)
             args.gnn_output_dim = getattr(args, 'gnn_output_dim', 128)
-            args.gnn_lr = getattr(args, 'gnn_lr', 1e-3)
-            args.gnn_weight_decay = getattr(args, 'gnn_weight_decay', 1e-4)
+            args.gnn_lr = getattr(args, 'gnn_lr', 0.001)
+            args.gnn_weight_decay = getattr(args, 'gnn_weight_decay', 0.0001)
             args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)
     
     main(args)

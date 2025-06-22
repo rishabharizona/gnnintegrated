@@ -12,12 +12,16 @@ class feat_bottleneck(nn.Module):
         """
         Initialize bottleneck layer
         Args:
-            feature_dim: Input feature dimension (int)
+            feature_dim: Input feature dimension (int or tuple for GNN)
             bottleneck_dim: Output feature dimension (int)
             type: Processing type ("ori" or "bn")
         """
         super(feat_bottleneck, self).__init__()
         self.type = type
+        
+        # Handle GNN input dimension (tuple -> int)
+        if isinstance(feature_dim, tuple):
+            feature_dim = feature_dim[0]
         
         # Ensure dimensions are integers
         feature_dim = int(feature_dim)
@@ -36,10 +40,15 @@ class feat_bottleneck(nn.Module):
 
     def forward(self, x):
         """Forward pass through bottleneck"""
-        x = self.bottleneck(x)
-        if self.type == "bn":
-            x = self.bn(x)
-        return x
+        # For GNN models, x is already flattened
+        if not isinstance(x, tuple):
+            x = self.bottleneck(x)
+            if self.type == "bn":
+                x = self.bn(x)
+            return x
+        
+        # Handle tuple input (preserve for compatibility)
+        return self.bottleneck(x[0])
 
 class feat_classifier(nn.Module):
     """

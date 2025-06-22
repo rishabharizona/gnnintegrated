@@ -1,11 +1,20 @@
 import numpy as np
-from torch.utils.data import DataLoader
+import torch
+import random
+from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader, Subset
 import datautil.actdata.util as actutil
 from datautil.util import combindataset, subdataset
 import datautil.actdata.cross_people as cross_people
 
 # Task mapping for activity recognition
 task_act = {'cross_people': cross_people}
+
+class SubsetWithLabelSetter(Subset):
+    """Subset with label setting capability"""
+    def set_labels_by_index(self, labels, indices, key):
+        """Pass indices to underlying dataset for label setting"""
+        self.dataset.set_labels_by_index(labels, indices, key)
 
 def get_dataloader(args, tr, val, tar):
     """
@@ -134,3 +143,137 @@ def get_shap_batch(loader, size=100):
     
     # Return exactly size samples
     return torch.cat(X_val)[:size]
+
+def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
+    """
+    Create a curriculum data loader based on domain difficulty
+    Args:
+        args: Configuration arguments
+        algorithm: Model for domain evaluation
+        train_dataset: Full training dataset
+        val_dataset: Validation dataset
+        stage: Current training stage/phase
+    Returns:
+        Curriculum DataLoader with selected samples
+    """
+    # Group validation indices by domain
+    domain_indices = {}
+    for idx in range(len(val_dataset)):
+        domain = val_dataset[idx][2]  # Assuming domain is at index 2
+        domain_indices.setdefault(domain, []).append(idx)
+
+    domain_metrics = []
+
+    # Compute loss and accuracy for each domain
+    algorithm.eval()
+    with torch.no_grad():
+        for domain, indices in domain_indices.items():
+            subset = Subset(val_dataset, indices)
+            loader = DataLoader(subset, batch_size=args.batch_size, 
+                               shuffle=False, num_workers=args.N_WORKERS)
+
+            total_loss = 0.0
+            correct = 0
+            total = 0
+            num_batches = 0
+
+            for batch in loader:
+                inputs = batch[0].cuda().float()
+                labels = batch[1].cuda().long()
+                
+                output = algorithm.predict(inputs)
+                loss = torch.nn.functional.cross_entropy(output, labels)
+                total_loss += loss.item()
+                
+                _, predicted = output.max(1)
+                correct += predicted.eq(labels).sum().item()
+                total += labels.size(0)
+                num_batches += 1
+
+            avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
+            accuracy = correct / total if total > 0 else 0
+            domain_metrics.append((domain, avg_loss, accuracy))
+
+    # Calculate domain difficulty scores
+    losses = [m[1] for m in domain_metrics]
+    min_loss, max_loss = min(losses), max(losses)
+    accs = [m[2] for m in domain_metrics]
+    min_acc, max_acc = min(accs), max(accs)
+    
+    domain_scores = []
+    for domain, loss, acc in domain_metrics:
+        # Normalize metrics
+        norm_loss = (loss - min_loss) / (max_loss - min_loss + 1e-10)
+        norm_acc = (acc - min_acc) / (max_acc - min_acc + 1e-10)
+        
+        # Difficulty score: higher = harder
+        difficulty = 0.7 * norm_loss + 0.3 * (1 - norm_acc)
+        domain_scores.append((domain, difficulty))
+
+    # Sort by easiest domains first
+    domain_scores.sort(key=lambda x: x[1])
+    
+    print("\n--- Domain Difficulty Ranking (easiest to hardest) ---")
+    for rank, (domain, difficulty) in enumerate(domain_scores, 1):
+        print(f"{rank}. Domain {domain}: Difficulty = {difficulty:.4f}")
+
+    # Curriculum progression
+    num_domains = len(domain_scores)
+    progress = min(1.0, (stage + 1) / args.CL_PHASE_EPOCHS)
+    progress = np.sqrt(progress)  # Slower initial progression
+    
+    num_selected = max(2, min(num_domains, int(np.ceil(progress * num_domains * 0.8))))
+    selected_domains = [domain for domain, _ in domain_scores[:num_selected]]
+    
+    # Add random harder domain for diversity
+    if len(domain_scores) > num_selected:
+        random_hard_domain = random.choice(domain_scores[num_selected:])[0]
+        selected_domains.append(random_hard_domain)
+        print(f"Adding random harder domain: {random_hard_domain}")
+
+    # Gather training indices from selected domains
+    train_domain_indices = {}
+    for idx in range(len(train_dataset)):
+        domain = train_dataset[idx][2]  # Assuming domain is at index 2
+        train_domain_indices.setdefault(domain, []).append(idx)
+
+    selected_indices = []
+    for domain in selected_domains:
+        if domain in train_domain_indices:
+            domain_indices = train_domain_indices[domain]
+            n_samples = min(len(domain_indices), max(50, int(len(domain_indices) * 0.8)))
+            selected_indices.extend(random.sample(domain_indices, n_samples))
+
+    print(f"Selected {len(selected_indices)} samples from {len(selected_domains)} domains")
+    
+    curriculum_subset = SubsetWithLabelSetter(train_dataset, selected_indices)
+    curriculum_loader = DataLoader(curriculum_subset, batch_size=args.batch_size,
+                                   shuffle=True, num_workers=args.N_WORKERS,
+                                   drop_last=True)
+
+    return curriculum_loader
+
+def split_dataset_by_domain(dataset, val_ratio=0.2, seed=42):
+    """
+    Split dataset into train/validation by domain
+    Args:
+        dataset: Dataset to split
+        val_ratio: Validation set ratio
+        seed: Random seed
+    Returns:
+        Tuple of train and validation subsets
+    """
+    domain_indices = {}
+    for idx in range(len(dataset)):
+        domain = dataset[idx][2]  # Assuming domain is at index 2
+        domain_indices.setdefault(domain, []).append(idx)
+
+    train_indices, val_indices = [], []
+    for domain, indices in domain_indices.items():
+        train_idx, val_idx = train_test_split(
+            indices, test_size=val_ratio, random_state=seed, shuffle=True
+        )
+        train_indices.extend(train_idx)
+        val_indices.extend(val_idx)
+
+    return Subset(dataset, train_indices), Subset(dataset, val_indices)

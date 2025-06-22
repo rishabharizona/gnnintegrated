@@ -187,8 +187,6 @@ def get_args():
                         help='Enable automated K estimation')
     parser.add_argument('--curriculum', action='store_true', 
                         help='Enable curriculum learning')
-    parser.add_argument('--curriculum_type', type=str, default='domain', choices=['domain', 'sample'],
-                        help='Type of curriculum: "domain" or "sample"')
     parser.add_argument('--CL_PHASE_EPOCHS', type=int, default=5, 
                         help='Epochs to apply curriculum learning')
     parser.add_argument('--enable_shap', action='store_true', 

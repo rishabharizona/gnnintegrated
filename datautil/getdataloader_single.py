@@ -18,17 +18,6 @@ class SubsetWithLabelSetter(Subset):
         """Pass indices to underlying dataset for label setting"""
         self.dataset.set_labels_by_index(labels, indices, key)
 
-# ==================== GNN SUPPORT ADDITIONS ====================
-def gnn_collate_fn(batch):
-    """Collate function for GNN data that handles 6-tuple returns"""
-    # Unpack only the first 3 elements: x (graph), labels, domains
-    graphs = [item[0] for item in batch]
-    labels = [item[1] for item in batch]
-    domains = [item[2] for item in batch]
-    
-    # Create batch of graphs
-    batch_graph = Batch.from_data_list(graphs)
-    return batch_graph, torch.tensor(labels), torch.tensor(domains)
 
 def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
     """Create GNN-specific data loader"""

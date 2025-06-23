@@ -1,7 +1,19 @@
+import os
+import sys
+import subprocess
+try:
+    import numpy as np
+    if np.__version__.startswith('2'):
+        print("Downgrading numpy to <2.0 for compatibility...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy<2", "--quiet"])
+        # Restart to apply changes
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy<2", "--quiet"])
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.0", "torchvision==0.16.0", "torchaudio==2.1.0", "--index-url", "https://download.pytorch.org/whl/cu117", "--quiet"])
 import time
 import torch
-import numpy as np
-import os
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, confusion_matrix, ConfusionMatrixDisplay

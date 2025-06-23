@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, GATConv
 from gnn.graph_builder import GraphBuilder
+import numpy as np
 
 class TemporalGCN(nn.Module):
     """
@@ -48,7 +49,15 @@ class TemporalGCN(nn.Module):
         return edge_index.repeat(1, batch_size)
     
     def forward(self, x):
-        # x shape: [batch, timesteps, features]
+        # Handle different input dimensions
+        if x.dim() == 2:
+            # Add timestep dimension: [batch, features] -> [batch, 1, features]
+            x = x.unsqueeze(1)
+        elif x.dim() == 4:
+            # Flatten extra dimension: [batch, channels, timesteps, features] -> [batch, timesteps, features]
+            x = x.view(x.size(0), x.size(2), -1)
+        
+        # Now x should be 3D: [batch, timesteps, features]
         batch_size, timesteps, features = x.shape
         
         # Temporal convolution: [batch, features, timesteps]

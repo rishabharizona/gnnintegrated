@@ -13,13 +13,33 @@ from datautil.graph_utils import convert_to_graph
 task_act = {'cross_people': cross_people}
 
 class SafeSubset(Subset):
-    """Simplified subset without index return"""
+    """Safe subset that converts all data to PyTorch tensors"""
     def __init__(self, dataset, indices):
         super().__init__(dataset, indices)
         self.indices = indices
         
     def __getitem__(self, idx):
-        return self.dataset[self.indices[idx]]
+        data = self.dataset[self.indices[idx]]
+        return self.convert_to_tensor(data)
+    
+    def convert_to_tensor(self, data):
+        """Recursively convert numpy types to PyTorch tensors"""
+        if isinstance(data, tuple):
+            return tuple(self.convert_to_tensor(x) for x in data)
+        elif isinstance(data, list):
+            return [self.convert_to_tensor(x) for x in data]
+        elif isinstance(data, np.ndarray):
+            return torch.from_numpy(data)
+        elif isinstance(data, np.generic):
+            return torch.tensor(data)
+        elif isinstance(data, torch.Tensor):
+            return data
+        else:
+            # Try to convert any other numeric types
+            try:
+                return torch.tensor(data)
+            except:
+                return data
 
 def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
     """Create GNN-specific data loader"""
@@ -302,7 +322,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     print(f"Selected {len(selected_indices)} samples from {len(selected_domains)} domains")
     
     # Create curriculum subset without label setter
-    curriculum_subset = Subset(train_dataset, selected_indices)
+    curriculum_subset = SafeSubset(train_dataset, selected_indices)
     
     # ===== GNN-SPECIFIC CURRICULUM LOADER =====
     if hasattr(args, 'model_type') and args.model_type == 'gnn':

@@ -11,7 +11,8 @@ from alg.opt import *
 from alg import alg, modelopera
 from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ, disable_inplace_relu
 from datautil.getdataloader_single import get_act_dataloader, get_curriculum_loader
-from torch.utils.data import DataLoader, ConcatDataset
+from torch_geometric.loader import DataLoader
+from torch.utils.data import ConcatDataset
 from network.act_network import ActNetwork
 from sklearn.metrics import davies_bouldin_score
 # Unified SHAP utilities import

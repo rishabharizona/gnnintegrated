@@ -29,20 +29,6 @@ from shap_utils import (
     plot_emg_shap_4d, plot_4d_shap_surface, evaluate_advanced_shap_metrics
 )
 
-# Add this class definition at the top of your file
-class SubsetWithLabelSetter(torch.utils.data.Subset):
-    """Subset that allows setting domain labels"""
-    def __init__(self, dataset, indices, domain_label=None):
-        super().__init__(dataset, indices)
-        self.domain_label = domain_label
-
-    def __getitem__(self, idx):
-        data = self.dataset[self.indices[idx]]
-        if self.domain_label is not None:
-            # Return (x, y, new_domain_label) instead of original domain
-            return (data[0], data[1], self.domain_label)
-        return data
-
 # ======================= GNN INTEGRATION START =======================
 try:
     from gnn.temporal_gcn import TemporalGCN
@@ -74,7 +60,6 @@ def automated_k_estimation(features, k_min=2, k_max=10):
             dbi = davies_bouldin_score(features, labels)
         
         # Combine scores: higher silhouette is better, lower DBI is better
-        # Normalize and combine (silhouette in [-1,1], DBI in [0,inf])
         norm_silhouette = (silhouette + 1) / 2  # Map to [0,1]
         norm_dbi = 1 / (1 + dbi)  # Map to (0,1] where higher is better
         
@@ -282,9 +267,10 @@ def main(args):
                     reconstructed = gnn_model.reconstruct(features)
                     loss = torch.nn.functional.mse_loss(reconstructed, x)
                     
-                    # Optimization
+                    # Optimization with gradient clipping
                     gnn_optimizer.zero_grad()
                     loss.backward()
+                    torch.nn.utils.clip_grad_norm_(gnn_model.parameters(), 1.0)
                     gnn_optimizer.step()
                     
                     total_loss += loss.item()
@@ -340,7 +326,7 @@ def main(args):
                 stage=round_idx
             )
             
-            # Update the no-shuffle loader as well (optional)
+            # Update the no-shuffle loader as well
             train_loader_noshuffle = DataLoader(
                 train_loader.dataset,
                 batch_size=args.batch_size,
@@ -357,12 +343,21 @@ def main(args):
             for data in train_loader:
                 # ======================= GNN INPUT TRANSFORMATION =======================
                 if args.use_gnn and GNN_AVAILABLE:
-                    data = list(data)
-                    # Convert from (batch, channels, 1, time) to (batch, time, channels)
-                    data[0] = data[0].squeeze(2).permute(0, 2, 1)
+                    # Validate input dimensions
+                    if data[0].dim() == 4 and data[0].shape[2] == 1:
+                        data = list(data)
+                        data[0] = data[0].squeeze(2).permute(0, 2, 1)
+                    elif data[0].dim() != 3:
+                        raise ValueError(f"GNN requires 3D input (B,T,C), got {data[0].shape}")
                 # ========================================================================
                 
                 loss_result_dict = algorithm.update_a(data, opta)
+                
+                # Skip step if NaN detected
+                if torch.isnan(loss_result_dict['class']):
+                    print("Skipping step due to NaN loss")
+                    continue
+                    
                 print_row([step, loss_result_dict['class']], colwidth=15)
                 logs['class_loss'].append(loss_result_dict['class'])
         
@@ -373,11 +368,20 @@ def main(args):
             for data in train_loader:
                 # ======================= GNN INPUT TRANSFORMATION =======================
                 if args.use_gnn and GNN_AVAILABLE:
-                    data = list(data)
-                    data[0] = data[0].squeeze(2).permute(0, 2, 1)
+                    if data[0].dim() == 4 and data[0].shape[2] == 1:
+                        data = list(data)
+                        data[0] = data[0].squeeze(2).permute(0, 2, 1)
+                    elif data[0].dim() != 3:
+                        raise ValueError(f"GNN requires 3D input (B,T,C), got {data[0].shape}")
                 # ========================================================================
                 
                 loss_result_dict = algorithm.update_d(data, optd)
+                
+                # Skip step if NaN detected
+                if any(torch.isnan(v) for v in loss_result_dict.values()):
+                    print("Skipping step due to NaN loss")
+                    continue
+                
                 print_row([step, loss_result_dict['total'], loss_result_dict['dis'], loss_result_dict['ent']], colwidth=15)
                 
                 logs['dis_loss'].append(loss_result_dict['dis'])
@@ -400,21 +404,29 @@ def main(args):
             for data in train_loader:
                 # ======================= GNN INPUT TRANSFORMATION =======================
                 if args.use_gnn and GNN_AVAILABLE:
-                    data = list(data)
-                    data[0] = data[0].squeeze(2).permute(0, 2, 1)
+                    if data[0].dim() == 4 and data[0].shape[2] == 1:
+                        data = list(data)
+                        data[0] = data[0].squeeze(2).permute(0, 2, 1)
+                    elif data[0].dim() != 3:
+                        raise ValueError(f"GNN requires 3D input (B,T,C), got {data[0].shape}")
                 # ========================================================================
                 
                 step_vals = algorithm.update(data, opt)
+                
+                # Apply gradient clipping to prevent explosions
+                torch.nn.utils.clip_grad_norm_(algorithm.parameters(), 1.0)
             
-            # Calculate accuracies
             # Create transform wrapper for GNN if needed
             transform_fn = None
             if args.use_gnn and GNN_AVAILABLE:
                 def gnn_transform(x):
-                    return x.squeeze(2).permute(0, 2, 1)
+                    if x.dim() == 4 and x.shape[2] == 1:
+                        return x.squeeze(2).permute(0, 2, 1)
+                    return x
             else:
                 gnn_transform = None
                 
+            # Calculate accuracies
             results = {
                 'epoch': global_step,
                 'train_acc': modelopera.accuracy(algorithm, train_loader_noshuffle, None, transform_fn=gnn_transform),
@@ -455,7 +467,8 @@ def main(args):
                     
                     # ======================= GNN INPUT TRANSFORMATION =======================
                     if args.use_gnn and GNN_AVAILABLE:
-                        x = x.squeeze(2).permute(0, 2, 1)
+                        if x.dim() == 4 and x.shape[2] == 1:
+                            x = x.squeeze(2).permute(0, 2, 1)
                     # ========================================================================
                     
                     features = algorithm.featurizer(x).detach().cpu().numpy()
@@ -470,7 +483,8 @@ def main(args):
                     
                     # ======================= GNN INPUT TRANSFORMATION =======================
                     if args.use_gnn and GNN_AVAILABLE:
-                        x = x.squeeze(2).permute(0, 2, 1)
+                        if x.dim() == 4 and x.shape[2] == 1:
+                            x = x.squeeze(2).permute(0, 2, 1)
                     # ========================================================================
                     
                     features = algorithm.featurizer(x).detach().cpu().numpy()
@@ -502,7 +516,9 @@ def main(args):
             transform_fn = None
             if args.use_gnn and GNN_AVAILABLE:
                 def gnn_transform(x):
-                    return x.squeeze(2).permute(0, 2, 1)
+                    if x.dim() == 4 and x.shape[2] == 1:
+                        return x.squeeze(2).permute(0, 2, 1)
+                    return x
                 
                 # Apply transformation for GNN
                 background = gnn_transform(background)
@@ -510,7 +526,7 @@ def main(args):
             else:
                 gnn_transform = None
                 
-            # Compute SHAP values safely (without transform_fn argument)
+            # Compute SHAP values safely
             shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
             
             # Convert to numpy safely before visualization
@@ -524,7 +540,7 @@ def main(args):
             plot_shap_heatmap(shap_vals, 
                               output_path=os.path.join(args.output, "shap_heatmap.png"))
             
-            # Evaluate SHAP impact (without transform_fn argument)
+            # Evaluate SHAP impact
             base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
             
             # Save SHAP values
@@ -572,7 +588,8 @@ def main(args):
                 with torch.no_grad():
                     # Apply transform for GNN if needed
                     if args.use_gnn and GNN_AVAILABLE:
-                        x = x.squeeze(2).permute(0, 2, 1)
+                        if x.dim() == 4 and x.shape[2] == 1:
+                            x = x.squeeze(2).permute(0, 2, 1)
                     preds = algorithm.predict(x).cpu()
                     true_labels.extend(y.cpu().numpy())
                     pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())

@@ -41,37 +41,43 @@ class TemporalGCN(nn.Module):
             x = x.squeeze(2)
         
         # Now x should be 3D: [batch, channels, timesteps]
+        # Convert to [batch, channels, timesteps] for Conv1d
+        if x.size(1) != self.in_features:
+            # Input is [batch, timesteps, channels] -> permute to [batch, channels, timesteps]
+            x = x.permute(0, 2, 1)
+        
         batch_size, channels, timesteps = x.shape
         
         # Temporal convolution: [batch, features, timesteps]
         x = self.temporal_conv(x)  # Output: [batch, 32, timesteps//4]
-        _, _, reduced_timesteps = x.shape
+        _, features, reduced_timesteps = x.shape
         
-        # Prepare for GCN: [batch, features, time] -> [batch*time, features]
+        # Prepare for GCN: [batch, features, time] -> [batch, time, features]
         x = x.permute(0, 2, 1)  # [batch, reduced_timesteps, 32]
         x = x.reshape(batch_size * reduced_timesteps, -1)
         
         # Build graph directly in forward pass
         # Get first sample's features for graph building
         sample = x[:reduced_timesteps].detach().cpu().numpy()
-        edge_index_single = self.graph_builder.build_graph(sample)
+        edge_index = self.graph_builder.build_graph(sample)
         
         # Handle empty graph case
-        if edge_index_single.numel() == 0:
+        if edge_index.numel() == 0:
             # Use fully connected graph as fallback
-            edge_index_single = torch.tensor(
-                [[i, j] for i in range(reduced_timesteps) for j in range(reduced_timesteps) if i != j],
+            num_nodes = reduced_timesteps
+            edge_index = torch.tensor(
+                [[i, j] for i in range(num_nodes) for j in range(num_nodes) if i != j],
                 dtype=torch.long
             ).t().contiguous()
         
         # Move to device and clone to avoid warnings
-        edge_index_single = edge_index_single.to(x.device).clone().detach()
+        edge_index = edge_index.to(x.device).clone().detach()
         
         # Batch the graph with node offsetting
         edge_indices = []
         for i in range(batch_size):
             offset = i * reduced_timesteps
-            edge_index_offset = edge_index_single + offset
+            edge_index_offset = edge_index + offset
             edge_indices.append(edge_index_offset)
         edge_index = torch.cat(edge_indices, dim=1)
         

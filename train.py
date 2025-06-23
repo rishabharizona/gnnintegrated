@@ -1,17 +1,38 @@
 import os
 import sys
 import subprocess
+
+# Check and fix environment at the very top
 try:
-    import numpy as np
-    if np.__version__.startswith('2'):
-        print("Downgrading numpy to <2.0 for compatibility...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy<2", "--quiet"])
-        # Restart to apply changes
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy<2", "--quiet"])
+    # Downgrade numpy first
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy==1.26.4", "--quiet"])
+    
+    # Install compatible PyTorch version
+    torch_install_cmd = [
+        sys.executable, "-m", "pip", "install",
+        "torch==2.0.1", "torchvision==0.15.2", "torchaudio==2.0.2",
+        "--index-url", "https://download.pytorch.org/whl/cu117"
+    ]
+    subprocess.check_call(torch_install_cmd)
+    
+    # Reinstall torch geometric with compatible binaries
+    pyg_packages = [
+        "torch-scatter", "torch-sparse", "torch-cluster", "torch-spline-conv", "torch-geometric"
+    ]
+    for package in pyg_packages:
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", package,
+            "-f", "https://data.pyg.org/whl/torch-2.0.1+cu117.html"
+        ])
+    
+    # Restart to apply changes
     os.execv(sys.executable, [sys.executable] + sys.argv)
-subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.0", "torchvision==0.16.0", "torchaudio==2.1.0", "--index-url", "https://download.pytorch.org/whl/cu117", "--quiet"])
+    
+except subprocess.CalledProcessError:
+    print("Environment fix failed. Trying fallback method...")
+    # Fallback to CPU-only if GPU installation fails
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.0.1+cpu", "--index-url", "https://download.pytorch.org/whl/cpu"])
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 import time
 import torch
 import matplotlib.pyplot as plt

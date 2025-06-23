@@ -106,11 +106,19 @@ class subdataset(mydataset):
     """Subset of a dataset defined by indices"""
     def __init__(self, args, dataset, indices):
         super(subdataset, self).__init__(args)
-        # Convert numpy indices to PyTorch tensor
-        if isinstance(indices, np.ndarray):
-            indices = torch.from_numpy(indices).long()
         
-        # Convert all data to tensors before indexing
+        # Handle different index types safely
+        if isinstance(indices, list):
+            indices = torch.tensor(indices, dtype=torch.long)
+        elif isinstance(indices, np.ndarray):
+            # Convert via list to avoid numpy C API issues
+            indices = torch.tensor(indices.tolist(), dtype=torch.long)
+        elif not isinstance(indices, torch.Tensor):
+            indices = torch.tensor(indices, dtype=torch.long)
+        else:
+            indices = indices.to(torch.long)
+        
+        # Convert data to tensors safely
         self.x = torch.as_tensor(dataset.x)[indices]
         self.labels = torch.as_tensor(dataset.labels)[indices] if dataset.labels is not None else None
         self.dlabels = torch.as_tensor(dataset.dlabels)[indices] if dataset.dlabels is not None else None

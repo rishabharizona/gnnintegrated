@@ -33,7 +33,7 @@ class TemporalGCN(nn.Module):
         self.fc = nn.Linear(hidden_dim, output_dim)
         
         # Reconstruction layer for pretraining
-        self.recon = nn.Linear(output_dim, input_dim)  # Added for proper reconstruction
+        self.recon = nn.Linear(output_dim, input_dim)  # For mean feature reconstruction
 
     def forward(self, x):
         # Handle different input dimensions

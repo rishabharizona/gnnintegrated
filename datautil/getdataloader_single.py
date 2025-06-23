@@ -299,8 +299,8 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         if domain in train_domain_indices:
             domain_indices = train_domain_indices[domain]
             # Proportional sampling based on domain size
-            sample_ratio = 0.5 + 0.5 * (1 - len(domain_indices) / max_domain_size
-            n_samples = min(len(domain_indices), max(50, int(len(domain_indices) * sample_ratio))
+            sample_ratio = 0.5 + 0.5 * (1 - len(domain_indices) / max_domain_size)
+            n_samples = min(len(domain_indices), max(50, int(len(domain_indices) * sample_ratio)))
             selected_indices.extend(random.sample(domain_indices, n_samples))
 
     print(f"Selected {len(selected_indices)} samples from {len(selected_domains)} domains")

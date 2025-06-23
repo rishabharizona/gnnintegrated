@@ -64,7 +64,6 @@ class Diversify(Algorithm):
         super(Diversify, self).__init__(args)
         # Feature extractor
         self.featurizer = get_fea(args)
-        
         # Domain characterization components
         self.dbottleneck = common_network.feat_bottleneck(
             self.featurizer.in_features, args.bottleneck, args.layer)
@@ -72,29 +71,25 @@ class Diversify(Algorithm):
             args.bottleneck, args.dis_hidden, args.num_classes)
         self.dclassifier = common_network.feat_classifier(
             int(args.latent_domain_num),
-            args.bottleneck, 
+            args.bottleneck,
             args.classifier
         )
-        
         # Main classification components
         self.bottleneck = common_network.feat_bottleneck(
             self.featurizer.in_features, args.bottleneck, args.layer)
         self.classifier = common_network.feat_classifier(
             args.num_classes, args.bottleneck, args.classifier)
-        
         # Auxiliary classification components
         self.abottleneck = common_network.feat_bottleneck(
             self.featurizer.in_features, args.bottleneck, args.layer)
         self.aclassifier = common_network.feat_classifier(
             int(args.num_classes * args.latent_domain_num),
-            args.bottleneck, 
+            args.bottleneck,
             args.classifier
         )
-        
         # Domain discrimination components
         self.discriminator = Adver_network.Discriminator(
             args.bottleneck, args.dis_hidden, args.latent_domain_num)
-        
         self.args = args
         self.criterion = nn.CrossEntropyLoss()
         # Add flag for explainability mode
@@ -103,8 +98,9 @@ class Diversify(Algorithm):
     def update_d(self, minibatch, opt):
         """Update domain characterization components"""
         all_x1 = minibatch[0].cuda().float()
-        all_d1 = minibatch[1].cuda().long()
-        all_c1 = minibatch[4].cuda().long()
+        # FIXED INDEXING: [1] is class label, [2] is domain label
+        all_d1 = minibatch[2].cuda().long()  # Domain labels
+        all_c1 = minibatch[1].cuda().long()  # Class labels
         
         # Forward pass
         z1 = self.dbottleneck(self.featurizer(all_x1))
@@ -124,7 +120,6 @@ class Diversify(Algorithm):
         opt.zero_grad()
         loss.backward()
         opt.step()
-        
         return {'total': loss.item(), 'dis': disc_loss.item(), 'ent': ent_loss.item()}
 
     def set_dlabel(self, loader):

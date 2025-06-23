@@ -24,7 +24,6 @@ class SubsetWithLabelSetter(Subset):
             return (data[0], data[1], self.domain_label)
         return data
         
-    # ADD THIS METHOD TO FIX THE ERROR
     def set_labels_by_index(self, labels, indices, key):
         """Pass indices to underlying dataset for label setting"""
         # Convert subset indices to original dataset indices

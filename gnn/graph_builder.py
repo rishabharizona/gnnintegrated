@@ -75,18 +75,34 @@ class GraphBuilder:
         return self._create_edges(similarity_matrix, threshold, C)
 
     def _compute_similarity(self, data: np.ndarray) -> np.ndarray:
-        """Compute similarity matrix based on selected method"""
-        if self.method == 'correlation':
-            # Add small epsilon to avoid division by zero
-            data = data + 1e-8
-            return np.corrcoef(data.T)
-        elif self.method == 'covariance':
-            return np.cov(data.T)
-        elif self.method == 'euclidean':
-            dist_matrix = squareform(pdist(data.T, 'euclidean'))
-            # Convert distance to similarity (inverse relationship)
-            max_dist = np.max(dist_matrix)
-            return 1 - (dist_matrix / max_dist) if max_dist > 0 else np.ones_like(dist_matrix)
+    """Compute similarity matrix with enhanced numerical stability"""
+    if self.method == 'correlation':
+        # Handle constant channels
+        stds = np.std(data, axis=0)
+        constant_mask = stds < 1e-8
+        if np.any(constant_mask):
+            # Add small noise to constant channels
+            noise = np.random.normal(0, 1e-8, data.shape)
+            data = data + noise * constant_mask
+        
+        # Compute correlation with NaN protection
+        corr = np.corrcoef(data.T)
+        np.nan_to_num(corr, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
+        return corr
+        
+    elif self.method == 'covariance':
+        cov = np.cov(data.T)
+        np.nan_to_num(cov, copy=False, nan=0.0)
+        return cov
+        
+    elif self.method == 'euclidean':
+        dist_matrix = squareform(pdist(data.T, 'euclidean'))
+        max_dist = np.max(dist_matrix)
+        if max_dist < 1e-8:  # Handle all-zero case
+            return np.ones_like(dist_matrix)
+        similarity = 1 - (dist_matrix / max_dist)
+        np.clip(similarity, -1.0, 1.0, out=similarity)
+        return similarity
 
     def _determine_threshold(self, matrix: np.ndarray) -> float:
         """Calculate appropriate threshold based on type"""

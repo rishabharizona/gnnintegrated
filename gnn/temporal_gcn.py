@@ -13,6 +13,10 @@ class TemporalGCN(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, graph_builder=None):
         super().__init__()
         self.graph_builder = graph_builder or GraphBuilder()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        
         # Temporal feature extractor
         self.temporal_conv = nn.Sequential(
             nn.Conv1d(input_dim, 16, kernel_size=5, padding=2),
@@ -27,9 +31,9 @@ class TemporalGCN(nn.Module):
         self.gcn2 = GCNConv(hidden_dim, hidden_dim)
         # Classifier
         self.fc = nn.Linear(hidden_dim, output_dim)
-        # Store input/output dimensions for compatibility
-        self.in_features = input_dim
-        self.out_features = output_dim
+        
+        # Reconstruction layer for pretraining
+        self.recon = nn.Linear(output_dim, input_dim)  # Added for proper reconstruction
 
     def forward(self, x):
         # Handle different input dimensions
@@ -42,7 +46,7 @@ class TemporalGCN(nn.Module):
         
         # Now x should be 3D: [batch, channels, timesteps]
         # Convert to [batch, channels, timesteps] for Conv1d
-        if x.size(1) != self.in_features:
+        if x.size(1) != self.input_dim:
             # Input is [batch, timesteps, channels] -> permute to [batch, channels, timesteps]
             x = x.permute(0, 2, 1)
         
@@ -93,6 +97,6 @@ class TemporalGCN(nn.Module):
         return self.fc(x)
 
     def reconstruct(self, features):
-        """Dummy reconstruction method for pretraining"""
-        # Simple linear reconstruction
-        return torch.matmul(features, self.fc.weight.T)
+        """Proper reconstruction method for pretraining"""
+        # Use the dedicated reconstruction layer
+        return self.recon(features)

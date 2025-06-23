@@ -503,11 +503,15 @@ def main(args):
             if args.use_gnn and GNN_AVAILABLE:
                 def gnn_transform(x):
                     return x.squeeze(2).permute(0, 2, 1)
+                
+                # Apply transformation for GNN
+                background = gnn_transform(background)
+                X_eval = gnn_transform(X_eval)
             else:
                 gnn_transform = None
                 
-            # Compute SHAP values safely with optional transform
-            shap_vals = safe_compute_shap_values(algorithm, background, X_eval, transform_fn=gnn_transform)
+            # Compute SHAP values safely (without transform_fn argument)
+            shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
             
             # Convert to numpy safely before visualization
             X_eval_np = X_eval.detach().cpu().numpy()
@@ -520,8 +524,8 @@ def main(args):
             plot_shap_heatmap(shap_vals, 
                               output_path=os.path.join(args.output, "shap_heatmap.png"))
             
-            # Evaluate SHAP impact
-            base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals, transform_fn=gnn_transform)
+            # Evaluate SHAP impact (without transform_fn argument)
+            base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
             
             # Save SHAP values
             save_path = os.path.join(args.output, "shap_values.npy")
@@ -531,7 +535,7 @@ def main(args):
             print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
             print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
             print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
-            print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals, transform_fn=gnn_transform):.4f}")
+            print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals):.4f}")
             
             # Compute advanced metrics
             metrics = evaluate_advanced_shap_metrics(shap_vals, X_eval)

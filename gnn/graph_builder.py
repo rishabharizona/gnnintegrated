@@ -75,34 +75,38 @@ class GraphBuilder:
         return self._create_edges(similarity_matrix, threshold, C)
 
     def _compute_similarity(self, data: np.ndarray) -> np.ndarray:
-    """Compute similarity matrix with enhanced numerical stability"""
-    if self.method == 'correlation':
-        # Handle constant channels
-        stds = np.std(data, axis=0)
-        constant_mask = stds < 1e-8
-        if np.any(constant_mask):
-            # Add small noise to constant channels
-            noise = np.random.normal(0, 1e-8, data.shape)
-            data = data + noise * constant_mask
-        
-        # Compute correlation with NaN protection
-        corr = np.corrcoef(data.T)
-        np.nan_to_num(corr, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
-        return corr
-        
-    elif self.method == 'covariance':
-        cov = np.cov(data.T)
-        np.nan_to_num(cov, copy=False, nan=0.0)
-        return cov
-        
-    elif self.method == 'euclidean':
-        dist_matrix = squareform(pdist(data.T, 'euclidean'))
-        max_dist = np.max(dist_matrix)
-        if max_dist < 1e-8:  # Handle all-zero case
-            return np.ones_like(dist_matrix)
-        similarity = 1 - (dist_matrix / max_dist)
-        np.clip(similarity, -1.0, 1.0, out=similarity)
-        return similarity
+        """Compute similarity matrix with enhanced numerical stability"""
+        if self.method == 'correlation':
+            # Handle constant channels
+            stds = np.std(data, axis=0)
+            constant_mask = stds < 1e-8
+            if np.any(constant_mask):
+                # Add small noise to constant channels
+                noise = np.random.normal(0, 1e-8, data.shape)
+                data = data + noise * constant_mask.reshape(1, -1)
+            
+            # Compute correlation with covariance method
+            cov_matrix = np.cov(data, rowvar=False)
+            std_products = np.outer(stds, stds)
+            # Avoid division by zero
+            std_products[std_products < 1e-10] = 1e-10
+            corr = cov_matrix / std_products
+            np.clip(corr, -1.0, 1.0, out=corr)
+            return corr
+            
+        elif self.method == 'covariance':
+            cov = np.cov(data.T)
+            np.nan_to_num(cov, copy=False, nan=0.0)
+            return cov
+            
+        elif self.method == 'euclidean':
+            dist_matrix = squareform(pdist(data.T, 'euclidean'))
+            max_dist = np.max(dist_matrix)
+            if max_dist < 1e-8:  # Handle all-zero case
+                return np.ones_like(dist_matrix)
+            similarity = 1 - (dist_matrix / max_dist)
+            np.clip(similarity, -1.0, 1.0, out=similarity)
+            return similarity
 
     def _determine_threshold(self, matrix: np.ndarray) -> float:
         """Calculate appropriate threshold based on type"""

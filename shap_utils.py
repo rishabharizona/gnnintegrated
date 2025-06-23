@@ -44,6 +44,8 @@ def safe_forward(model, x):
     try:
         with torch.enable_grad():
             # Run model components separately
+            if hasattr(model, 'gnn_transform'):
+                x = model.gnn_transform(x)
             features = model.featurizer(x)
             bottleneck = model.bottleneck(features)
             output = model.classifier(bottleneck)

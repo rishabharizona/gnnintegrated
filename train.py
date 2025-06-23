@@ -258,14 +258,20 @@ def main(args):
                     x = batch[0].cuda().float()
                     
                     # Convert to (batch, time, features) format
-                    x = x.squeeze(2).permute(0, 2, 1)
+                    if args.use_gnn and GNN_AVAILABLE:
+                        if x.dim() == 4 and x.shape[2] == 1:
+                            x = x.squeeze(2).permute(0, 2, 1)
+                        elif x.dim() != 3:
+                            raise ValueError(f"GNN requires 3D input (B,T,C), got {x.shape}")
+                    # Calculate mean across time dimension
+                    target = torch.mean(x, dim=1)  # [batch, channels]        
                     
                     # Forward pass
                     features = gnn_model(x)
                     
                     # Reconstruction loss
                     reconstructed = gnn_model.reconstruct(features)
-                    loss = torch.nn.functional.mse_loss(reconstructed, x)
+                    loss = torch.nn.functional.mse_loss(reconstructed, target)
                     
                     # Optimization with gradient clipping
                     gnn_optimizer.zero_grad()

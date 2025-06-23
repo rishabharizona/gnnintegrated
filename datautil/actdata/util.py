@@ -31,11 +31,8 @@ def act_to_graph_transform(args):
     return transforms.Compose([
         transforms.ToTensor(),
         StandardScaler(),
-        lambda x: convert_to_graph(
-            torch.tensor(x, dtype=torch.float32), 
-            adjacency_strategy=args.adjacency_strategy,
-            threshold=args.correlation_threshold
-        )
+        # Changed to output [channels, time_steps] for GNN
+        lambda x: x.squeeze(1)  # Remove middle dimension
     ])
 
 def loaddata_from_numpy(dataset='dsads', task='cross_people', root_dir='./data/act/'):

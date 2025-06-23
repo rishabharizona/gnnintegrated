@@ -340,16 +340,17 @@ def main(args):
         print('\n==== Feature update ====')
         print_row(['epoch', 'class_loss'], colwidth=15)
         for step in range(current_epochs):
+            epoch_class_loss = 0.0
+            batch_count = 0
+            
             for data in train_loader:
-                # ======================= GNN INPUT TRANSFORMATION =======================
+                # GNN input transformation
                 if args.use_gnn and GNN_AVAILABLE:
-                    # Validate input dimensions
                     if data[0].dim() == 4 and data[0].shape[2] == 1:
                         data = list(data)
                         data[0] = data[0].squeeze(2).permute(0, 2, 1)
                     elif data[0].dim() != 3:
                         raise ValueError(f"GNN requires 3D input (B,T,C), got {data[0].shape}")
-                # ========================================================================
                 
                 loss_result_dict = algorithm.update_a(data, opta)
                 
@@ -357,39 +358,56 @@ def main(args):
                     print("Skipping step due to non-finite loss")
                     continue
                     
-                print_row([step, loss_result_dict['class']], colwidth=15)
-                logs['class_loss'].append(loss_result_dict['class'])
+                epoch_class_loss += loss_result_dict['class']
+                batch_count += 1
+            
+            if batch_count > 0:
+                epoch_class_loss /= batch_count
+                print_row([step, epoch_class_loss], colwidth=15)
+                logs['class_loss'].append(epoch_class_loss)
         
         # Phase 2: Latent domain characterization
         print('\n==== Latent domain characterization ====')
         print_row(['epoch', 'total_loss', 'dis_loss', 'ent_loss'], colwidth=15)
         for step in range(current_epochs):
+            epoch_total = 0.0
+            epoch_dis = 0.0
+            epoch_ent = 0.0
+            batch_count = 0
+            
             for data in train_loader:
-                # ======================= GNN INPUT TRANSFORMATION =======================
+                # GNN input transformation
                 if args.use_gnn and GNN_AVAILABLE:
                     if data[0].dim() == 4 and data[0].shape[2] == 1:
                         data = list(data)
                         data[0] = data[0].squeeze(2).permute(0, 2, 1)
                     elif data[0].dim() != 3:
                         raise ValueError(f"GNN requires 3D input (B,T,C), got {data[0].shape}")
-                # ========================================================================
                 
                 loss_result_dict = algorithm.update_d(data, optd)
                 
-                # Fix: Check if losses are finite using numpy
                 if any(not np.isfinite(v) for v in loss_result_dict.values()):
                     print("Skipping step due to non-finite loss")
                     continue
                 
-                print_row([step, loss_result_dict['total'], loss_result_dict['dis'], loss_result_dict['ent']], colwidth=15)
+                epoch_total += loss_result_dict['total']
+                epoch_dis += loss_result_dict['dis']
+                epoch_ent += loss_result_dict['ent']
+                batch_count += 1
+            
+            if batch_count > 0:
+                epoch_total /= batch_count
+                epoch_dis /= batch_count
+                epoch_ent /= batch_count
                 
-                logs['dis_loss'].append(loss_result_dict['dis'])
-                logs['ent_loss'].append(loss_result_dict['ent'])
-                logs['total_loss'].append(loss_result_dict['total'])
+                print_row([step, epoch_total, epoch_dis, epoch_ent], colwidth=15)
+                
+                logs['dis_loss'].append(epoch_dis)
+                logs['ent_loss'].append(epoch_ent)
+                logs['total_loss'].append(epoch_total)
         
         algorithm.set_dlabel(train_loader)
         
-        # Phase 3: Domain-invariant learning
         print('\n==== Domain-invariant feature learning ====')
         loss_list = alg_loss_dict(args)
         eval_dict = train_valid_target_eval_names(args)

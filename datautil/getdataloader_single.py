@@ -20,10 +20,15 @@ class SubsetWithLabelSetter(Subset):
 
 # ==================== GNN SUPPORT ADDITIONS ====================
 def gnn_collate_fn(batch):
-    """Custom collate function for GNN graph batching"""
-    graphs, labels, domains = zip(*batch)
-    batched_graph = Batch.from_data_list(graphs)
-    return batched_graph, torch.tensor(labels), torch.tensor(domains)
+    """Collate function for GNN data that handles 6-tuple returns"""
+    # Unpack only the first 3 elements: x (graph), labels, domains
+    graphs = [item[0] for item in batch]
+    labels = [item[1] for item in batch]
+    domains = [item[2] for item in batch]
+    
+    # Create batch of graphs
+    batch_graph = Batch.from_data_list(graphs)
+    return batch_graph, torch.tensor(labels), torch.tensor(domains)
 
 def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
     """Create GNN-specific data loader"""

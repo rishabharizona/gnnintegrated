@@ -271,7 +271,7 @@ def main(args):
         # Create both bottlenecks (classifier and adversarial)
         algorithm.bottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
         algorithm.abottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
-        
+        algorithm.dbottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()  # Add this line
         print(f"Created bottlenecks: {input_dim} -> {output_dim}")
         print(f"Bottleneck architecture: {algorithm.bottleneck}")
         

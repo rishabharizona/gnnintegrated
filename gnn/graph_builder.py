@@ -77,6 +77,8 @@ class GraphBuilder:
     def _compute_similarity(self, data: np.ndarray) -> np.ndarray:
         """Compute similarity matrix based on selected method"""
         if self.method == 'correlation':
+            # Add small epsilon to avoid division by zero
+            data = data + 1e-8
             return np.corrcoef(data.T)
         elif self.method == 'covariance':
             return np.cov(data.T)
@@ -94,7 +96,13 @@ class GraphBuilder:
         # Adaptive threshold based on median absolute similarity
         abs_matrix = np.abs(matrix)
         np.fill_diagonal(abs_matrix, 0)  # Ignore self-connections
-        median_val = np.median(abs_matrix[abs_matrix > 0])
+        non_zero_elements = abs_matrix[abs_matrix > 0]
+        
+        # Handle case where all similarities are zero
+        if non_zero_elements.size == 0:
+            return 0.0
+            
+        median_val = np.median(non_zero_elements)
         return median_val * self.adaptive_factor
 
     def _create_edges(self, matrix: np.ndarray, threshold: float, num_channels: int) -> torch.LongTensor:
@@ -113,6 +121,9 @@ class GraphBuilder:
             return self._create_fully_connected(num_channels)
         
         # Convert to tensor
+        if not edges:
+            return torch.empty((2, 0), dtype=torch.long)
+            
         edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
         
         return edge_index

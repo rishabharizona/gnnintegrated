@@ -12,48 +12,70 @@ from datautil.graph_utils import convert_to_graph
 # Task mapping for activity recognition
 task_act = {'cross_people': cross_people}
 
-class SubsetWithLabelSetter(Subset):
+class SafeSubset(Subset):
+    """Safe subset that tracks its own indices and returns data without extra index"""
+    def __init__(self, dataset, indices):
+        super().__init__(dataset, indices)
+        self.indices = indices
+        self.global_indices = indices  # Alias for clarity
+        
+    def __getitem__(self, idx):
+        # Get original data
+        data = self.dataset[self.indices[idx]]
+        
+        # For GNN data, add index as an attribute
+        if isinstance(data, torch_geometric.data.Data):
+            data.idx = idx
+            return data
+        # For tuple data, add index as last element
+        elif isinstance(data, tuple):
+            return (*data, idx)
+        # For other types, return as is
+        return data
+
+class SubsetWithLabelSetter(SafeSubset):
     """Subset with label setting capability"""
     def __init__(self, dataset, indices, domain_label=None):
         super().__init__(dataset, indices)
         self.domain_label = domain_label
-        # Create mapping from subset index to original index
-        self.index_map = {subset_idx: orig_idx for subset_idx, orig_idx in enumerate(indices)}
         
     def __getitem__(self, idx):
-        data = self.dataset[self.indices[idx]]
-        if self.domain_label is not None:
-            return (data[0], data[1], self.domain_label, idx)  # Return subset index
-        return data + (idx,)  # Return subset index as last element
+        data = super().__getitem__(idx)
+        if self.domain_label is not None and isinstance(data, tuple):
+            return (*data[:-1], self.domain_label, data[-1])  # Replace domain label
+        return data
         
-    def set_labels_by_index(self, labels, subset_indices, key):
+    def set_labels_by_index(self, labels, indices, key):
         """Set labels using subset indices"""
         # Convert subset indices to original dataset indices
-        absolute_indices = [self.indices[i] for i in subset_indices]
+        absolute_indices = [self.global_indices[i] for i in indices]
         self.dataset.set_labels_by_index(labels, absolute_indices, key)
-
-# Add this class to fix the index issue
-class SafeSubset(Subset):
-    """Safe subset that tracks its own indices"""
-    def __init__(self, dataset, indices):
-        super().__init__(dataset, indices)
-        # Create mapping from subset index to original index
-        self.index_map = {subset_idx: orig_idx for subset_idx, orig_idx in enumerate(indices)}
-        
-    def __getitem__(self, idx):
-        data = self.dataset[self.indices[idx]]
-        return (*data, idx)  # Return subset index as last element
 
 
 def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
-    """Create GNN-specific data loader"""
+    """Create GNN-specific data loader with custom collate"""
     return DataLoader(
         dataset=dataset,
         batch_size=batch_size,
         num_workers=num_workers,
         shuffle=shuffle,
-        drop_last=shuffle
+        drop_last=shuffle,
+        collate_fn=custom_gnn_collate
     )
+
+def custom_gnn_collate(batch):
+    """Custom collate function that handles SafeSubset indices"""
+    # Extract indices if they exist
+    indices = [data.idx for data in batch if hasattr(data, 'idx')]
+    
+    # Create batch without indices
+    batch = [Batch.from_data_list([data]) for data in batch]
+    
+    # Add indices back if they exist
+    if indices:
+        for i, data in enumerate(batch):
+            data.idx = indices[i]
+    return batch
 
 def get_dataloader(args, tr, val, tar):
     """
@@ -334,7 +356,8 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             batch_size=args.batch_size,
             shuffle=True, 
             num_workers=args.N_WORKERS,
-            drop_last=True
+            drop_last=True,
+            collate_fn=custom_gnn_collate
         )
     else:
         curriculum_loader = DataLoader(

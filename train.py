@@ -38,9 +38,6 @@ try:
 except Exception as e:
     print(f"Environment setup failed: {e}")
     print("Attempting to continue with existing environment...")
-    # Add fallback imports if needed
-    import numpy as np
-    import torch
 import time
 import torch
 import matplotlib.pyplot as plt

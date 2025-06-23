@@ -97,7 +97,5 @@ class TemporalGCN(nn.Module):
         return self.fc(x)
 
     def reconstruct(self, features):
-        """Reconstruct the entire sequence"""
-        # Expand features to match original sequence length
-        expanded = features.unsqueeze(1).repeat(1, self.original_timesteps, 1)
-        return self.recon(expanded)  # Would need a more complex decoder
+        """Reconstruct mean input features for pretraining"""
+        return self.recon(features)

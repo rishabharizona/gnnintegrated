@@ -242,40 +242,38 @@ def main(args):
         # Replace CNN feature extractor with GNN
         algorithm.featurizer = gnn_model
         
-        # Handle different layer types
-        if args.layer == 'bn':  # Batch normalization case
-            # Create a simple bottleneck with batch norm
-            bottleneck_layers = [
-                nn.Linear(args.gnn_output_dim, int(args.bottleneck)),
-                nn.BatchNorm1d(int(args.bottleneck)),
-                nn.ReLU(inplace=True)
-            ]
-            print("Created bottleneck with BatchNorm")
-        else:  # Try to parse as integer
+        # Create a function to build consistent bottleneck layers
+        def create_bottleneck(input_dim, output_dim, layer_spec):
+            """Create a bottleneck layer with consistent architecture"""
             try:
-                num_layers = int(args.layer)
-                if num_layers < 1:
-                    num_layers = 1
-                    
-                # Create custom bottleneck layer
-                bottleneck_layers = []
-                current_dim = args.gnn_output_dim
-        
+                num_layers = int(layer_spec)
+                layers = []
+                current_dim = input_dim
+                
                 # Add intermediate layers
                 for _ in range(num_layers - 1):
-                    bottleneck_layers.append(nn.Linear(current_dim, current_dim))
-                    bottleneck_layers.append(nn.ReLU(inplace=True))
-        
+                    layers.append(nn.Linear(current_dim, current_dim))
+                    layers.append(nn.BatchNorm1d(current_dim))
+                    layers.append(nn.ReLU(inplace=True))
+                
                 # Add final projection layer
-                bottleneck_layers.append(nn.Linear(current_dim, int(args.bottleneck)))
-                print(f"Created custom bottleneck with {num_layers} layers")
+                layers.append(nn.Linear(current_dim, output_dim))
+                return nn.Sequential(*layers)
+            
             except ValueError:
                 # Fallback to simple linear projection
-                bottleneck_layers = [nn.Linear(args.gnn_output_dim, int(args.bottleneck))]
-                print("Created simple linear bottleneck")
+                return nn.Sequential(nn.Linear(input_dim, output_dim))
         
-        algorithm.bottleneck = nn.Sequential(*bottleneck_layers).cuda()
-        print(f"Bottleneck: {args.gnn_output_dim} -> {args.bottleneck}")
+        # Create both bottlenecks with the correct dimensions
+        input_dim = args.gnn_output_dim
+        output_dim = int(args.bottleneck)
+        
+        # Create both bottlenecks (classifier and adversarial)
+        algorithm.bottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
+        algorithm.abottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
+        
+        print(f"Created bottlenecks: {input_dim} -> {output_dim}")
+        print(f"Bottleneck architecture: {algorithm.bottleneck}")
         
         # GNN Pretraining if enabled
         if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:

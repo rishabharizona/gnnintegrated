@@ -241,27 +241,40 @@ def main(args):
         # Replace CNN feature extractor with GNN
         algorithm.featurizer = gnn_model
         
-        # Convert layer argument to integer and handle edge cases
-        num_layers = int(args.layer)
-        if num_layers < 1:
-            num_layers = 1  # Ensure at least 1 layer
+        # Handle different layer types
+        if args.layer == 'bn':  # Batch normalization case
+            # Create a simple bottleneck with batch norm
+            bottleneck_layers = [
+                nn.Linear(args.gnn_output_dim, int(args.bottleneck)),
+                nn.BatchNorm1d(int(args.bottleneck)),
+                nn.ReLU(inplace=True)
+            ]
+            print("Created bottleneck with BatchNorm")
+        else:  # Try to parse as integer
+            try:
+                num_layers = int(args.layer)
+                if num_layers < 1:
+                    num_layers = 1
+                    
+                # Create custom bottleneck layer
+                bottleneck_layers = []
+                current_dim = args.gnn_output_dim
         
-        # Create custom bottleneck layer
-        bottleneck_layers = []
-        current_dim = args.gnn_output_dim
+                # Add intermediate layers
+                for _ in range(num_layers - 1):
+                    bottleneck_layers.append(nn.Linear(current_dim, current_dim))
+                    bottleneck_layers.append(nn.ReLU(inplace=True))
         
-        # Add intermediate layers (if any)
-        if num_layers > 1:
-            for _ in range(num_layers - 1):
-                bottleneck_layers.append(nn.Linear(current_dim, current_dim))
-                bottleneck_layers.append(nn.BatchNorm1d(current_dim))
-                bottleneck_layers.append(nn.ReLU(inplace=True))
-        
-        # Add final projection layer
-        bottleneck_layers.append(nn.Linear(current_dim, int(args.bottleneck)))
+                # Add final projection layer
+                bottleneck_layers.append(nn.Linear(current_dim, int(args.bottleneck)))
+                print(f"Created custom bottleneck with {num_layers} layers")
+            except ValueError:
+                # Fallback to simple linear projection
+                bottleneck_layers = [nn.Linear(args.gnn_output_dim, int(args.bottleneck))]
+                print("Created simple linear bottleneck")
         
         algorithm.bottleneck = nn.Sequential(*bottleneck_layers).cuda()
-        print(f"Custom bottleneck created: {num_layers} layers ({current_dim} -> {args.bottleneck})")
+        print(f"Bottleneck: {args.gnn_output_dim} -> {args.bottleneck}")
         
         # GNN Pretraining if enabled
         if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:

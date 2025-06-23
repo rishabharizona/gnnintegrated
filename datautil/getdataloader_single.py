@@ -17,18 +17,32 @@ class SubsetWithLabelSetter(Subset):
     def __init__(self, dataset, indices, domain_label=None):
         super().__init__(dataset, indices)
         self.domain_label = domain_label
+        # Create mapping from subset index to original index
+        self.index_map = {subset_idx: orig_idx for subset_idx, orig_idx in enumerate(indices)}
         
     def __getitem__(self, idx):
         data = self.dataset[self.indices[idx]]
         if self.domain_label is not None:
-            return (data[0], data[1], self.domain_label)
-        return data
+            return (data[0], data[1], self.domain_label, idx)  # Return subset index
+        return data + (idx,)  # Return subset index as last element
         
-    def set_labels_by_index(self, labels, indices, key):
-        """Pass indices to underlying dataset for label setting"""
+    def set_labels_by_index(self, labels, subset_indices, key):
+        """Set labels using subset indices"""
         # Convert subset indices to original dataset indices
-        absolute_indices = [self.indices[i] for i in indices]
+        absolute_indices = [self.indices[i] for i in subset_indices]
         self.dataset.set_labels_by_index(labels, absolute_indices, key)
+
+# Add this class to fix the index issue
+class SafeSubset(Subset):
+    """Safe subset that tracks its own indices"""
+    def __init__(self, dataset, indices):
+        super().__init__(dataset, indices)
+        # Create mapping from subset index to original index
+        self.index_map = {subset_idx: orig_idx for subset_idx, orig_idx in enumerate(indices)}
+        
+    def __getitem__(self, idx):
+        data = self.dataset[self.indices[idx]]
+        return (*data, idx)  # Return subset index as last element
 
 
 def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
@@ -159,9 +173,9 @@ def get_act_dataloader(args):
     ted = int(l * rate)
     indextr, indexval = indexall[ted:], indexall[:ted]
     
-    # Create train and validation subsets
-    tr = subdataset(args, tdata, indextr)
-    val = subdataset(args, tdata, indexval)
+    # Create train and validation subsets using SafeSubset
+    tr = SafeSubset(tdata, indextr)
+    val = SafeSubset(tdata, indexval)
     
     # Combine target datasets
     targetdata = combindataset(args, target_datalist)

@@ -24,7 +24,6 @@ def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
     return DataLoader(
         dataset=dataset,
         batch_size=batch_size,
-        collate_fn=gnn_collate_fn,
         num_workers=num_workers,
         shuffle=shuffle,
         drop_last=shuffle  # Only drop last for training
@@ -291,7 +290,6 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         curriculum_loader = DataLoader(
             curriculum_subset, 
             batch_size=args.batch_size,
-            collate_fn=gnn_collate_fn,
             shuffle=True, 
             num_workers=args.N_WORKERS,
             drop_last=True

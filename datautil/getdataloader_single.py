@@ -342,3 +342,25 @@ def split_dataset_by_domain(dataset, val_ratio=0.2, seed=42):
         val_indices.extend(val_idx)
 
     return Subset(dataset, train_indices), Subset(dataset, val_indices)
+    
+def get_shap_batch(loader, size=100):
+    """
+    Extract a batch of data for SHAP analysis
+    Args:
+        loader: DataLoader to extract from
+        size: Number of samples to extract
+    Returns:
+        Concatenated tensor of input samples
+    """
+    X_val = []
+    for batch in loader:
+        # Extract inputs from batch (could be tuple or tensor)
+        inputs = batch[0] if isinstance(batch, (list, tuple)) else batch
+        X_val.append(inputs)
+        
+        # Stop when we have enough samples
+        if len(torch.cat(X_val)) >= size:
+            break
+    
+    # Return exactly size samples
+    return torch.cat(X_val)[:size]

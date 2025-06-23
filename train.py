@@ -2,37 +2,39 @@ import os
 import sys
 import subprocess
 
-# Check and fix environment at the very top
+# Fix environment at the very top
 try:
-    # Downgrade numpy first
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy==1.26.4", "--quiet"])
-    
-    # Install compatible PyTorch version
-    torch_install_cmd = [
-        sys.executable, "-m", "pip", "install",
-        "torch==2.0.1", "torchvision==0.15.2", "torchaudio==2.0.2",
-        "--index-url", "https://download.pytorch.org/whl/cu117"
+    # Create a compatible environment
+    install_cmds = [
+        # Remove conflicting packages
+        [sys.executable, "-m", "pip", "uninstall", "-y", "thinc", "spacy"],
+        
+        # Install compatible NumPy version
+        [sys.executable, "-m", "pip", "install", "numpy==1.26.4", "--quiet"],
+        
+        # Install PyTorch stack
+        [sys.executable, "-m", "pip", "install", 
+         "torch==2.0.1", "torchvision==0.15.2", "torchaudio==2.0.2",
+         "--index-url", "https://download.pytorch.org/whl/cu117", "--quiet"],
+         
+        # Install PyG packages
+        [sys.executable, "-m", "pip", "install", "--force-reinstall",
+         "torch-scatter", "torch-sparse", "torch-cluster", "torch-spline-conv",
+         "-f", "https://data.pyg.org/whl/torch-2.0.1+cu117.html", "--quiet"],
+         
+        [sys.executable, "-m", "pip", "install", 
+         "torch-geometric", "-f", "https://data.pyg.org/whl/torch-2.0.1+cu117.html", "--quiet"]
     ]
-    subprocess.check_call(torch_install_cmd)
     
-    # Reinstall torch geometric with compatible binaries
-    pyg_packages = [
-        "torch-scatter", "torch-sparse", "torch-cluster", "torch-spline-conv", "torch-geometric"
-    ]
-    for package in pyg_packages:
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install", package,
-            "-f", "https://data.pyg.org/whl/torch-2.0.1+cu117.html"
-        ])
+    for cmd in install_cmds:
+        subprocess.check_call(cmd)
     
     # Restart to apply changes
     os.execv(sys.executable, [sys.executable] + sys.argv)
     
-except subprocess.CalledProcessError:
-    print("Environment fix failed. Trying fallback method...")
-    # Fallback to CPU-only if GPU installation fails
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.0.1+cpu", "--index-url", "https://download.pytorch.org/whl/cpu"])
-    os.execv(sys.executable, [sys.executable] + sys.argv)
+except Exception as e:
+    print(f"Environment setup error: {e}")
+    sys.exit(1)
 import time
 import torch
 import matplotlib.pyplot as plt

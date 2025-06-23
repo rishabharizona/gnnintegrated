@@ -133,87 +133,87 @@ class Diversify(Algorithm):
         return {'total': loss.item(), 'dis': disc_loss.item(), 'ent': ent_loss.item()}
 
     def set_dlabel(self, loader):
-    """Set pseudo-domain labels using clustering"""
-    self.dbottleneck.eval()
-    self.dclassifier.eval()
-    self.featurizer.eval()
-
-    all_fea = []
-    all_index = []  # Store original indices
-
-    with torch.no_grad():
-        # Manually track the index counter
-        index_counter = 0
-        for batch in loader:
-            inputs = batch[0].cuda().float()
-            feas = self.dbottleneck(self.featurizer(inputs))
+        """Set pseudo-domain labels using clustering"""
+        self.dbottleneck.eval()
+        self.dclassifier.eval()
+        self.featurizer.eval()
+    
+        all_fea = []
+        all_index = []  # Store original indices
+    
+        with torch.no_grad():
+            # Manually track the index counter
+            index_counter = 0
+            for batch in loader:
+                inputs = batch[0].cuda().float()
+                feas = self.dbottleneck(self.featurizer(inputs))
+                
+                all_fea.append(feas.float().cpu())
+                
+                # Store batch indices
+                batch_size = inputs.size(0)
+                batch_indices = np.arange(index_counter, index_counter + batch_size)
+                all_index.append(batch_indices)
+                index_counter += batch_size
+    
+        # Combine features and indices
+        all_fea = torch.cat(all_fea, dim=0)
+        all_index = np.concatenate(all_index, axis=0)
+        
+        # Normalize features
+        all_fea = all_fea / torch.norm(all_fea, p=2, dim=1, keepdim=True)
+        all_fea = all_fea.float().cpu().numpy()
+    
+        # Clustering for pseudo-domain labels
+        K = self.args.latent_domain_num
+        
+        # Use sklearn KMeans for robust clustering
+        kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
+        pred_label = kmeans.fit_predict(all_fea)
+        
+        # Ensure labels are in valid range
+        pred_label = np.clip(pred_label, 0, K-1)
+    
+        # Handle ConcatDataset
+        if isinstance(loader.dataset, ConcatDataset):
+            concat_dataset = loader.dataset
+            cumulative_sizes = concat_dataset.cumulative_sizes
+            datasets = concat_dataset.datasets
+            starts = [0] + cumulative_sizes[:-1]
             
-            all_fea.append(feas.float().cpu())
+            per_ds_indices = [[] for _ in range(len(datasets))]
+            per_ds_labels = [[] for _ in range(len(datasets))]
             
-            # Store batch indices
-            batch_size = inputs.size(0)
-            batch_indices = np.arange(index_counter, index_counter + batch_size)
-            all_index.append(batch_indices)
-            index_counter += batch_size
-
-    # Combine features and indices
-    all_fea = torch.cat(all_fea, dim=0)
-    all_index = np.concatenate(all_index, axis=0)
-    
-    # Normalize features
-    all_fea = all_fea / torch.norm(all_fea, p=2, dim=1, keepdim=True)
-    all_fea = all_fea.float().cpu().numpy()
-
-    # Clustering for pseudo-domain labels
-    K = self.args.latent_domain_num
-    
-    # Use sklearn KMeans for robust clustering
-    kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
-    pred_label = kmeans.fit_predict(all_fea)
-    
-    # Ensure labels are in valid range
-    pred_label = np.clip(pred_label, 0, K-1)
-
-    # Handle ConcatDataset
-    if isinstance(loader.dataset, ConcatDataset):
-        concat_dataset = loader.dataset
-        cumulative_sizes = concat_dataset.cumulative_sizes
-        datasets = concat_dataset.datasets
-        starts = [0] + cumulative_sizes[:-1]
+            for idx, label in zip(all_index, pred_label):
+                for ds_idx, end in enumerate(cumulative_sizes):
+                    if idx < end:
+                        start = starts[ds_idx]
+                        local_idx = idx - start
+                        per_ds_indices[ds_idx].append(local_idx)
+                        per_ds_labels[ds_idx].append(label)
+                        break
+            
+            for ds_idx, dataset in enumerate(datasets):
+                if per_ds_indices[ds_idx]:
+                    dataset.set_labels_by_index(
+                        per_ds_labels[ds_idx],
+                        per_ds_indices[ds_idx],
+                        'pdlabel'
+                    )
+        else:
+            loader.dataset.set_labels_by_index(pred_label, all_index, 'pdlabel')
         
-        per_ds_indices = [[] for _ in range(len(datasets))]
-        per_ds_labels = [[] for _ in range(len(datasets))]
+        # Print label distribution
+        counter = Counter(pred_label)
+        print(f"Pseudo-domain label distribution: {dict(counter)}")
         
-        for idx, label in zip(all_index, pred_label):
-            for ds_idx, end in enumerate(cumulative_sizes):
-                if idx < end:
-                    start = starts[ds_idx]
-                    local_idx = idx - start
-                    per_ds_indices[ds_idx].append(local_idx)
-                    per_ds_labels[ds_idx].append(label)
-                    break
+        # Store labels for validation
+        self.dlabel = torch.from_numpy(pred_label).long().cuda()
         
-        for ds_idx, dataset in enumerate(datasets):
-            if per_ds_indices[ds_idx]:
-                dataset.set_labels_by_index(
-                    per_ds_labels[ds_idx],
-                    per_ds_indices[ds_idx],
-                    'pdlabel'
-                )
-    else:
-        loader.dataset.set_labels_by_index(pred_label, all_index, 'pdlabel')
-    
-    # Print label distribution
-    counter = Counter(pred_label)
-    print(f"Pseudo-domain label distribution: {dict(counter)}")
-    
-    # Store labels for validation
-    self.dlabel = torch.from_numpy(pred_label).long().cuda()
-    
-    # Return to training mode
-    self.dbottleneck.train()
-    self.dclassifier.train()
-    self.featurizer.train()
+        # Return to training mode
+        self.dbottleneck.train()
+        self.dclassifier.train()
+        self.featurizer.train()
 
     def update(self, data, opt):
         """Update domain-invariant features"""

@@ -55,7 +55,17 @@ class TemporalGCN(nn.Module):
         # Get first sample's features for graph building
         sample = x[:reduced_timesteps].detach().cpu().numpy()
         edge_index_single = self.graph_builder.build_graph(sample)
-        edge_index_single = torch.tensor(edge_index_single, dtype=torch.long).to(x.device)
+        
+        # Handle empty graph case
+        if edge_index_single.numel() == 0:
+            # Use fully connected graph as fallback
+            edge_index_single = torch.tensor(
+                [[i, j] for i in range(reduced_timesteps) for j in range(reduced_timesteps) if i != j],
+                dtype=torch.long
+            ).t().contiguous()
+        
+        # Move to device and clone to avoid warnings
+        edge_index_single = edge_index_single.to(x.device).clone().detach()
         
         # Batch the graph with node offsetting
         edge_indices = []

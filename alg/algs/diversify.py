@@ -5,7 +5,8 @@ import torch.nn.functional as F
 import numpy as np
 from scipy.spatial.distance import cdist
 from torch.utils.data import ConcatDataset
-from torch_geometric.nn import GCNConv, GATConv  # Add GNN layers
+from torch_geometric.nn import GCNConv, GATConv
+from sklearn.cluster import KMeans
 
 from alg.modelopera import get_fea
 from network import Adver_network, common_network
@@ -68,9 +69,9 @@ class Diversify(Algorithm):
         self.dbottleneck = common_network.feat_bottleneck(
             self.featurizer.in_features, args.bottleneck, args.layer)
         self.ddiscriminator = Adver_network.Discriminator(
-            args.bottleneck, args.dis_hidden, args.domain_num)  # Fixed to domain_num
+            args.bottleneck, args.dis_hidden, args.domain_num)
         self.dclassifier = common_network.feat_classifier(
-            args.num_classes,  # Fixed to num_classes
+            args.num_classes,
             args.bottleneck,
             args.classifier
         )
@@ -93,16 +94,15 @@ class Diversify(Algorithm):
         self.args = args
         self.criterion = nn.CrossEntropyLoss()
         # Add flag for explainability mode
-        self.explain_mode = False  # New flag
+        self.explain_mode = False
         # Domain label tracking
         self.dlabel = None
 
     def update_d(self, minibatch, opt):
         """Update domain characterization components"""
         all_x1 = minibatch[0].cuda().float()
-        # FIXED INDEXING: [1] is class label, [2] is domain label
-        all_d1 = minibatch[2].cuda().long()  # Domain labels
-        all_c1 = minibatch[1].cuda().long()  # Class labels
+        all_d1 = minibatch[2].cuda().long()
+        all_c1 = minibatch[1].cuda().long()
         
         # Validate domain labels
         n_domains = self.args.domain_num
@@ -115,7 +115,6 @@ class Diversify(Algorithm):
         
         # Forward pass
         z1 = self.dbottleneck(self.featurizer(all_x1))
-        # Clone output during explainability to prevent inplace modification
         if self.explain_mode:
             z1 = z1.clone()
         disc_in1 = Adver_network.ReverseLayerF.apply(z1, self.args.alpha1)
@@ -147,41 +146,27 @@ class Diversify(Algorithm):
                 inputs = data[0].cuda().float()
                 index = data[-1]
                 feas = self.dbottleneck(self.featurizer(inputs))
-                outputs = self.dclassifier(feas)
                 
                 if start_test:
                     all_fea = feas.float().cpu()
-                    all_output = outputs.float().cpu()
                     all_index = index
                     start_test = False
                 else:
                     all_fea = torch.cat((all_fea, feas.float().cpu()), 0)
-                    all_output = torch.cat((all_output, outputs.float().cpu()), 0)
                     all_index = np.hstack((all_index, index))
         
         # Normalize features
-        all_output = nn.Softmax(dim=1)(all_output)
-        all_fea = torch.cat((all_fea, torch.ones(all_fea.size(0), 1)), 1)
-        all_fea = (all_fea.t() / torch.norm(all_fea, p=2, dim=1)).t()
+        all_fea = all_fea / torch.norm(all_fea, p=2, dim=1, keepdim=True)
         all_fea = all_fea.float().cpu().numpy()
 
         # Clustering for pseudo-domain labels
-        K = self.args.latent_domain_num  # Use configured latent domain count
-        aff = all_output.float().cpu().numpy()
-        initc = aff.transpose().dot(all_fea)
-        initc = initc / (1e-8 + aff.sum(axis=0)[:, None])
-        dd = cdist(all_fea, initc, 'cosine')
-        pred_label = dd.argmin(axis=1)
-
-        # Refine clustering
-        for _ in range(1):
-            aff = np.eye(K)[pred_label]
-            initc = aff.transpose().dot(all_fea)
-            initc = initc / (1e-8 + aff.sum(axis=0)[:, None])
-            dd = cdist(all_fea, initc, 'cosine')
-            pred_label = dd.argmin(axis=1)
-            
-        # Clamp labels to valid range
+        K = self.args.latent_domain_num
+        
+        # Use sklearn KMeans for robust clustering
+        kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
+        pred_label = kmeans.fit_predict(all_fea)
+        
+        # Ensure labels are in valid range
         pred_label = np.clip(pred_label, 0, K-1)
 
         # Handle ConcatDataset
@@ -230,7 +215,6 @@ class Diversify(Algorithm):
         all_x = data[0].cuda().float()
         all_y = data[1].cuda().long()
         all_z = self.bottleneck(self.featurizer(all_x))
-        # Clone output during explainability to prevent inplace modification
         if self.explain_mode:
             all_z = all_z.clone()
         
@@ -238,15 +222,14 @@ class Diversify(Algorithm):
         disc_input = Adver_network.ReverseLayerF.apply(all_z, self.args.alpha)
         disc_out = self.discriminator(disc_input)
         
-        # Get pseudo-domain labels and validate
+        # Get pseudo-domain labels
         if self.dlabel is None:
             disc_labels = data[4].cuda().long()
         else:
-            # Use stored labels if available
-            batch_indices = data[-1]  # Get sample indices
+            batch_indices = data[-1]
             disc_labels = self.dlabel[batch_indices]
             
-        # Clamp to valid range
+        # Validate labels
         n_domains = self.args.latent_domain_num
         if disc_labels.min() < 0 or disc_labels.max() >= n_domains:
             print(f"⚠️ Pseudo-domain labels out of bounds! Clamping to [0, {n_domains-1}]")
@@ -277,7 +260,7 @@ class Diversify(Algorithm):
         if self.dlabel is None:
             all_d = minibatches[4].cuda().long()
         else:
-            batch_indices = minibatches[-1]  # Get sample indices
+            batch_indices = minibatches[-1]
             all_d = self.dlabel[batch_indices]
             
         # Validate domain labels
@@ -293,7 +276,6 @@ class Diversify(Algorithm):
         
         # Forward pass
         all_z = self.abottleneck(self.featurizer(all_x))
-        # Clone output during explainability to prevent inplace modification
         if self.explain_mode:
             all_z = all_z.clone()
         all_preds = self.aclassifier(all_z)
@@ -308,7 +290,6 @@ class Diversify(Algorithm):
 
     def predict(self, x):
         """Main prediction method"""
-        # Clone output during explainability to prevent inplace modification
         features = self.featurizer(x)
         bottleneck_out = self.bottleneck(features)
         if self.explain_mode:
@@ -324,23 +305,18 @@ class Diversify(Algorithm):
         return self.ddiscriminator(bottleneck_out)
     
     def forward(self, batch):
-        """Forward pass with loss calculation"""
         inputs = batch[0]
         labels = batch[1]
         
-        # Get predictions
         preds = self.predict(inputs)
         preds = preds.float()
         labels = labels.long()
         
-        # Compute classification loss
         class_loss = self.criterion(preds, labels)
         
         return {'class': class_loss}
     
-    # New method for SHAP explainability
     def explain(self, x):
-        """Safe forward pass for explainability tools"""
         original_mode = self.explain_mode
         try:
             self.explain_mode = True

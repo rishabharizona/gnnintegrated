@@ -2,57 +2,45 @@ import os
 import sys
 import subprocess
 
-# Fix environment at the very top
 try:
-    # Create virtual environment
-    venv_path = os.path.join(os.getcwd(), "gnn_venv")
-    if not os.path.exists(venv_path):
-        subprocess.check_call([sys.executable, "-m", "venv", venv_path])
+    # Install compatible NumPy version
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy==1.26.3", "--quiet"])
     
-    # Determine correct pip path
-    pip_path = os.path.join(venv_path, "bin", "pip")
-    if sys.platform.startswith("win"):
-        pip_path = os.path.join(venv_path, "Scripts", "pip.exe")
-    
-    # Install compatible NumPy version (using available version)
-    subprocess.check_call([pip_path, "install", "numpy==1.26.3", "--quiet"])
-    
-    # Install PyTorch stack
+    # Install PyTorch with CUDA 11.7
     subprocess.check_call([
-        pip_path, "install",
+        sys.executable, "-m", "pip", "install",
         "torch==2.0.1", "torchvision==0.15.2", "torchaudio==2.0.2",
         "--index-url", "https://download.pytorch.org/whl/cu117",
         "--quiet"
     ])
     
-    # Install PyG packages
+    # Install PyG packages individually
     pyg_packages = [
         "torch-scatter", "torch-sparse", "torch-cluster", "torch-spline-conv"
     ]
     for package in pyg_packages:
         subprocess.check_call([
-            pip_path, "install", package,
+            sys.executable, "-m", "pip", "install", package,
             "-f", "https://data.pyg.org/whl/torch-2.0.1+cu117.html",
             "--quiet"
         ])
     
+    # Install main torch-geometric package
     subprocess.check_call([
-        pip_path, "install", "torch-geometric",
+        sys.executable, "-m", "pip", "install", "torch-geometric",
         "-f", "https://data.pyg.org/whl/torch-2.0.1+cu117.html",
         "--quiet"
     ])
     
-    # Restart using the virtual environment
-    python_path = os.path.join(venv_path, "bin", "python")
-    if sys.platform.startswith("win"):
-        python_path = os.path.join(venv_path, "Scripts", "python.exe")
-    
-    os.execv(python_path, [python_path] + sys.argv)
+    # Restart to apply changes
+    os.execv(sys.executable, [sys.executable] + sys.argv)
     
 except Exception as e:
     print(f"Environment setup failed: {e}")
-    # Attempt to run with current environment
-    print("Attempting to run with current environment...")
+    print("Attempting to continue with existing environment...")
+    # Add fallback imports if needed
+    import numpy as np
+    import torch
 import time
 import torch
 import matplotlib.pyplot as plt

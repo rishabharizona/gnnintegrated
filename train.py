@@ -16,24 +16,26 @@ from torch_geometric.loader import DataLoader
 from torch.utils.data import ConcatDataset
 from network.act_network import ActNetwork
 from sklearn.metrics import davies_bouldin_score
+
 # Unified SHAP utilities import
 from shap_utils import (
     get_background_batch, safe_compute_shap_values, plot_summary,
     overlay_signal_with_shap, plot_shap_heatmap,
     evaluate_shap_impact, compute_flip_rate, compute_jaccard_topk,
     compute_kendall_tau,
-    cosine_similarity_shap, save_shap_numpy, 
-    compute_confidence_change, _get_shap_array, 
+    cosine_similarity_shap, save_shap_numpy,
+    compute_confidence_change, _get_shap_array,
     compute_aopc, compute_feature_coherence, compute_shap_entropy,
     plot_emg_shap_4d, plot_4d_shap_surface, evaluate_advanced_shap_metrics
 )
+
 # Add this class definition at the top of your file
 class SubsetWithLabelSetter(torch.utils.data.Subset):
     """Subset that allows setting domain labels"""
     def __init__(self, dataset, indices, domain_label=None):
         super().__init__(dataset, indices)
         self.domain_label = domain_label
-        
+
     def __getitem__(self, idx):
         data = self.dataset[self.indices[idx]]
         if self.domain_label is not None:
@@ -85,16 +87,18 @@ def automated_k_estimation(features, k_min=2, k_max=10):
         if combined_score > best_score:
             best_k = k
             best_score = combined_score
-
+            
     print(f"[INFO] Optimal K determined as {best_k} (Combined Score: {best_score:.4f})")
     return best_k
 
 def calculate_h_divergence(features_source, features_target):
     """
     Calculate h-divergence between source and target domain features
+    
     Args:
         features_source: Features from source domain (numpy array)
         features_target: Features from target domain (numpy array)
+        
     Returns:
         h_divergence: Domain discrepancy measure
         domain_acc: Domain classifier accuracy
@@ -127,25 +131,26 @@ def calculate_h_divergence(features_source, features_target):
     # Calculate h-divergence: d = 2(1 - 2ε)
     # Where ε is the error rate of the domain classifier
     h_divergence = 2 * (1 - 2 * (1 - domain_acc))
+    
     return h_divergence, domain_acc
 
 def main(args):
     s = print_args(args, [])
     set_random_seed(args.seed)
-
     print_environ()
     print(s)
-
+    
     # Create output directory if it doesn't exist
     os.makedirs(args.output, exist_ok=True)
-
+    
     # Load datasets
     loader_data = get_act_dataloader(args)
     train_loader, train_loader_noshuffle, valid_loader, target_loader, tr, val, targetdata = loader_data[:7]
-
+    
     # Automated K estimation if enabled
     if getattr(args, 'automated_k', False):
-        print("Running automated K estimation...")
+        print("\nRunning automated K estimation...")
+        
         # Use GNN if enabled, otherwise use standard CNN
         if args.use_gnn and GNN_AVAILABLE:
             print("Using GNN for feature extraction")
@@ -167,7 +172,7 @@ def main(args):
             
         temp_model.eval()
         feature_list = []
-
+        
         with torch.no_grad():
             for batch in train_loader:
                 inputs = batch[0].cuda().float()
@@ -178,53 +183,51 @@ def main(args):
                 
                 features = temp_model(inputs)
                 feature_list.append(features.cpu().numpy())
-
+                
         all_features = np.concatenate(feature_list, axis=0)
         optimal_k = automated_k_estimation(all_features)
         args.latent_domain_num = optimal_k
         print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
+        
         del temp_model
-
-    # Batch size adjustment
-    if args.latent_domain_num < 6:
-        args.batch_size = 32 * args.latent_domain_num
-    else:
-        args.batch_size = 16 * args.latent_domain_num
-    print(f"Adjusted batch size: {args.batch_size}")
-
-    # Recreate data loaders with new batch size
-    train_loader = DataLoader(
-        dataset=tr, 
-        batch_size=args.batch_size,
-        num_workers=args.N_WORKERS, 
-        drop_last=False, 
-        shuffle=True
-    )
+        
+        # Batch size adjustment
+        if args.latent_domain_num < 6:
+            args.batch_size = 32 * args.latent_domain_num
+        else:
+            args.batch_size = 16 * args.latent_domain_num
+        print(f"Adjusted batch size: {args.batch_size}")
+        
+        # Recreate data loaders with new batch size
+        train_loader = DataLoader(
+            dataset=tr,
+            batch_size=args.batch_size,
+            num_workers=args.N_WORKERS,
+            drop_last=False,
+            shuffle=True
+        )
+        train_loader_noshuffle = DataLoader(
+            dataset=tr,
+            batch_size=args.batch_size,
+            num_workers=args.N_WORKERS,
+            drop_last=False,
+            shuffle=False
+        )
+        valid_loader = DataLoader(
+            dataset=val,
+            batch_size=args.batch_size,
+            num_workers=args.N_WORKERS,
+            drop_last=False,
+            shuffle=False
+        )
+        target_loader = DataLoader(
+            dataset=targetdata,
+            batch_size=args.batch_size,
+            num_workers=args.N_WORKERS,
+            drop_last=False,
+            shuffle=False
+        )
     
-    train_loader_noshuffle = DataLoader(
-        dataset=tr, 
-        batch_size=args.batch_size, 
-        num_workers=args.N_WORKERS, 
-        drop_last=False, 
-        shuffle=False
-    )
-    
-    valid_loader = DataLoader(
-        dataset=val, 
-        batch_size=args.batch_size,
-        num_workers=args.N_WORKERS, 
-        drop_last=False, 
-        shuffle=False
-    )
-    
-    target_loader = DataLoader(
-        dataset=targetdata, 
-        batch_size=args.batch_size,
-        num_workers=args.N_WORKERS, 
-        drop_last=False, 
-        shuffle=False
-    )
-
     # Initialize algorithm
     algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).cuda()
@@ -232,6 +235,7 @@ def main(args):
     # ======================= GNN INITIALIZATION START =======================
     if args.use_gnn and GNN_AVAILABLE:
         print("\n===== Initializing GNN Feature Extractor =====")
+        
         # Initialize graph builder with research-optimized parameters
         graph_builder = GraphBuilder(
             method='correlation',
@@ -265,9 +269,9 @@ def main(args):
             for epoch in range(args.gnn_pretrain_epochs):
                 gnn_model.train()
                 total_loss = 0
-                
                 for batch in train_loader:
                     x = batch[0].cuda().float()
+                    
                     # Convert to (batch, time, features) format
                     x = x.squeeze(2).permute(0, 2, 1)
                     
@@ -284,32 +288,33 @@ def main(args):
                     gnn_optimizer.step()
                     
                     total_loss += loss.item()
-                
+                    
                 print(f'GNN Pretrain Epoch {epoch+1}/{args.gnn_pretrain_epochs}: Loss {total_loss/len(train_loader):.4f}')
+            
             print("GNN pretraining complete")
     # ======================= GNN INITIALIZATION END =======================
-
+    
     algorithm.train()
-
+    
     # Setup optimizers
     optd = get_optimizer(algorithm, args, nettype='Diversify-adv')
     opt = get_optimizer(algorithm, args, nettype='Diversify-cls')
     opta = get_optimizer(algorithm, args, nettype='Diversify-all')
-
+    
     # Training metrics logging
-    logs = {k: [] for k in ['epoch', 'class_loss', 'dis_loss', 'ent_loss', 
-                           'total_loss', 'train_acc', 'valid_acc', 'target_acc', 
+    logs = {k: [] for k in ['epoch', 'class_loss', 'dis_loss', 'ent_loss',
+                           'total_loss', 'train_acc', 'valid_acc', 'target_acc',
                            'total_cost_time', 'h_divergence', 'domain_acc']}
     best_valid_acc, target_acc = 0, 0
-
+    
     # Create entire source loader for h-divergence calculation
     entire_source_loader = DataLoader(
-        tr, 
-        batch_size=args.batch_size, 
-        shuffle=False, 
+        tr,
+        batch_size=args.batch_size,
+        shuffle=False,
         num_workers=args.N_WORKERS
     )
-
+    
     # Main training loop
     global_step = 0  # Initialize global step counter
     for round_idx in range(args.max_epoch):
@@ -328,25 +333,25 @@ def main(args):
             
             # Use advanced domain-based curriculum loader
             train_loader = get_curriculum_loader(
-                args, 
-                algorithm, 
-                tr, 
-                val, 
+                args,
+                algorithm,
+                tr,
+                val,
                 stage=round_idx
             )
             
             # Update the no-shuffle loader as well (optional)
             train_loader_noshuffle = DataLoader(
-                train_loader.dataset, 
-                batch_size=args.batch_size, 
+                train_loader.dataset,
+                batch_size=args.batch_size,
                 shuffle=False,
                 num_workers=args.N_WORKERS
             )
-            
-            algorithm.train()
-    
+        
+        algorithm.train()
+        
         # Phase 1: Feature update
-        print('==== Feature update ====')
+        print('\n==== Feature update ====')
         print_row(['epoch', 'class_loss'], colwidth=15)
         for step in range(current_epochs):
             for data in train_loader:
@@ -358,11 +363,11 @@ def main(args):
                 # ========================================================================
                 
                 loss_result_dict = algorithm.update_a(data, opta)
-            print_row([step, loss_result_dict['class']], colwidth=15)
-            logs['class_loss'].append(loss_result_dict['class'])
-    
+                print_row([step, loss_result_dict['class']], colwidth=15)
+                logs['class_loss'].append(loss_result_dict['class'])
+        
         # Phase 2: Latent domain characterization
-        print('==== Latent domain characterization ====')
+        print('\n==== Latent domain characterization ====')
         print_row(['epoch', 'total_loss', 'dis_loss', 'ent_loss'], colwidth=15)
         for step in range(current_epochs):
             for data in train_loader:
@@ -373,21 +378,22 @@ def main(args):
                 # ========================================================================
                 
                 loss_result_dict = algorithm.update_d(data, optd)
-            print_row([step, loss_result_dict['total'], loss_result_dict['dis'], loss_result_dict['ent']], colwidth=15)
-            logs['dis_loss'].append(loss_result_dict['dis'])
-            logs['ent_loss'].append(loss_result_dict['ent'])
-            logs['total_loss'].append(loss_result_dict['total'])
-    
+                print_row([step, loss_result_dict['total'], loss_result_dict['dis'], loss_result_dict['ent']], colwidth=15)
+                
+                logs['dis_loss'].append(loss_result_dict['dis'])
+                logs['ent_loss'].append(loss_result_dict['ent'])
+                logs['total_loss'].append(loss_result_dict['total'])
+        
         algorithm.set_dlabel(train_loader)
-    
+        
         # Phase 3: Domain-invariant learning
-        print('==== Domain-invariant feature learning ====')
+        print('\n==== Domain-invariant feature learning ====')
         loss_list = alg_loss_dict(args)
         eval_dict = train_valid_target_eval_names(args)
         print_key = ['epoch'] + [f"{item}_loss" for item in loss_list] + \
                    [f"{item}_acc" for item in eval_dict] + ['total_cost_time']
         print_row(print_key, colwidth=15)
-    
+        
         round_start_time = time.time()
         for step in range(current_epochs):
             step_start_time = time.time()
@@ -399,7 +405,7 @@ def main(args):
                 # ========================================================================
                 
                 step_vals = algorithm.update(data, opt)
-    
+            
             # Calculate accuracies
             # Create transform wrapper for GNN if needed
             transform_fn = None
@@ -433,7 +439,7 @@ def main(args):
             
             print_row([results[key] for key in print_key], colwidth=15)
             global_step += 1  # Increment global step
-    
+        
         logs['total_cost_time'].append(time.time() - round_start_time)
         
         # Calculate h-divergence every 5 epochs
@@ -446,10 +452,12 @@ def main(args):
             with torch.no_grad():
                 for data in entire_source_loader:
                     x = data[0].cuda().float()
+                    
                     # ======================= GNN INPUT TRANSFORMATION =======================
                     if args.use_gnn and GNN_AVAILABLE:
                         x = x.squeeze(2).permute(0, 2, 1)
                     # ========================================================================
+                    
                     features = algorithm.featurizer(x).detach().cpu().numpy()
                     source_features.append(features)
             source_features = np.concatenate(source_features, axis=0)
@@ -459,10 +467,12 @@ def main(args):
             with torch.no_grad():
                 for data in target_loader:
                     x = data[0].cuda().float()
+                    
                     # ======================= GNN INPUT TRANSFORMATION =======================
                     if args.use_gnn and GNN_AVAILABLE:
                         x = x.squeeze(2).permute(0, 2, 1)
                     # ========================================================================
+                    
                     features = algorithm.featurizer(x).detach().cpu().numpy()
                     target_features.append(features)
             target_features = np.concatenate(target_features, axis=0)
@@ -471,12 +481,12 @@ def main(args):
             h_div, domain_acc = calculate_h_divergence(source_features, target_features)
             logs['h_divergence'].append(h_div)
             logs['domain_acc'].append(domain_acc)
-            print(f"  H-Divergence: {h_div:.4f}, Domain Classifier Acc: {domain_acc:.4f}")
+            print(f" H-Divergence: {h_div:.4f}, Domain Classifier Acc: {domain_acc:.4f}")
             
             algorithm.train()
-            
+    
     print(f'\n🎯 Final Target Accuracy: {target_acc:.4f}')
-
+    
     # SHAP explainability analysis
     if getattr(args, 'enable_shap', False):
         print("\n📊 Running SHAP explainability...")
@@ -505,13 +515,11 @@ def main(args):
             # Generate core visualizations
             plot_summary(shap_vals, X_eval_np, 
                          output_path=os.path.join(args.output, "shap_summary.png"))
-            
             overlay_signal_with_shap(X_eval_np[0], shap_vals, 
-                                    output_path=os.path.join(args.output, "shap_overlay.png"))
-            
+                                     output_path=os.path.join(args.output, "shap_overlay.png"))
             plot_shap_heatmap(shap_vals, 
-                             output_path=os.path.join(args.output, "shap_heatmap.png"))
-
+                              output_path=os.path.join(args.output, "shap_heatmap.png"))
+            
             # Evaluate SHAP impact
             base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals, transform_fn=gnn_transform)
             
@@ -524,7 +532,7 @@ def main(args):
             print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
             print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
             print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals, transform_fn=gnn_transform):.4f}")
-
+            
             # Compute advanced metrics
             metrics = evaluate_advanced_shap_metrics(shap_vals, X_eval)
             print(f"[SHAP] Entropy: {metrics.get('shap_entropy', 0):.4f}")
@@ -550,10 +558,9 @@ def main(args):
             # Generate 4D visualizations
             plot_emg_shap_4d(X_eval, shap_vals, 
                              output_path=os.path.join(args.output, "shap_4d_scatter.html"))
-            
             plot_4d_shap_surface(shap_vals, 
-                                output_path=os.path.join(args.output, "shap_4d_surface.html"))
-
+                                 output_path=os.path.join(args.output, "shap_4d_surface.html"))
+            
             # Confusion matrix
             true_labels, pred_labels = [], []
             for data in valid_loader:
@@ -563,9 +570,9 @@ def main(args):
                     if args.use_gnn and GNN_AVAILABLE:
                         x = x.squeeze(2).permute(0, 2, 1)
                     preds = algorithm.predict(x).cpu()
-                true_labels.extend(y.cpu().numpy())
-                pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
-
+                    true_labels.extend(y.cpu().numpy())
+                    pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
+            
             cm = confusion_matrix(true_labels, pred_labels)
             disp = ConfusionMatrixDisplay(confusion_matrix=cm)
             disp.plot(cmap="Blues")
@@ -574,12 +581,11 @@ def main(args):
             plt.close()
             
             print("✅ SHAP analysis completed successfully")
-            
         except Exception as e:
             print(f"[ERROR] SHAP analysis failed: {str(e)}")
             import traceback
             traceback.print_exc()
-
+    
     # Plot training metrics
     try:
         # Main training metrics plot
@@ -594,7 +600,7 @@ def main(args):
         plt.ylabel("Loss")
         plt.legend()
         plt.grid(True)
-
+        
         plt.subplot(2, 1, 2)
         epochs = list(range(len(logs['train_acc'])))
         plt.plot(epochs, logs['train_acc'], label="Train Accuracy", marker='o')
@@ -605,7 +611,7 @@ def main(args):
         plt.ylabel("Accuracy")
         plt.legend()
         plt.grid(True)
-
+        
         plt.tight_layout()
         plt.savefig(os.path.join(args.output, "training_metrics.png"), dpi=300)
         plt.close()

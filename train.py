@@ -2,42 +2,45 @@ import os
 import sys
 import subprocess
 
-# Create a clean environment for the project
+# Fix environment at the very top
 try:
-    # Install minimal requirements in isolated environment
-    subprocess.check_call([
-        sys.executable, "-m", "pip", "install",
-        "virtualenv", "--quiet"
-    ])
-    
     # Create virtual environment
     venv_path = os.path.join(os.getcwd(), "gnn_venv")
-    subprocess.check_call([
-        sys.executable, "-m", "virtualenv", venv_path
-    ])
+    if not os.path.exists(venv_path):
+        subprocess.check_call([sys.executable, "-m", "venv", venv_path])
     
     # Determine correct pip path
     pip_path = os.path.join(venv_path, "bin", "pip")
     if sys.platform.startswith("win"):
         pip_path = os.path.join(venv_path, "Scripts", "pip.exe")
     
-    # Install only required packages
-    install_cmd = [
+    # Install compatible NumPy version (using available version)
+    subprocess.check_call([pip_path, "install", "numpy==1.26.3", "--quiet"])
+    
+    # Install PyTorch stack
+    subprocess.check_call([
         pip_path, "install",
-        "numpy==1.26.4",
-        "torch==2.0.1+cu117",
-        "torchvision==0.15.2+cu117",
-        "torchaudio==2.0.2+cu117",
-        "torch-scatter",
-        "torch-sparse",
-        "torch-cluster",
-        "torch-spline-conv",
-        "torch-geometric",
+        "torch==2.0.1", "torchvision==0.15.2", "torchaudio==2.0.2",
         "--index-url", "https://download.pytorch.org/whl/cu117",
+        "--quiet"
+    ])
+    
+    # Install PyG packages
+    pyg_packages = [
+        "torch-scatter", "torch-sparse", "torch-cluster", "torch-spline-conv"
+    ]
+    for package in pyg_packages:
+        subprocess.check_call([
+            pip_path, "install", package,
+            "-f", "https://data.pyg.org/whl/torch-2.0.1+cu117.html",
+            "--quiet"
+        ])
+    
+    subprocess.check_call([
+        pip_path, "install", "torch-geometric",
         "-f", "https://data.pyg.org/whl/torch-2.0.1+cu117.html",
         "--quiet"
-    ]
-    subprocess.check_call(install_cmd)
+    ])
     
     # Restart using the virtual environment
     python_path = os.path.join(venv_path, "bin", "python")
@@ -48,7 +51,8 @@ try:
     
 except Exception as e:
     print(f"Environment setup failed: {e}")
-    sys.exit(1)
+    # Attempt to run with current environment
+    print("Attempting to run with current environment...")
 import time
 import torch
 import matplotlib.pyplot as plt

@@ -353,9 +353,8 @@ def main(args):
                 
                 loss_result_dict = algorithm.update_a(data, opta)
                 
-                # Skip step if NaN detected
-                if torch.isnan(loss_result_dict['class']):
-                    print("Skipping step due to NaN loss")
+                if not np.isfinite(loss_result_dict['class']):
+                    print("Skipping step due to non-finite loss")
                     continue
                     
                 print_row([step, loss_result_dict['class']], colwidth=15)
@@ -377,9 +376,9 @@ def main(args):
                 
                 loss_result_dict = algorithm.update_d(data, optd)
                 
-                # Skip step if NaN detected
-                if any(torch.isnan(v) for v in loss_result_dict.values()):
-                    print("Skipping step due to NaN loss")
+                # Fix: Check if losses are finite using numpy
+                if any(not np.isfinite(v) for v in loss_result_dict.values()):
+                    print("Skipping step due to non-finite loss")
                     continue
                 
                 print_row([step, loss_result_dict['total'], loss_result_dict['dis'], loss_result_dict['ent']], colwidth=15)

@@ -41,14 +41,14 @@ class feat_bottleneck(nn.Module):
     def forward(self, x):
         """Forward pass through bottleneck"""
         # For GNN models, x is already flattened
-        if not isinstance(x, tuple):
-            x = self.bottleneck(x)
-            if self.type == "bn":
-                x = self.bn(x)
-            return x
+        if x.dim() > 2:
+            # Flatten the input if it has more than 2 dimensions
+            x = x.view(x.size(0), -1)
         
-        # Handle tuple input (preserve for compatibility)
-        return self.bottleneck(x[0])
+        x = self.bottleneck(x)
+        if self.type == "bn":
+            x = self.bn(x)
+        return x
 
 class feat_classifier(nn.Module):
     """

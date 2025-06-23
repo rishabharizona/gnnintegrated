@@ -107,23 +107,18 @@ class subdataset(mydataset):
     def __init__(self, args, dataset, indices):
         super(subdataset, self).__init__(args)
         
-        # Handle different index types safely
-        if isinstance(indices, list):
-            indices = torch.tensor(indices, dtype=torch.long)
-        elif isinstance(indices, np.ndarray):
-            # Convert via list to avoid numpy C API issues
-            indices = torch.tensor(indices.tolist(), dtype=torch.long)
-        elif not isinstance(indices, torch.Tensor):
-            indices = torch.tensor(indices, dtype=torch.long)
-        else:
-            indices = indices.to(torch.long)
+        # Convert indices to list format (safe for all types)
+        if isinstance(indices, np.ndarray):
+            indices = indices.tolist()
+        elif isinstance(indices, torch.Tensor):
+            indices = indices.cpu().numpy().tolist()
         
-        # Convert data to tensors safely
-        self.x = torch.as_tensor(dataset.x)[indices]
-        self.labels = torch.as_tensor(dataset.labels)[indices] if dataset.labels is not None else None
-        self.dlabels = torch.as_tensor(dataset.dlabels)[indices] if dataset.dlabels is not None else None
-        self.pclabels = torch.as_tensor(dataset.pclabels)[indices] if dataset.pclabels is not None else None
-        self.pdlabels = torch.as_tensor(dataset.pdlabels)[indices] if dataset.pdlabels is not None else None
+        # Direct list indexing
+        self.x = dataset.x[indices]
+        self.labels = dataset.labels[indices] if dataset.labels is not None else None
+        self.dlabels = dataset.dlabels[indices] if dataset.dlabels is not None else None
+        self.pclabels = dataset.pclabels[indices] if dataset.pclabels is not None else None
+        self.pdlabels = dataset.pdlabels[indices] if dataset.pdlabels is not None else None
         
         self.loader = dataset.loader
         self.task = dataset.task

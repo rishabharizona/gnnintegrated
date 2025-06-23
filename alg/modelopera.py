@@ -16,7 +16,7 @@ def get_fea(args):
     else:
         return act_network.ActNetwork(args.dataset)
 
-def accuracy(network, loader, weights=None, usedpredict='p'):
+def accuracy(network, loader, weights=None, usedpredict='p', transform_fn=None):
     """
     Calculate accuracy for a given data loader with support for:
     - Sample weighting
@@ -45,7 +45,9 @@ def accuracy(network, loader, weights=None, usedpredict='p'):
         for data in loader:
             x = data[0].cuda().float()
             y = data[1].cuda().long()
-            
+
+            if transform_fn:
+                x = transform_fn(x)
             # Select prediction method
             if usedpredict == 'p':
                 p = network.predict(x)

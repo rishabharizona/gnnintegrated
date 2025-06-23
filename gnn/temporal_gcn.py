@@ -16,6 +16,8 @@ class TemporalGCN(nn.Module):
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
+        self.in_features = input_dim  # For compatibility with algorithms
+        self.out_features = output_dim  # For compatibility with algorithms
         
         # Temporal feature extractor
         self.temporal_conv = nn.Sequential(

@@ -68,9 +68,9 @@ class Diversify(Algorithm):
         self.dbottleneck = common_network.feat_bottleneck(
             self.featurizer.in_features, args.bottleneck, args.layer)
         self.ddiscriminator = Adver_network.Discriminator(
-            args.bottleneck, args.dis_hidden, args.num_classes)
+            args.bottleneck, args.dis_hidden, args.domain_num)  # Fixed to domain_num
         self.dclassifier = common_network.feat_classifier(
-            int(args.latent_domain_num),
+            args.num_classes,  # Fixed to num_classes
             args.bottleneck,
             args.classifier
         )
@@ -94,6 +94,8 @@ class Diversify(Algorithm):
         self.criterion = nn.CrossEntropyLoss()
         # Add flag for explainability mode
         self.explain_mode = False  # New flag
+        # Domain label tracking
+        self.dlabel = None
 
     def update_d(self, minibatch, opt):
         """Update domain characterization components"""
@@ -101,6 +103,15 @@ class Diversify(Algorithm):
         # FIXED INDEXING: [1] is class label, [2] is domain label
         all_d1 = minibatch[2].cuda().long()  # Domain labels
         all_c1 = minibatch[1].cuda().long()  # Class labels
+        
+        # Validate domain labels
+        n_domains = self.args.domain_num
+        min_label = torch.min(all_d1).item()
+        max_label = torch.max(all_d1).item()
+        
+        if min_label < 0 or max_label >= n_domains:
+            print(f"⚠️ Domain labels out of bounds! Clamping to [0, {n_domains-1}]")
+            all_d1 = torch.clamp(all_d1, 0, n_domains-1)
         
         # Forward pass
         z1 = self.dbottleneck(self.featurizer(all_x1))
@@ -155,7 +166,7 @@ class Diversify(Algorithm):
         all_fea = all_fea.float().cpu().numpy()
 
         # Clustering for pseudo-domain labels
-        K = all_output.size(1)
+        K = self.args.latent_domain_num  # Use configured latent domain count
         aff = all_output.float().cpu().numpy()
         initc = aff.transpose().dot(all_fea)
         initc = initc / (1e-8 + aff.sum(axis=0)[:, None])
@@ -169,6 +180,9 @@ class Diversify(Algorithm):
             initc = initc / (1e-8 + aff.sum(axis=0)[:, None])
             dd = cdist(all_fea, initc, 'cosine')
             pred_label = dd.argmin(axis=1)
+            
+        # Clamp labels to valid range
+        pred_label = np.clip(pred_label, 0, K-1)
 
         # Handle ConcatDataset
         if isinstance(loader.dataset, ConcatDataset):
@@ -199,7 +213,12 @@ class Diversify(Algorithm):
         else:
             loader.dataset.set_labels_by_index(pred_label, all_index, 'pdlabel')
         
-        print(Counter(pred_label))
+        # Print label distribution
+        counter = Counter(pred_label)
+        print(f"Pseudo-domain label distribution: {dict(counter)}")
+        
+        # Store labels for validation
+        self.dlabel = torch.from_numpy(pred_label).long().cuda()
         
         # Return to training mode
         self.dbottleneck.train()
@@ -218,7 +237,21 @@ class Diversify(Algorithm):
         # Domain discrimination
         disc_input = Adver_network.ReverseLayerF.apply(all_z, self.args.alpha)
         disc_out = self.discriminator(disc_input)
-        disc_labels = data[4].cuda().long()
+        
+        # Get pseudo-domain labels and validate
+        if self.dlabel is None:
+            disc_labels = data[4].cuda().long()
+        else:
+            # Use stored labels if available
+            batch_indices = data[-1]  # Get sample indices
+            disc_labels = self.dlabel[batch_indices]
+            
+        # Clamp to valid range
+        n_domains = self.args.latent_domain_num
+        if disc_labels.min() < 0 or disc_labels.max() >= n_domains:
+            print(f"⚠️ Pseudo-domain labels out of bounds! Clamping to [0, {n_domains-1}]")
+            disc_labels = torch.clamp(disc_labels, 0, n_domains-1)
+            
         disc_loss = F.cross_entropy(disc_out, disc_labels)
         
         # Classification
@@ -239,7 +272,23 @@ class Diversify(Algorithm):
         """Update auxiliary classifier"""
         all_x = minibatches[0].cuda().float()
         all_c = minibatches[1].cuda().long()
-        all_d = minibatches[4].cuda().long()
+        
+        # Get pseudo-domain labels
+        if self.dlabel is None:
+            all_d = minibatches[4].cuda().long()
+        else:
+            batch_indices = minibatches[-1]  # Get sample indices
+            all_d = self.dlabel[batch_indices]
+            
+        # Validate domain labels
+        n_domains = self.args.latent_domain_num
+        min_label = torch.min(all_d).item()
+        max_label = torch.max(all_d).item()
+        
+        if min_label < 0 or max_label >= n_domains:
+            print(f"⚠️ Aux domain labels out of bounds! Clamping to [0, {n_domains-1}]")
+            all_d = torch.clamp(all_d, 0, n_domains-1)
+            
         all_y = all_d * self.args.num_classes + all_c
         
         # Forward pass

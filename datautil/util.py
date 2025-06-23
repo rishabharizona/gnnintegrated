@@ -107,16 +107,13 @@ class subdataset(mydataset):
     def __init__(self, args, dataset, indices):
         super(subdataset, self).__init__(args)
         
-        # Convert to list for universal indexing
-        if hasattr(indices, 'numpy'):  # PyTorch tensor
-            indices = indices.cpu().numpy()
-        if hasattr(indices, 'tolist'):  # NumPy array
+        # Convert any index type to Python list
+        if isinstance(indices, (np.ndarray, torch.Tensor)):
             indices = indices.tolist()
+        elif not isinstance(indices, list):
+            indices = list(indices)
             
-        # Ensure indices are basic Python types
-        indices = [int(idx) for idx in indices]
-        
-        # Extract data using list indexing
+        # Use basic Python indexing
         self.x = dataset.x[indices]
         self.labels = dataset.labels[indices] if dataset.labels is not None else None
         self.dlabels = dataset.dlabels[indices] if dataset.dlabels is not None else None

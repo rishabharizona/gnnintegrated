@@ -14,9 +14,15 @@ task_act = {'cross_people': cross_people}
 
 class SubsetWithLabelSetter(Subset):
     """Subset with label setting capability"""
-    def set_labels_by_index(self, labels, indices, key):
-        """Pass indices to underlying dataset for label setting"""
-        self.dataset.set_labels_by_index(labels, indices, key)
+    def __init__(self, dataset, indices, domain_label=None):
+        super().__init__(dataset, indices)
+        self.domain_label = domain_label
+        
+    def __getitem__(self, idx):
+        data = self.dataset[self.indices[idx]]
+        if self.domain_label is not None:
+            return (data[0], data[1], self.domain_label)
+        return data
 
 
 def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
@@ -26,9 +32,8 @@ def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
         batch_size=batch_size,
         num_workers=num_workers,
         shuffle=shuffle,
-        drop_last=shuffle  # Only drop last for training
+        drop_last=shuffle
     )
-# ==================== END GNN ADDITIONS ====================
 
 def get_dataloader(args, tr, val, tar):
     """
@@ -231,7 +236,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             accuracy = correct / total if total > 0 else 0
             domain_metrics.append((domain, avg_loss, accuracy))
 
-    # Calculate domain difficulty scores
+    # Calculate domain difficulty scores with numerical stability
     losses = [m[1] for m in domain_metrics]
     min_loss, max_loss = min(losses), max(losses)
     accs = [m[2] for m in domain_metrics]
@@ -239,9 +244,21 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     
     domain_scores = []
     for domain, loss, acc in domain_metrics:
-        # Normalize metrics
-        norm_loss = (loss - min_loss) / (max_loss - min_loss + 1e-10)
-        norm_acc = (acc - min_acc) / (max_acc - min_acc + 1e-10)
+        # Safe normalization with epsilon protection
+        loss_range = max_loss - min_loss
+        acc_range = max_acc - min_acc
+        
+        norm_loss = 0.0
+        if loss_range > 1e-8:  # Only normalize if significant range exists
+            norm_loss = (loss - min_loss) / loss_range
+        
+        norm_acc = 0.0
+        if acc_range > 1e-8:
+            norm_acc = (acc - min_acc) / acc_range
+        
+        # Clamp values to [0,1] range
+        norm_loss = max(0.0, min(1.0, norm_loss))
+        norm_acc = max(0.0, min(1.0, norm_acc))
         
         # Difficulty score: higher = harder
         difficulty = 0.7 * norm_loss + 0.3 * (1 - norm_acc)
@@ -270,20 +287,25 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
 
     # Gather training indices from selected domains
     train_domain_indices = {}
+    max_domain_size = 0
     for idx in range(len(train_dataset)):
         domain = train_dataset[idx][2]  # Assuming domain is at index 2
         train_domain_indices.setdefault(domain, []).append(idx)
+        if len(train_domain_indices[domain]) > max_domain_size:
+            max_domain_size = len(train_domain_indices[domain])
 
     selected_indices = []
     for domain in selected_domains:
         if domain in train_domain_indices:
             domain_indices = train_domain_indices[domain]
-            n_samples = min(len(domain_indices), max(50, int(len(domain_indices) * 0.8)))
+            # Proportional sampling based on domain size
+            sample_ratio = 0.5 + 0.5 * (1 - len(domain_indices) / max_domain_size
+            n_samples = min(len(domain_indices), max(50, int(len(domain_indices) * sample_ratio))
             selected_indices.extend(random.sample(domain_indices, n_samples))
 
     print(f"Selected {len(selected_indices)} samples from {len(selected_domains)} domains")
     
-    curriculum_subset = SubsetWithLabelSetter(train_dataset, selected_indices)
+    curriculum_subset = SubsetWithLabelSetter(train_dataset, selected_indices, domain_label=-1)
     
     # ===== GNN-SPECIFIC CURRICULUM LOADER =====
     if hasattr(args, 'model_type') and args.model_type == 'gnn':

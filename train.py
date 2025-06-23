@@ -240,12 +240,22 @@ def main(args):
         
         # Replace CNN feature extractor with GNN
         algorithm.featurizer = gnn_model
-        algorithm.bottleneck = feat.Bottleneck(
-            args.gnn_output_dim,  # New input dimension
-            args.bottleneck,
-            args.layer
-        ).cuda()
-        print(f"GNN initialized: hidden_dim={args.gnn_hidden_dim}, output_dim={args.gnn_output_dim}")
+        
+        # Create custom bottleneck layer
+        bottleneck_layers = []
+        current_dim = args.gnn_output_dim
+        
+        # Add intermediate layers (if any)
+        for _ in range(args.layer - 1):
+            bottleneck_layers.append(nn.Linear(current_dim, current_dim))
+            bottleneck_layers.append(nn.BatchNorm1d(current_dim))
+            bottleneck_layers.append(nn.ReLU(inplace=True))
+        
+        # Add final projection layer
+        bottleneck_layers.append(nn.Linear(current_dim, args.bottleneck))
+        
+        algorithm.bottleneck = nn.Sequential(*bottleneck_layers).cuda()
+        print(f"Custom bottleneck created: {args.layer} layers ({current_dim} -> {args.bottleneck})")
         
         # GNN Pretraining if enabled
         if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:

@@ -109,12 +109,15 @@ class subdataset(mydataset):
         # Convert numpy indices to PyTorch tensor
         if isinstance(indices, np.ndarray):
             indices = torch.from_numpy(indices).long()
-        self.x = dataset.x[indices]
+        
+        # Convert all data to tensors before indexing
+        self.x = torch.as_tensor(dataset.x)[indices]
+        self.labels = torch.as_tensor(dataset.labels)[indices] if dataset.labels is not None else None
+        self.dlabels = torch.as_tensor(dataset.dlabels)[indices] if dataset.dlabels is not None else None
+        self.pclabels = torch.as_tensor(dataset.pclabels)[indices] if dataset.pclabels is not None else None
+        self.pdlabels = torch.as_tensor(dataset.pdlabels)[indices] if dataset.pdlabels is not None else None
+        
         self.loader = dataset.loader
-        self.labels = dataset.labels[indices]
-        self.dlabels = dataset.dlabels[indices] if dataset.dlabels is not None else None
-        self.pclabels = dataset.pclabels[indices] if dataset.pclabels is not None else None
-        self.pdlabels = dataset.pdlabels[indices] if dataset.pdlabels is not None else None
         self.task = dataset.task
         self.dataset = dataset.dataset
         self.transform = dataset.transform

@@ -31,17 +31,6 @@ class TemporalGCN(nn.Module):
         self.in_features = input_dim
         self.out_features = output_dim
 
-    def build_graph(self, x):
-        """Build graph from input data"""
-        # x shape: [batch, timesteps, features]
-        batch_size, timesteps, features = x.shape
-        # Use first sample to build graph
-        sample = x[0].detach().cpu().numpy()
-        edge_index = self.graph_builder.build_graph(sample)
-        # Convert to tensor and repeat for batch
-        edge_index = torch.tensor(edge_index, dtype=torch.long).to(x.device)
-        return edge_index.repeat(1, batch_size)
-
     def forward(self, x):
         # Handle different input dimensions
         if x.dim() == 2:
@@ -56,20 +45,32 @@ class TemporalGCN(nn.Module):
         
         # Temporal convolution: [batch, features, timesteps]
         x = self.temporal_conv(x)  # Output: [batch, 32, timesteps//4]
+        _, _, reduced_timesteps = x.shape
         
         # Prepare for GCN: [batch, features, time] -> [batch*time, features]
-        x = x.permute(0, 2, 1)  # [batch, timesteps//4, 32]
-        x = x.reshape(batch_size * (timesteps//4), -1)
+        x = x.permute(0, 2, 1)  # [batch, reduced_timesteps, 32]
+        x = x.reshape(batch_size * reduced_timesteps, -1)
         
-        # Build graph
-        edge_index = self.build_graph(x)
+        # Build graph directly in forward pass
+        # Get first sample's features for graph building
+        sample = x[:reduced_timesteps].detach().cpu().numpy()
+        edge_index_single = self.graph_builder.build_graph(sample)
+        edge_index_single = torch.tensor(edge_index_single, dtype=torch.long).to(x.device)
+        
+        # Batch the graph with node offsetting
+        edge_indices = []
+        for i in range(batch_size):
+            offset = i * reduced_timesteps
+            edge_index_offset = edge_index_single + offset
+            edge_indices.append(edge_index_offset)
+        edge_index = torch.cat(edge_indices, dim=1)
         
         # Graph convolution
         x = F.relu(self.gcn1(x, edge_index))
         x = F.relu(self.gcn2(x, edge_index))
         
-        # Reshape back: [batch, timesteps//4, features]
-        x = x.reshape(batch_size, timesteps//4, -1)
+        # Reshape back: [batch, reduced_timesteps, features]
+        x = x.reshape(batch_size, reduced_timesteps, -1)
         
         # Global pooling over time
         x = torch.mean(x, dim=1)  # [batch, features]

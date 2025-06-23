@@ -240,6 +240,11 @@ def main(args):
         
         # Replace CNN feature extractor with GNN
         algorithm.featurizer = gnn_model
+        algorithm.bottleneck = feat.Bottleneck(
+            args.gnn_output_dim,  # New input dimension
+            args.bottleneck,
+            args.layer
+        ).cuda()
         print(f"GNN initialized: hidden_dim={args.gnn_hidden_dim}, output_dim={args.gnn_output_dim}")
         
         # GNN Pretraining if enabled

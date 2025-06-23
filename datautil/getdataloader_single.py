@@ -23,6 +23,13 @@ class SubsetWithLabelSetter(Subset):
         if self.domain_label is not None:
             return (data[0], data[1], self.domain_label)
         return data
+        
+    # ADD THIS METHOD TO FIX THE ERROR
+    def set_labels_by_index(self, labels, indices, key):
+        """Pass indices to underlying dataset for label setting"""
+        # Convert subset indices to original dataset indices
+        absolute_indices = [self.indices[i] for i in indices]
+        self.dataset.set_labels_by_index(labels, absolute_indices, key)
 
 
 def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):

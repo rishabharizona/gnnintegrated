@@ -42,31 +42,29 @@ class GraphBuilder:
         if threshold_type not in {'fixed', 'adaptive'}:
             raise ValueError(f"Invalid threshold_type '{threshold_type}'. Choose 'fixed' or 'adaptive'")
 
-    def build_graph(self, data_sample: np.ndarray) -> torch.LongTensor:
+    def build_graph(self, feature_sequence: np.ndarray) -> torch.LongTensor:
         """
-        Build graph edge indices from EMG sample for batch processing.
+        Build temporal graph from feature sequence (post-convolution)
         
         Args:
-            data_sample: EMG time-series of shape (time_steps, channels)
+            feature_sequence: Feature array of shape (time_steps, features)
             
         Returns:
             edge_index: Tensor of shape [2, num_edges]
         """
         # Validate input
-        if not isinstance(data_sample, np.ndarray):
-            raise TypeError(f"Input must be numpy array, got {type(data_sample)}")
+        if not isinstance(feature_sequence, np.ndarray):
+            raise TypeError(f"Input must be numpy array, got {type(feature_sequence)}")
             
-        if data_sample.ndim != 2:
-            raise ValueError(f"Input must be 2D (time_steps, channels), got shape {data_sample.shape}")
+        if feature_sequence.ndim != 2:
+            raise ValueError(f"Input must be 2D (time_steps, features), got shape {feature_sequence.shape}")
             
-        T, C = data_sample.shape
+        T, F = feature_sequence.shape
         if T < 2:
             raise ValueError(f"Need at least 2 time steps, got {T}")
-        if C < 2:
-            raise ValueError(f"Need at least 2 channels, got {C}")
 
-        # Compute similarity matrix between TIME STEPS (not channels)
-        similarity_matrix = self._compute_similarity(data_sample)
+        # Compute similarity matrix between TIME STEPS
+        similarity_matrix = self._compute_similarity(feature_sequence)
         
         # Determine threshold
         threshold = self._determine_threshold(similarity_matrix)
@@ -75,19 +73,20 @@ class GraphBuilder:
         return self._create_edges(similarity_matrix, threshold, T)
 
     def _compute_similarity(self, data: np.ndarray) -> np.ndarray:
-        """Compute similarity matrix between TIME STEPS (rows)"""
-        T, C = data.shape
+        """Compute similarity between time steps (temporal correlation)"""
+        T, F = data.shape
+        
         if self.method == 'correlation':
-            # Handle constant time steps
-            stds = np.std(data, axis=1)  # Calculate along channels
+            # Compute row-wise (time steps) std
+            stds = np.std(data, axis=1)
             constant_mask = stds < 1e-8
             if np.any(constant_mask):
                 # Add small noise to constant time steps
                 noise = np.random.normal(0, 1e-8, data.shape)
                 data = data + noise * constant_mask[:, np.newaxis]
             
-            # Compute correlation between time steps (rows)
-            cov_matrix = np.cov(data, rowvar=True)  # Rows are variables
+            # Compute time-step correlation
+            cov_matrix = np.cov(data, rowvar=True)
             std_products = np.outer(stds, stds)
             std_products[std_products < 1e-10] = 1e-10
             corr = cov_matrix / std_products
@@ -95,13 +94,11 @@ class GraphBuilder:
             return corr
             
         elif self.method == 'covariance':
-            # Compute covariance between time steps (rows)
             cov = np.cov(data, rowvar=True)
             np.nan_to_num(cov, copy=False, nan=0.0)
             return cov
             
         elif self.method == 'euclidean':
-            # Compute distance between time steps (rows)
             dist_matrix = squareform(pdist(data, 'euclidean'))
             max_dist = np.max(dist_matrix)
             if max_dist < 1e-8:

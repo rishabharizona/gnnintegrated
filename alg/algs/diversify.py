@@ -180,7 +180,7 @@ class Diversify(Algorithm):
                    inputs = self.ensure_correct_dimensions(inputs)
                    feas = self.dbottleneck(self.featurizer(inputs))
                 
-                all_fea.append(feas.float().cpu())
+                   all_fea.append(feas.float().cpu())
                 
                 # Store batch indices
                 batch_size = inputs.size(0)

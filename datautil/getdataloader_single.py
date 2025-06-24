@@ -232,10 +232,16 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     """
     # Group validation indices by domain
     domain_indices = {}
+    unique_domains = set()
     for idx in range(len(val_dataset)):
-        domain = val_dataset[idx][2]  # Assuming domain is at index 2
+        # Get domain ID from dataset (index 2 is domain label)
+        domain = val_dataset[idx][2].item() if isinstance(val_dataset[idx][2], torch.Tensor) else val_dataset[idx][2]
+        unique_domains.add(domain)
         domain_indices.setdefault(domain, []).append(idx)
-
+    
+    # Log actual number of domains found
+    print(f"\nFound {len(unique_domains)} unique domains in validation set")
+    
     domain_metrics = []
 
     # Compute loss and accuracy for each domain
@@ -243,8 +249,12 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     with torch.no_grad():
         for domain, indices in domain_indices.items():
             subset = Subset(val_dataset, indices)
+            
+            # Use appropriate collate function
+            collate_fn = collate_gnn if hasattr(args, 'model_type') and args.model_type == 'gnn' else None
             loader = DataLoader(subset, batch_size=args.batch_size, 
-                               shuffle=False, num_workers=args.N_WORKERS)
+                               shuffle=False, num_workers=args.N_WORKERS,
+                               collate_fn=collate_fn)
 
             total_loss = 0.0
             correct = 0
@@ -252,8 +262,13 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             num_batches = 0
 
             for batch in loader:
-                inputs = batch[0].cuda().float()
-                labels = batch[1].cuda().long()
+                # Handle GNN vs standard model inputs
+                if hasattr(args, 'model_type') and args.model_type == 'gnn':
+                    inputs = batch[0].to(args.device)
+                    labels = batch[1].to(args.device)
+                else:
+                    inputs = batch[0].cuda().float()
+                    labels = batch[1].cuda().long()
                 
                 output = algorithm.predict(inputs)
                 loss = torch.nn.functional.cross_entropy(output, labels)
@@ -299,9 +314,21 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # Sort by easiest domains first
     domain_scores.sort(key=lambda x: x[1])
     
+    # Only print top and bottom domains for readability
     print("\n--- Domain Difficulty Ranking (easiest to hardest) ---")
-    for rank, (domain, difficulty) in enumerate(domain_scores, 1):
+    print(f"Showing top 10 and bottom 10 of {len(domain_scores)} domains")
+    
+    # Print easiest domains
+    for rank, (domain, difficulty) in enumerate(domain_scores[:10], 1):
         print(f"{rank}. Domain {domain}: Difficulty = {difficulty:.4f}")
+    
+    # Print separator if there are many domains
+    if len(domain_scores) > 20:
+        print("...")
+        # Print hardest domains
+        for rank in range(len(domain_scores)-10, len(domain_scores)):
+            domain, difficulty = domain_scores[rank]
+            print(f"{rank+1}. Domain {domain}: Difficulty = {difficulty:.4f}")
 
     # Curriculum progression
     num_domains = len(domain_scores)
@@ -321,7 +348,8 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     train_domain_indices = {}
     max_domain_size = 0
     for idx in range(len(train_dataset)):
-        domain = train_dataset[idx][2]  # Assuming domain is at index 2
+        # Get domain ID from dataset (index 2 is domain label)
+        domain = train_dataset[idx][2].item() if isinstance(train_dataset[idx][2], torch.Tensor) else train_dataset[idx][2]
         train_domain_indices.setdefault(domain, []).append(idx)
         if len(train_domain_indices[domain]) > max_domain_size:
             max_domain_size = len(train_domain_indices[domain])
@@ -334,6 +362,13 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             sample_ratio = 0.5 + 0.5 * (1 - len(domain_indices) / max_domain_size)
             n_samples = min(len(domain_indices), max(50, int(len(domain_indices) * sample_ratio)))
             selected_indices.extend(random.sample(domain_indices, n_samples))
+        else:
+            print(f"Warning: Domain {domain} not found in training set")
+
+    # Fallback if no samples selected
+    if len(selected_indices) == 0:
+        print("Warning: No samples selected! Using entire training set as fallback")
+        selected_indices = list(range(len(train_dataset)))
 
     print(f"Selected {len(selected_indices)} samples from {len(selected_domains)} domains")
     

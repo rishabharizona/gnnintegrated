@@ -393,20 +393,36 @@ def main(args):
         else:
             current_epochs = args.local_epoch
         
-        # Curriculum learning setup
+               # Curriculum learning setup
         if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
             print(f"Curriculum learning: Stage {round_idx}")
             
-            # Get the curriculum loader without transformation
+            # Create a wrapped predict function for domain evaluation
+            def wrapped_predict(model, x):
+                if args.use_gnn and GNN_AVAILABLE:
+                    x = transform_for_gnn(x)
+                return model.predict(x)
+            
+            # Create a temporary algorithm with wrapped predict
+            class TempAlgorithmWrapper:
+                def __init__(self, model):
+                    self.model = model
+                
+                def predict(self, x):
+                    return wrapped_predict(self.model, x)
+            
+            temp_algorithm = TempAlgorithmWrapper(algorithm)
+            
+            # Get the curriculum loader using wrapped predict
             train_loader = get_curriculum_loader(
                 args,
-                algorithm,
+                temp_algorithm,
                 tr,
                 val,
                 stage=round_idx
             )
             
-            # Apply GNN transformation if needed
+            # Apply GNN transformation to the final training loader
             if args.use_gnn and GNN_AVAILABLE:
                 # Create transformed dataset
                 class TransformedDataset(torch.utils.data.Dataset):
@@ -418,7 +434,6 @@ def main(args):
                     
                     def __getitem__(self, idx):
                         data = self.original_dataset[idx]
-                        # Handle both 3-element and 4-element tuples
                         if len(data) == 3:  # (input, class_label, domain_label)
                             x, y, d = data
                             x = transform_for_gnn(x)
@@ -427,7 +442,7 @@ def main(args):
                             x, y = data
                             x = transform_for_gnn(x)
                             return x, y
-                        else:  # Handle unexpected formats
+                        else:
                             x = data[0]
                             x = transform_for_gnn(x)
                             return (x, *data[1:])

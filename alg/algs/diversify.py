@@ -177,8 +177,8 @@ class Diversify(Algorithm):
                if self.args.use_gnn:
                    inputs = transform_for_gnn(inputs)
                 # Apply temporary dimension fix if needed
-                inputs = self.ensure_correct_dimensions(inputs)
-                feas = self.dbottleneck(self.featurizer(inputs))
+                   inputs = self.ensure_correct_dimensions(inputs)
+                   feas = self.dbottleneck(self.featurizer(inputs))
                 
                 all_fea.append(feas.float().cpu())
                 

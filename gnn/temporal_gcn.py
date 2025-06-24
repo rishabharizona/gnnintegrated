@@ -40,13 +40,14 @@ class TemporalGCN(nn.Module):
         # Cache for graphs to avoid rebuilding
         self.graph_cache = {}
 
-    def _build_fully_connected(self, num_nodes):
-        """Build a fully connected graph for fallback"""
-        edge_index = torch.tensor(
-            [[i, j] for i in range(num_nodes) for j in range(num_nodes) if i != j],
-            dtype=torch.long
-        ).t().contiguous()
-        return edge_index
+    def _create_chain_graph(self, num_nodes: int) -> torch.LongTensor:
+        """Create temporal chain graph as fallback"""
+        edges = []
+        for i in range(num_nodes - 1):
+            # Connect consecutive time steps
+            edges.append([i, i+1])
+            edges.append([i+1, i])
+        return torch.tensor(edges, dtype=torch.long).t().contiguous()
 
     def forward(self, x):
         # Save original shape for reconstruction
@@ -74,36 +75,34 @@ class TemporalGCN(nn.Module):
         
         # Prepare for GCN: [batch, features, time] -> [batch, time, features]
         x = x.permute(0, 2, 1)  # [batch, reduced_timesteps, 32]
-        x = x.reshape(batch_size * reduced_timesteps, -1)
+        x_flat = x.reshape(batch_size * reduced_timesteps, -1)
         
         # Build or retrieve graph
-        cache_key = f"{reduced_timesteps}_{batch_size}"
+        cache_key = f"{reduced_timesteps}"
         if cache_key in self.graph_cache:
             edge_index = self.graph_cache[cache_key]
         else:
             try:
-                # Build graph using the graph builder
-                sample = x[:reduced_timesteps].detach().cpu().numpy()
-                edge_index = self.graph_builder.build_graph(sample)  # FIXED: use build_graph method
+                # Use MEAN features across batch for representativeness
+                mean_features = x.mean(dim=0).detach().cpu().numpy()
+                edge_index = self.graph_builder.build_graph(mean_features)
                 
-                # Handle empty graph case
-                if edge_index.numel() == 0:
-                    raise RuntimeError("Graph builder returned empty graph")
+                # Validate and clamp
+                max_index = reduced_timesteps - 1
+                if torch.any(edge_index > max_index):
+                    print(f"Edge index contains out-of-bounds indices! Clamping to [0, {max_index}]")
+                    edge_index = torch.clamp(edge_index, 0, max_index)
+                
+                self.graph_cache[cache_key] = edge_index
+                print(f"Built new graph with {edge_index.shape[1]} edges for {reduced_timesteps} time steps")
+                
             except Exception as e:
-                print(f"Graph building failed: {e}, using fully connected fallback")
-                edge_index = self._build_fully_connected(reduced_timesteps)
-            
-            # Validate edge indices
-            max_index = reduced_timesteps - 1
-            if torch.any(edge_index > max_index):
-                print(f"Edge index contains out-of-bounds indices! Clamping to [0, {max_index}]")
-                edge_index = torch.clamp(edge_index, 0, max_index)
-            
-            # Cache the graph
-            self.graph_cache[cache_key] = edge_index
+                print(f"Graph building failed: {e}, using chain fallback")
+                edge_index = self._create_chain_graph(reduced_timesteps)
+                self.graph_cache[cache_key] = edge_index
         
         # Move to device and clone to avoid warnings
-        edge_index = edge_index.to(x.device).clone().detach()
+        edge_index = self.graph_cache[cache_key].to(x.device).clone().detach()
         
         # Batch the graph with node offsetting
         edge_indices = []
@@ -120,7 +119,7 @@ class TemporalGCN(nn.Module):
             edge_index = torch.clamp(edge_index, 0, max_index)
         
         # Graph convolution
-        x = F.relu(self.gcn1(x, edge_index))
+        x = F.relu(self.gcn1(x_flat, edge_index))
         x = F.relu(self.gcn2(x, edge_index))
         
         # Reshape back: [batch, reduced_timesteps, features]

@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from torch_geometric.data import Data  # Add this import
 
 def Nmax(args, d):
     """
@@ -97,6 +98,10 @@ class mydataset(object):
         dtarget = self.target_trans(self.dlabels[index])
         pctarget = self.target_trans(self.pclabels[index])
         pdtarget = self.target_trans(self.pdlabels[index])
+        
+        # For GNN models, convert to graph data object
+        if hasattr(self.args, 'model_type') and self.args.model_type == 'gnn' and not isinstance(x, Data):
+            x = Data(x=x, edge_index=torch.tensor([[], []]), edge_attr=torch.tensor([]))
         return x, ctarget, dtarget, pctarget, pdtarget, index
 
     def __len__(self):

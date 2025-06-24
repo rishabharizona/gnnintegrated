@@ -8,9 +8,23 @@ from datautil.util import combindataset, subdataset
 import datautil.actdata.cross_people as cross_people
 from torch_geometric.data import Batch, Data
 from datautil.graph_utils import convert_to_graph
+import torch.nn as nn  # Added for nn.Module inheritance
 
 # Task mapping for activity recognition
 task_act = {'cross_people': cross_people}
+
+# ======== ADDED TEMP ALGORITHM WRAPPER ========
+class TempAlgorithmWrapper(nn.Module):  # Inherit from nn.Module
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+    
+    def forward(self, x):  # Implement forward for nn.Module
+        return self.predict(x)
+    
+    def predict(self, x):
+        return self.model.predict(x)  # Delegate to model's predict
+# ======== END OF ADDITION ========
 
 class SafeSubset(Subset):
     """Safe subset that eliminates all numpy types"""
@@ -230,6 +244,13 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     Returns:
         Curriculum DataLoader with selected samples
     """
+    # ======== ADDED WRAPPER LOGIC ========
+    # Wrap algorithm if it doesn't have eval method
+    if not hasattr(algorithm, 'eval'):
+        print("\nWrapping algorithm in TempAlgorithmWrapper for eval() support")
+        algorithm = TempAlgorithmWrapper(algorithm)
+    # ======== END OF ADDITION ========
+    
     # Group validation indices by domain
     domain_indices = {}
     unique_domains = set()

@@ -84,7 +84,7 @@ class TemporalGCN(nn.Module):
             try:
                 # Build graph using the graph builder
                 sample = x[:reduced_timesteps].detach().cpu().numpy()
-                edge_index = self.graph_builder.build_graph(sample)
+                edge_index = self.graph_builder.build_graph(sample)  # FIXED: use build_graph method
                 
                 # Handle empty graph case
                 if edge_index.numel() == 0:

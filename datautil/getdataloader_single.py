@@ -231,7 +231,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     Returns:
         Curriculum DataLoader with selected samples
     """
-    
+    algorithm.eval()
     # Group validation indices by domain
     domain_indices = {}
     unique_domains = set()

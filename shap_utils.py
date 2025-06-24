@@ -275,9 +275,16 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
         # Calculate importance per time step (average across channels and spatial)
         importance = np.abs(shap_vals_np[i]).mean(axis=(0, 1))
         
+        # Ensure importance array matches time dimension
+        if len(importance) > n_timesteps:
+            importance = importance[:n_timesteps]
+        
         # Determine threshold for top K%
         k = int(n_timesteps * top_k)
         top_indices = np.argsort(importance)[-k:]
+        
+        # Ensure indices are within valid range
+        top_indices = top_indices[top_indices < n_timesteps]
         
         # Mask important timesteps across all channels
         masked_inputs[i, :, :, top_indices] = 0
@@ -338,6 +345,11 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     for i in range(batch_size):
         # Get importance scores (average across channels and spatial)
         importance = np.abs(shap_vals_np[i]).mean(axis=(0, 1))
+        
+        # Ensure importance array matches time dimension
+        if len(importance) > n_timesteps:
+            importance = importance[:n_timesteps]
+        
         sorted_indices = np.argsort(importance)[::-1].copy()
         mask_indices_tensor = torch.from_numpy(sorted_indices).to(device)
         
@@ -349,6 +361,9 @@ def compute_aopc(model, inputs, shap_values, steps=10):
         for step in range(1, steps + 1):
             k = int(n_timesteps * step / steps)
             mask_indices = mask_indices_tensor[:k]
+            
+            # Ensure indices are within valid range
+            mask_indices = mask_indices[mask_indices < n_timesteps]
             
             modified_input = current_input.clone()
             modified_input[:, :, :, mask_indices] = 0

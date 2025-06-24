@@ -366,7 +366,12 @@ def compute_aopc(model, inputs, shap_values, steps=10):
             mask_indices = mask_indices[mask_indices < n_timesteps]
             
             modified_input = current_input.clone()
-            modified_input[:, :, :, mask_indices] = 0
+            
+            # Correct indexing based on tensor dimensions
+            if modified_input.dim() == 3:  # (channels, spatial, timesteps)
+                modified_input[:, :, mask_indices] = 0
+            else:  # Handle unexpected dimensions
+                modified_input[..., mask_indices] = 0
             
             # Get prediction
             with torch.no_grad():

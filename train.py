@@ -123,10 +123,28 @@ def calculate_h_divergence(features_source, features_target):
     return h_divergence, domain_acc
 
 def transform_for_gnn(x):
-    """Transform 4D input to 3D for GNN models"""
-    if x.dim() == 4 and x.shape[2] == 1:
-        return x.squeeze(2).permute(0, 2, 1)
-    return x
+    """Robust transformation for GNN input handling various formats"""
+    if not GNN_AVAILABLE:
+        return x
+        
+    # Handle common 4D formats
+    if x.dim() == 4:
+        # Format 1: [batch, channels, 1, time] -> [batch, time, channels]
+        if x.size(1) == 8:  # EMG channels at dimension 1
+            return x.squeeze(2).permute(0, 2, 1)
+        # Format 2: [batch, 1, channels, time] -> [batch, time, channels]
+        elif x.size(2) == 8:
+            return x.squeeze(1).permute(0, 2, 1)
+        # Format 3: [batch, time, 1, channels] -> [batch, time, channels]
+        elif x.size(3) == 8:
+            return x.squeeze(2)
+    
+    # Already in correct 3D format
+    elif x.dim() == 3:
+        return x
+        
+    # Unsupported format
+    raise ValueError(f"Cannot transform input of shape {x.shape} for GNN")
 
 def main(args):
     s = print_args(args, [])
@@ -173,7 +191,9 @@ def main(args):
                 
                 # Handle GNN input format if needed
                 if args.use_gnn and GNN_AVAILABLE:
-                    inputs = inputs.squeeze(2).permute(0, 2, 1)  # Convert to (batch, time, features)
+                    inputs = transform_for_gnn(inputs)
+                    if inputs.dim() != 3:
+                        raise ValueError(f"GNN requires 3D input (B,T,C), got {inputs.shape}")
                 
                 features = temp_model(inputs)
                 feature_list.append(features.cpu().numpy())
@@ -239,24 +259,28 @@ def main(args):
             fully_connected_fallback=True
         )
         
-        # FIXED: Enhanced Temporal GCN with proper skip connection
+        # Enhanced Temporal GCN with robust skip connection
         class EnhancedTemporalGCN(TemporalGCN):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
                 # Add skip connection with temporal aggregation
-                if kwargs['input_dim'] != kwargs['output_dim']:
-                    self.skip_conn = nn.Sequential(
-                        nn.Linear(kwargs['input_dim'], kwargs['output_dim']),
-                        nn.ReLU(),
-                    )
-                    self.temporal_aggregator = nn.AdaptiveAvgPool1d(1)
-                else:
-                    self.skip_conn = nn.Identity()
-                    self.temporal_aggregator = nn.Identity()
-                    
+                self.skip_conn = nn.Sequential(
+                    nn.Linear(kwargs['input_dim'], kwargs['output_dim']),
+                    nn.ReLU(),
+                )
+                self.temporal_aggregator = nn.AdaptiveAvgPool1d(1)
+                
             def forward(self, x):
+                # Input shape verification
+                if x.size(-1) != self.input_dim:
+                    raise ValueError(
+                        f"Input features dim mismatch! Expected {self.input_dim}, "
+                        f"got {x.size(-1)}. Full shape: {x.shape}"
+                    )
+                    
                 # Original processing
                 out = super().forward(x)
+                
                 # Process skip connection with temporal aggregation
                 skip_out = self.skip_conn(x)  # [batch, time, output_dim]
                 skip_out = skip_out.permute(0, 2, 1)  # [batch, output_dim, time]
@@ -393,7 +417,7 @@ def main(args):
         else:
             current_epochs = args.local_epoch
         
-               # Curriculum learning setup
+        # Curriculum learning setup
         if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
             print(f"Curriculum learning: Stage {round_idx}")
             
@@ -421,40 +445,6 @@ def main(args):
                 val,
                 stage=round_idx
             )
-            
-            # Apply GNN transformation to the final training loader
-            if args.use_gnn and GNN_AVAILABLE:
-                # Create transformed dataset
-                class TransformedDataset(torch.utils.data.Dataset):
-                    def __init__(self, original_dataset):
-                        self.original_dataset = original_dataset
-                        
-                    def __len__(self):
-                        return len(self.original_dataset)
-                    
-                    def __getitem__(self, idx):
-                        data = self.original_dataset[idx]
-                        if len(data) == 3:  # (input, class_label, domain_label)
-                            x, y, d = data
-                            x = transform_for_gnn(x)
-                            return x, y, d
-                        elif len(data) == 2:  # (input, class_label)
-                            x, y = data
-                            x = transform_for_gnn(x)
-                            return x, y
-                        else:
-                            x = data[0]
-                            x = transform_for_gnn(x)
-                            return (x, *data[1:])
-                
-                # Wrap the dataset with transformation
-                transformed_dataset = TransformedDataset(train_loader.dataset)
-                train_loader = DataLoader(
-                    transformed_dataset,
-                    batch_size=args.batch_size,
-                    shuffle=True,
-                    num_workers=min(2, args.N_WORKERS)
-                )
             
             # Update the no-shuffle loader as well
             train_loader_noshuffle = DataLoader(

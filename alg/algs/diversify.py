@@ -240,11 +240,9 @@ class Diversify(Algorithm):
             batch_indices = data[-1]
             disc_labels = self.dlabel[batch_indices]
             
-        # Validate labels
+        # Validate labels and clamp to valid range
         n_domains = self.args.latent_domain_num
-        if disc_labels.min() < 0 or disc_labels.max() >= n_domains:
-            print(f"⚠️ Pseudo-domain labels out of bounds! Clamping to [0, {n_domains-1}]")
-            disc_labels = torch.clamp(disc_labels, 0, n_domains-1)
+        disc_labels = torch.clamp(disc_labels, 0, n_domains-1)
             
         disc_loss = F.cross_entropy(disc_out, disc_labels)
         
@@ -274,14 +272,9 @@ class Diversify(Algorithm):
             batch_indices = minibatches[-1]
             all_d = self.dlabel[batch_indices]
             
-        # Validate domain labels
+        # Validate domain labels and clamp to valid range
         n_domains = self.args.latent_domain_num
-        min_label = torch.min(all_d).item()
-        max_label = torch.max(all_d).item()
-        
-        if min_label < 0 or max_label >= n_domains:
-            print(f"⚠️ Aux domain labels out of bounds! Clamping to [0, {n_domains-1}]")
-            all_d = torch.clamp(all_d, 0, n_domains-1)
+        all_d = torch.clamp(all_d, 0, n_domains-1)
             
         all_y = all_d * self.args.num_classes + all_c
         

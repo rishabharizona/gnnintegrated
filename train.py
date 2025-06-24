@@ -282,13 +282,19 @@ def main(args):
                 self.temporal_aggregator = nn.AdaptiveAvgPool1d(1)
                 
             def forward(self, x):
+                # Convert 4D input to 3D if necessary
+                if x.dim() == 4:
+                    # Handle 4D input: [batch, channels, 1, time]
+                    # Convert to [batch, time, channels]
+                    x = x.squeeze(2).permute(0, 2, 1)
+                
                 # Input shape verification - allow both 8 (raw) and 200 (embedded)
                 if x.size(-1) not in [8, 200]:
                     raise ValueError(
                         f"Input features dim mismatch! Expected 8 (raw) or 200 (embedded), "
                         f"got {x.size(-1)}. Full shape: {x.shape}"
                     )
-                
+        
                 # Apply feature projection if needed (200 -> 8)
                 if x.size(-1) == 200 and self.input_dim == 8:
                     if not hasattr(self, 'feature_projection'):
@@ -296,15 +302,24 @@ def main(args):
                         self.feature_projection = nn.Linear(200, 8).to(x.device)
                         print("Created feature projection layer: 200 -> 8")
                     x = self.feature_projection(x)
-                
-                # Original processing (this calls TemporalGCN.forward which uses build_graph)
+        
+                # Original processing
                 out = super().forward(x)
-                
+        
                 # Process skip connection with temporal aggregation
-                skip_out = self.skip_conn(x)  # [batch, time, output_dim]
+                # Handle both 3D and 4D inputs for skip connection
+                if x.dim() == 4:
+                    # For 4D: [batch, channels, 1, time]
+                    skip_out = x.squeeze(2)  # [batch, channels, time]
+                    skip_out = skip_out.permute(0, 2, 1)  # [batch, time, channels]
+                else:
+                    skip_out = x
+                
+                skip_out = self.skip_conn(skip_out)  # [batch, time, output_dim]
                 skip_out = skip_out.permute(0, 2, 1)  # [batch, output_dim, time]
                 skip_out = self.temporal_aggregator(skip_out)  # [batch, output_dim, 1]
                 skip_out = skip_out.squeeze(2)  # [batch, output_dim]
+        
                 return out + skip_out
         
         gnn_model = EnhancedTemporalGCN(

@@ -130,12 +130,14 @@ class GraphBuilder:
         edges = []
         
         # Create edges where absolute similarity exceeds threshold
-        for i, j in itertools.combinations(range(num_channels), 2):
-            similarity = matrix[i, j]
-            if abs(similarity) > threshold:
-                edges.append([i, j])
-                edges.append([j, i])  # Undirected graph
-                
+        for i in range(num_channels):
+            for j in range(i+1, num_channels):  # Only need to do upper triangle
+                similarity = matrix[i, j]
+                if abs(similarity) > threshold:
+                    # Add both directions for undirected graph
+                    edges.append([i, j])
+                    edges.append([j, i])
+    
         # Handle no-edge case
         if not edges and self.fully_connected_fallback:
             return self._create_fully_connected(num_channels)
@@ -143,8 +145,15 @@ class GraphBuilder:
         # Convert to tensor
         if not edges:
             return torch.empty((2, 0), dtype=torch.long)
-            
+        
         edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
+        
+        # Validate indices
+        if torch.any(edge_index >= num_channels) or torch.any(edge_index < 0):
+            min_index = torch.min(edge_index).item()
+            max_index = torch.max(edge_index).item()
+            print(f"Edge indices out of bounds! Min: {min_index}, Max: {max_index} (should be 0-{num_channels-1})")
+            edge_index = torch.clamp(edge_index, 0, num_channels-1)
         
         return edge_index
 

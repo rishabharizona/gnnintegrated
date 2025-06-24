@@ -8,6 +8,7 @@ from torch.utils.data import ConcatDataset, Subset
 from torch_geometric.nn import GCNConv, GATConv
 from sklearn.cluster import KMeans
 
+from datautil.getdataloader_single import transform_for_gnn
 from alg.modelopera import get_fea
 from network import Adver_network, common_network
 from alg.algs.base import Algorithm
@@ -173,14 +174,14 @@ class Diversify(Algorithm):
             # Manually track the index counter
             index_counter = 0
             for batch in loader:
-               inputs = batch[0].cuda().float()
-               if self.args.use_gnn:
-                   inputs = transform_for_gnn(inputs)
+                inputs = batch[0].cuda().float()
+                if self.args.use_gnn:
+                    inputs = transform_for_gnn(inputs)
                 # Apply temporary dimension fix if needed
-                   inputs = self.ensure_correct_dimensions(inputs)
-                   feas = self.dbottleneck(self.featurizer(inputs))
+                inputs = self.ensure_correct_dimensions(inputs)
+                feas = self.dbottleneck(self.featurizer(inputs))
                 
-                   all_fea.append(feas.float().cpu())
+                all_fea.append(feas.float().cpu())
                 
                 # Store batch indices
                 batch_size = inputs.size(0)

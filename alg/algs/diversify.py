@@ -95,6 +95,36 @@ class Diversify(Algorithm):
         self.criterion = nn.CrossEntropyLoss()
         # Add flag for explainability mode
         self.explain_mode = False
+        
+        # Apply permanent fix to skip connection layer
+        self.patch_skip_connection()
+
+    def patch_skip_connection(self):
+        """Permanently fix skip connection layer dimensions"""
+        # Check if skip_conn exists directly
+        if hasattr(self.featurizer, 'skip_conn') and isinstance(self.featurizer.skip_conn, nn.Linear):
+            if self.featurizer.skip_conn.in_features != 200:
+                original_out_features = self.featurizer.skip_conn.out_features
+                original_device = next(self.featurizer.skip_conn.parameters()).device
+                self.featurizer.skip_conn = nn.Linear(200, original_out_features)
+                self.featurizer.skip_conn.to(original_device)
+                print(f"Permanently patched skip_conn: in_features=200, out_features={original_out_features}")
+            return
+        
+        # Recursively search for skip_conn in nested modules
+        for name, module in self.featurizer.named_children():
+            if isinstance(module, nn.Linear) and "skip" in name.lower():
+                if module.in_features != 200:
+                    original_out_features = module.out_features
+                    original_device = next(module.parameters()).device
+                    new_layer = nn.Linear(200, original_out_features)
+                    new_layer.to(original_device)
+                    setattr(self.featurizer, name, new_layer)
+                    print(f"Permanently patched {name}: in_features=200, out_features={original_out_features}")
+                return
+        
+        # If we reach here, no skip connection was found
+        print("Warning: No skip connection layer found in featurizer")
 
     def update_d(self, minibatch, opt):
         """Update domain characterization components"""
@@ -132,17 +162,6 @@ class Diversify(Algorithm):
 
     def set_dlabel(self, loader):
         """Set pseudo-domain labels using clustering"""
-        # Apply dimension fix for skip connection layer
-        if hasattr(self.featurizer, 'skip_conn') and \
-           isinstance(self.featurizer.skip_conn, nn.Linear) and \
-           self.featurizer.skip_conn.in_features == 8:
-            
-            # Replace problematic layer
-            original_device = next(self.featurizer.skip_conn.parameters()).device
-            self.featurizer.skip_conn = nn.Linear(200, self.featurizer.skip_conn.out_features)
-            self.featurizer.skip_conn.to(original_device)
-            print("Patched skip_conn layer: changed input dimension from 8 to 200")
-        
         self.dbottleneck.eval()
         self.dclassifier.eval()
         self.featurizer.eval()
@@ -155,6 +174,8 @@ class Diversify(Algorithm):
             index_counter = 0
             for batch in loader:
                 inputs = batch[0].cuda().float()
+                # Apply temporary dimension fix if needed
+                inputs = self.ensure_correct_dimensions(inputs)
                 feas = self.dbottleneck(self.featurizer(inputs))
                 
                 all_fea.append(feas.float().cpu())
@@ -222,10 +243,27 @@ class Diversify(Algorithm):
         self.dbottleneck.train()
         self.dclassifier.train()
         self.featurizer.train()
+    
+    def ensure_correct_dimensions(self, inputs):
+        """Ensure inputs have correct dimensions for skip connection"""
+        # Check if input dimensions match expected skip connection dimensions
+        if inputs.shape[-1] != 200:
+            # Reshape to expected dimensions (batch_size, seq_len, features)
+            if inputs.dim() == 2:
+                # Assuming [batch_size, features]
+                inputs = inputs.view(inputs.size(0), 1, inputs.size(1))
+            elif inputs.dim() == 3 and inputs.size(1) == 1:
+                # [batch_size, 1, features] - expand time dimension
+                inputs = inputs.expand(-1, 200, -1)
+            elif inputs.dim() == 3:
+                # [batch_size, time, features] - transpose to match expected
+                inputs = inputs.transpose(1, 2)
+        return inputs
 
     def update(self, data, opt):
         """Update domain-invariant features"""
         all_x = data[0].cuda().float()
+        all_x = self.ensure_correct_dimensions(all_x)
         all_y = data[1].cuda().long()
         all_z = self.bottleneck(self.featurizer(all_x))
         if self.explain_mode:
@@ -272,6 +310,7 @@ class Diversify(Algorithm):
     def update_a(self, minibatches, opt):
         """Update auxiliary classifier"""
         all_x = minibatches[0].cuda().float()
+        all_x = self.ensure_correct_dimensions(all_x)
         all_c = minibatches[1].cuda().long()
         
         # Get pseudo-domain labels directly from batch
@@ -304,6 +343,7 @@ class Diversify(Algorithm):
 
     def predict(self, x):
         """Main prediction method"""
+        x = self.ensure_correct_dimensions(x)
         features = self.featurizer(x)
         bottleneck_out = self.bottleneck(features)
         if self.explain_mode:
@@ -312,6 +352,7 @@ class Diversify(Algorithm):
     
     def predict1(self, x):
         """Domain discriminator prediction"""
+        x = self.ensure_correct_dimensions(x)
         features = self.featurizer(x)
         bottleneck_out = self.dbottleneck(features)
         if self.explain_mode:
@@ -320,6 +361,7 @@ class Diversify(Algorithm):
     
     def forward(self, batch):
         inputs = batch[0]
+        inputs = self.ensure_correct_dimensions(inputs)
         labels = batch[1]
         
         preds = self.predict(inputs)
@@ -335,6 +377,7 @@ class Diversify(Algorithm):
         try:
             self.explain_mode = True
             with torch.no_grad():
+                x = self.ensure_correct_dimensions(x)
                 return self.predict(x)
         finally:
             self.explain_mode = original_mode

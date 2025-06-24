@@ -1,4 +1,7 @@
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
+import tensorflow as tf
+tf.get_logger().setLevel('ERROR')  # Suppress TensorFlow warnings
 import sys
 import subprocess
 import time
@@ -677,10 +680,26 @@ def main(args):
             
             # Compute SHAP values safely
             shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
-            
             # Convert to numpy safely before visualization
             X_eval_np = X_eval.detach().cpu().numpy()
-            
+            # Handle GNN dimensionality for visualization
+            if args.use_gnn and GNN_AVAILABLE:
+                print(f"Original SHAP values shape: {shap_vals.shape}")
+                print(f"Original X_eval shape: {X_eval_np.shape}")
+                
+                # Check dimensions before transposing
+                if shap_vals.ndim == 3:
+                    # Convert 3D (batch, time, channels) to 4D (batch, channels, 1, time)
+                    shap_vals = np.transpose(shap_vals, (0, 2, 1))
+                    shap_vals = np.expand_dims(shap_vals, axis=2)
+                    X_eval_np = np.transpose(X_eval_np, (0, 2, 1))
+                    X_eval_np = np.expand_dims(X_eval_np, axis=2)
+                elif shap_vals.ndim == 4:
+                    # Already in 4D format, no need to transpose
+                    pass
+                else:
+                    print(f"⚠️ Unexpected SHAP values dimension: {shap_vals.ndim}")
+                    print("Skipping visualization-specific reshaping")
             # Handle GNN dimensionality for visualization
             if args.use_gnn and GNN_AVAILABLE:
                 # Convert 3D (batch, time, channels) to 4D (batch, channels, 1, time)

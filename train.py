@@ -130,7 +130,7 @@ def transform_for_gnn(x):
     # Handle common 4D formats
     if x.dim() == 4:
         # Format 1: [batch, channels, 1, time] -> [batch, time, channels]
-        if x.size(1) == 8 or x.size(1) == 200:  # Accept both raw/embedded
+        if x.size(1) == 8 or x.size(1) == 200:
             return x.squeeze(2).permute(0, 2, 1)
         # Format 2: [batch, 1, channels, time] -> [batch, time, channels]
         elif x.size(2) == 8 or x.size(2) == 200:
@@ -139,8 +139,8 @@ def transform_for_gnn(x):
         elif x.size(3) == 8 or x.size(3) == 200:
             return x.squeeze(2)
         # New format: [batch, time, channels, 1]
-        elif x.size(2) == 8 or x.size(2) == 200:
-            return x.squeeze(3).permute(0, 1, 2)
+        elif x.size(3) == 1 and (x.size(2) == 8 or x.size(2) == 200):
+            return x.squeeze(3)
     
     # Handle 3D formats
     elif x.dim() == 3:
@@ -150,9 +150,6 @@ def transform_for_gnn(x):
         # Format 2: [batch, time, channels] - already correct
         elif x.size(2) == 8 or x.size(2) == 200:
             return x
-        # Format 3: [batch, features, time] - need to check if features are 8 or 200
-        elif x.size(1) == 8 or x.size(1) == 200:
-            return x.permute(0, 2, 1)
     
     # Unsupported format
     raise ValueError(
@@ -301,14 +298,35 @@ def main(args):
                         print("Created feature projection layer: 200 -> 8")
                     x = self.feature_projection(x)
                 
+                # Save original shape for reconstruction
+                original_shape = x.shape
+                
+                # Reshape for graph building: [batch, time, channels] -> [batch*time, channels]
+                x = x.reshape(-1, x.size(-1))
+                
+                # Build graph with the projected features
+                edge_index = self.graph_builder(x)
+                
+                # Validate edge indices
+                max_index = x.size(0) - 1
+                if torch.any(edge_index >= max_index):
+                    print(f"Edge index contains out-of-bounds indices! Clamping to [0, {max_index}]")
+                    edge_index = torch.clamp(edge_index, 0, max_index)
+                
                 # Original processing
-                out = super().forward(x)
+                out = super().forward(x, edge_index)  # Pass edge_index to superclass
                 
                 # Process skip connection with temporal aggregation
-                skip_out = self.skip_conn(x)  # [batch, time, output_dim]
+                skip_out = self.skip_conn(x)  # [batch*time, output_dim]
+                skip_out = skip_out.reshape(original_shape[0], original_shape[1], -1)
                 skip_out = skip_out.permute(0, 2, 1)  # [batch, output_dim, time]
                 skip_out = self.temporal_aggregator(skip_out)  # [batch, output_dim, 1]
                 skip_out = skip_out.squeeze(2)  # [batch, output_dim]
+                
+                # Reshape main output to match skip connection
+                out = out.reshape(original_shape[0], original_shape[1], -1)
+                out = out.mean(dim=1)  # [batch, output_dim]
+                
                 return out + skip_out
         
         gnn_model = EnhancedTemporalGCN(

@@ -18,6 +18,14 @@ from torch_geometric.loader import DataLoader
 from torch.utils.data import ConcatDataset
 from network.act_network import ActNetwork
 
+# Suppress TensorFlow and SHAP warnings
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
+import tensorflow as tf
+tf.get_logger().setLevel('ERROR')  # Suppress TensorFlow warnings
+import logging
+logging.getLogger("shap").setLevel(logging.WARNING)  # Suppress SHAP warnings
+
 # Unified SHAP utilities import
 from shap_utils import (
     get_background_batch, safe_compute_shap_values, plot_summary,

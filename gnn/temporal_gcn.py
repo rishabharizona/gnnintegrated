@@ -36,8 +36,22 @@ class TemporalGCN(nn.Module):
         
         # Reconstruction layer for pretraining
         self.recon = nn.Linear(output_dim, input_dim)  # For mean feature reconstruction
+        
+        # Cache for graphs to avoid rebuilding
+        self.graph_cache = {}
+
+    def _build_fully_connected(self, num_nodes):
+        """Build a fully connected graph for fallback"""
+        edge_index = torch.tensor(
+            [[i, j] for i in range(num_nodes) for j in range(num_nodes) if i != j],
+            dtype=torch.long
+        ).t().contiguous()
+        return edge_index
 
     def forward(self, x):
+        # Save original shape for reconstruction
+        original_shape = x.shape
+        
         # Handle different input dimensions
         if x.dim() == 2:
             # Add timestep dimension: [batch, features] -> [batch, 1, features]
@@ -62,19 +76,31 @@ class TemporalGCN(nn.Module):
         x = x.permute(0, 2, 1)  # [batch, reduced_timesteps, 32]
         x = x.reshape(batch_size * reduced_timesteps, -1)
         
-        # Build graph directly in forward pass
-        # Get first sample's features for graph building
-        sample = x[:reduced_timesteps].detach().cpu().numpy()
-        edge_index = self.graph_builder.build_graph(sample)
-        
-        # Handle empty graph case
-        if edge_index.numel() == 0:
-            # Use fully connected graph as fallback
-            num_nodes = reduced_timesteps
-            edge_index = torch.tensor(
-                [[i, j] for i in range(num_nodes) for j in range(num_nodes) if i != j],
-                dtype=torch.long
-            ).t().contiguous()
+        # Build or retrieve graph
+        cache_key = f"{reduced_timesteps}_{batch_size}"
+        if cache_key in self.graph_cache:
+            edge_index = self.graph_cache[cache_key]
+        else:
+            try:
+                # Build graph using the graph builder
+                sample = x[:reduced_timesteps].detach().cpu().numpy()
+                edge_index = self.graph_builder.build_graph(sample)
+                
+                # Handle empty graph case
+                if edge_index.numel() == 0:
+                    raise RuntimeError("Graph builder returned empty graph")
+            except Exception as e:
+                print(f"Graph building failed: {e}, using fully connected fallback")
+                edge_index = self._build_fully_connected(reduced_timesteps)
+            
+            # Validate edge indices
+            max_index = reduced_timesteps - 1
+            if torch.any(edge_index > max_index):
+                print(f"Edge index contains out-of-bounds indices! Clamping to [0, {max_index}]")
+                edge_index = torch.clamp(edge_index, 0, max_index)
+            
+            # Cache the graph
+            self.graph_cache[cache_key] = edge_index
         
         # Move to device and clone to avoid warnings
         edge_index = edge_index.to(x.device).clone().detach()
@@ -86,6 +112,12 @@ class TemporalGCN(nn.Module):
             edge_index_offset = edge_index + offset
             edge_indices.append(edge_index_offset)
         edge_index = torch.cat(edge_indices, dim=1)
+        
+        # Validate final edge indices
+        max_index = batch_size * reduced_timesteps - 1
+        if torch.any(edge_index > max_index):
+            print(f"Final edge index contains out-of-bounds indices! Clamping to [0, {max_index}]")
+            edge_index = torch.clamp(edge_index, 0, max_index)
         
         # Graph convolution
         x = F.relu(self.gcn1(x, edge_index))

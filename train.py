@@ -1,7 +1,4 @@
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
-import tensorflow as tf
-tf.get_logger().setLevel('ERROR')  # Suppress TensorFlow warnings
 import sys
 import subprocess
 import time

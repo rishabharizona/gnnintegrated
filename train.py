@@ -670,8 +670,13 @@ def main(args):
             # Create transform wrapper for GNN if needed
             transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
                 
+            # Transform background and X_eval if necessary
+            if transform_fn is not None:
+                background = transform_fn(background)
+                X_eval = transform_fn(X_eval)
+            
             # Compute SHAP values safely
-            shap_vals = safe_compute_shap_values(algorithm, background, X_eval, transform_fn=transform_fn)
+            shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
             
             # Convert to numpy safely before visualization
             X_eval_np = X_eval.detach().cpu().numpy()

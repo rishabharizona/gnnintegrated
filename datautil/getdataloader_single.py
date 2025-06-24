@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, Subset
 import datautil.actdata.util as actutil
 from datautil.util import combindataset, subdataset
 import datautil.actdata.cross_people as cross_people
-from torch_geometric.data import Batch
+from torch_geometric.data import Batch, Data
 from datautil.graph_utils import convert_to_graph
 
 # Task mapping for activity recognition
@@ -36,6 +36,10 @@ class SafeSubset(Subset):
             return torch.from_numpy(data)  # Convert numpy array to tensor
         elif isinstance(data, torch.Tensor):
             return data  # Already good
+        elif isinstance(data, Data):  # Handle PyG Data objects
+            for key in data.keys:
+                data[key] = self.convert_data(data[key])
+            return data
         else:
             # Try to convert any other numeric types
             try:
@@ -43,14 +47,24 @@ class SafeSubset(Subset):
             except:
                 return data
 
+def collate_gnn(batch):
+    """Custom collate function for GNN data"""
+    # Unpack the list of tuples
+    graphs, labels, domains = zip(*batch)
+    batched_graph = Batch.from_data_list(graphs)
+    labels = torch.tensor(labels, dtype=torch.long)
+    domains = torch.tensor(domains, dtype=torch.long)
+    return batched_graph, labels, domains
+
 def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
-    """Create GNN-specific data loader"""
+    """Create GNN-specific data loader with custom collate"""
     return DataLoader(
         dataset=dataset,
         batch_size=batch_size,
         num_workers=num_workers,
         shuffle=shuffle,
-        drop_last=shuffle
+        drop_last=shuffle,
+        collate_fn=collate_gnn  # Add custom collate function
     )
 
 def get_dataloader(args, tr, val, tar):
@@ -326,23 +340,17 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # Create curriculum subset
     curriculum_subset = SafeSubset(train_dataset, selected_indices)
     
-    # ===== GNN-SPECIFIC CURRICULUM LOADER =====
-    if hasattr(args, 'model_type') and args.model_type == 'gnn':
-        curriculum_loader = DataLoader(
-            curriculum_subset, 
-            batch_size=args.batch_size,
-            shuffle=True, 
-            num_workers=args.N_WORKERS,
-            drop_last=True
-        )
-    else:
-        curriculum_loader = DataLoader(
-            curriculum_subset, 
-            batch_size=args.batch_size,
-            shuffle=True, 
-            num_workers=args.N_WORKERS,
-            drop_last=True
-        )
+    # For GNN, use specialized collate_fn
+    collate_fn = collate_gnn if hasattr(args, 'model_type') and args.model_type == 'gnn' else None
+    
+    curriculum_loader = DataLoader(
+        curriculum_subset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.N_WORKERS,
+        drop_last=True,
+        collate_fn=collate_fn  # Add PyG collate function
+    )
 
     return curriculum_loader
 

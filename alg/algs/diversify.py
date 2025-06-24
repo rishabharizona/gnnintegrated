@@ -43,6 +43,7 @@ def transform_for_gnn(x):
         f"Expected formats: [B, C, 1, T], [B, 1, C, T], [B, T, 1, C], [B, T, C, 1], "
         f"or 3D formats [B, C, T] or [B, T, C] where C is 8 or 200."
     )
+
 class GNNModel(nn.Module):
     """GNN model for activity recognition"""
     def __init__(self, input_dim, hidden_dim, num_classes, gnn_type='gcn'):
@@ -130,27 +131,49 @@ class Diversify(Algorithm):
         self.patch_skip_connection()
 
     def patch_skip_connection(self):
-        """Permanently fix skip connection layer dimensions"""
-        # Check if skip_conn exists directly
-        if hasattr(self.featurizer, 'skip_conn') and isinstance(self.featurizer.skip_conn, nn.Linear):
-            if self.featurizer.skip_conn.in_features != 200:
-                original_out_features = self.featurizer.skip_conn.out_features
-                original_device = next(self.featurizer.skip_conn.parameters()).device
-                self.featurizer.skip_conn = nn.Linear(200, original_out_features)
-                self.featurizer.skip_conn.to(original_device)
-                print(f"Permanently patched skip_conn: in_features=200, out_features={original_out_features}")
-            return
+        """Dynamically adjust skip connection based on actual input shape"""
+        # Create a sample input based on expected input shape
+        sample_input = torch.randn(1, *self.args.input_shape)
+        
+        # Forward pass to get actual feature dimension
+        with torch.no_grad():
+            actual_features = self.featurizer(sample_input).shape[-1]
+            print(f"Detected actual feature dimension: {actual_features}")
         
         # Recursively search for skip_conn in nested modules
-        for name, module in self.featurizer.named_children():
+        for name, module in self.featurizer.named_modules():
             if isinstance(module, nn.Linear) and "skip" in name.lower():
-                if module.in_features != 200:
-                    original_out_features = module.out_features
-                    original_device = next(module.parameters()).device
-                    new_layer = nn.Linear(200, original_out_features)
-                    new_layer.to(original_device)
-                    setattr(self.featurizer, name, new_layer)
-                    print(f"Permanently patched {name}: in_features=200, out_features={original_out_features}")
+                if module.in_features != actual_features:
+                    print(f"Patching skip connection: {actual_features} features")
+                    
+                    # Create new layer with correct dimensions
+                    new_layer = nn.Linear(actual_features, module.out_features)
+                    
+                    # Try to partially initialize with existing weights
+                    if module.in_features > actual_features:
+                        # Use first 'actual_features' channels from existing weights
+                        new_layer.weight.data = module.weight.data[:, :actual_features]
+                        new_layer.bias.data = module.bias.data
+                    elif actual_features > module.in_features:
+                        # Initialize new channels with small random values
+                        new_weights = torch.randn(module.out_features, actual_features) * 0.01
+                        new_weights[:, :module.in_features] = module.weight.data
+                        new_layer.weight.data = new_weights
+                        new_layer.bias.data = module.bias.data
+                    
+                    # Replace the module
+                    if '.' in name:
+                        # Handle nested modules (e.g., 'module.submodule.layer')
+                        parts = name.split('.')
+                        parent = self.featurizer
+                        for part in parts[:-1]:
+                            parent = getattr(parent, part)
+                        setattr(parent, parts[-1], new_layer)
+                    else:
+                        setattr(self.featurizer, name, new_layer)
+                    
+                    print(f"Patched {name}: in_features={actual_features}, "
+                          f"out_features={module.out_features}")
                 return
         
         # If we reach here, no skip connection was found
@@ -278,15 +301,19 @@ class Diversify(Algorithm):
     
     def ensure_correct_dimensions(self, inputs):
         """Ensure inputs have correct dimensions for skip connection"""
-        # Check if input dimensions match expected skip connection dimensions
-        if inputs.shape[-1] != 200:
-            # Reshape to expected dimensions (batch_size, seq_len, features)
+        # Get actual feature dimension from sample input
+        sample_input = torch.randn(1, *self.args.input_shape)
+        with torch.no_grad():
+            actual_features = self.featurizer(sample_input).shape[-1]
+        
+        # Reshape if needed
+        if inputs.shape[-1] != actual_features:
             if inputs.dim() == 2:
-                # Assuming [batch_size, features]
+                # [batch_size, features] -> [batch_size, time, features]
                 inputs = inputs.view(inputs.size(0), 1, inputs.size(1))
             elif inputs.dim() == 3 and inputs.size(1) == 1:
                 # [batch_size, 1, features] - expand time dimension
-                inputs = inputs.expand(-1, 200, -1)
+                inputs = inputs.expand(-1, actual_features, -1)
             elif inputs.dim() == 3:
                 # [batch_size, time, features] - transpose to match expected
                 inputs = inputs.transpose(1, 2)

@@ -455,40 +455,41 @@ def main(args):
         if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
             print(f"Curriculum learning: Stage {round_idx}")
             
-            # Create a wrapped predict function for domain evaluation
-            def wrapped_predict(model, x):
+            # Set algorithm to evaluation mode
+            algorithm.eval()
+            
+            # Create a prediction function that handles GNN transformation
+            def curriculum_predict(x):
                 if args.use_gnn and GNN_AVAILABLE:
                     x = transform_for_gnn(x)
-                return model.predict(x)
+                return algorithm.predict(x)
             
-            # Create a temporary algorithm with wrapped predict
-            class TempAlgorithmWrapper:
-                def __init__(self, model):
-                    self.model = model
-                
+            # Create a simple object for domain evaluation
+            class CurriculumEvaluator:
                 def predict(self, x):
-                    return wrapped_predict(self.model, x)
+                    return curriculum_predict(x)
             
-            temp_algorithm = TempAlgorithmWrapper(algorithm)
+            evaluator = CurriculumEvaluator()
             
-            # Get the curriculum loader using wrapped predict
+            # Get the curriculum loader
             train_loader = get_curriculum_loader(
                 args,
-                temp_algorithm,
+                evaluator,  # Pass evaluator instead of algorithm
                 tr,
                 val,
                 stage=round_idx
             )
             
-            # Update the no-shuffle loader as well
+            # Update the no-shuffle loader
             train_loader_noshuffle = DataLoader(
                 train_loader.dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
                 num_workers=min(2, args.N_WORKERS)
             )
-        
-        algorithm.train()
+            
+            # Set algorithm back to training mode
+            algorithm.train()
         
         # Phase 1: Feature update
         print('\n==== Feature update ====')

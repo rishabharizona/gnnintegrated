@@ -133,89 +133,89 @@ class Diversify(Algorithm):
         return {'total': loss.item(), 'dis': disc_loss.item(), 'ent': ent_loss.item()}
 
         def set_dlabel(self, loader):
-        """Set pseudo-domain labels using clustering"""
-        self.dbottleneck.eval()
-        self.dclassifier.eval()
-        self.featurizer.eval()
-    
-        all_fea = []
-        all_index = []  # Store original indices
-    
-        with torch.no_grad():
-            # Manually track the index counter
-            index_counter = 0
-            for batch in loader:
-                inputs = batch[0].cuda().float()
-                feas = self.dbottleneck(self.featurizer(inputs))
-                
-                all_fea.append(feas.float().cpu())
-                
-                # Store batch indices
-                batch_size = inputs.size(0)
-                batch_indices = np.arange(index_counter, index_counter + batch_size)
-                all_index.append(batch_indices)
-                index_counter += batch_size
-    
-        # Combine features and indices
-        all_fea = torch.cat(all_fea, dim=0)
-        all_index = np.concatenate(all_index, axis=0)
+            """Set pseudo-domain labels using clustering"""
+            self.dbottleneck.eval()
+            self.dclassifier.eval()
+            self.featurizer.eval()
         
-        # Normalize features
-        all_fea = all_fea / torch.norm(all_fea, p=2, dim=1, keepdim=True)
-        all_fea = all_fea.float().cpu().numpy()
-    
-        # Clustering for pseudo-domain labels
-        K = self.args.latent_domain_num
+            all_fea = []
+            all_index = []  # Store original indices
         
-        # Use sklearn KMeans for robust clustering
-        kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
-        pred_label = kmeans.fit_predict(all_fea)
+            with torch.no_grad():
+                # Manually track the index counter
+                index_counter = 0
+                for batch in loader:
+                    inputs = batch[0].cuda().float()
+                    feas = self.dbottleneck(self.featurizer(inputs))
+                    
+                    all_fea.append(feas.float().cpu())
+                    
+                    # Store batch indices
+                    batch_size = inputs.size(0)
+                    batch_indices = np.arange(index_counter, index_counter + batch_size)
+                    all_index.append(batch_indices)
+                    index_counter += batch_size
         
-        # Ensure labels are in valid range
-        pred_label = np.clip(pred_label, 0, K-1)
-    
-        # Handle dataset types
-        dataset = loader.dataset
+            # Combine features and indices
+            all_fea = torch.cat(all_fea, dim=0)
+            all_index = np.concatenate(all_index, axis=0)
+            
+            # Normalize features
+            all_fea = all_fea / torch.norm(all_fea, p=2, dim=1, keepdim=True)
+            all_fea = all_fea.float().cpu().numpy()
         
-        # Function to find base dataset with set_labels_by_index method
-        def get_base_dataset(ds):
-            while isinstance(ds, Subset) and not hasattr(ds, 'set_labels_by_index'):
-                ds = ds.dataset
-            return ds
+            # Clustering for pseudo-domain labels
+            K = self.args.latent_domain_num
+            
+            # Use sklearn KMeans for robust clustering
+            kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
+            pred_label = kmeans.fit_predict(all_fea)
+            
+            # Ensure labels are in valid range
+            pred_label = np.clip(pred_label, 0, K-1)
         
-        # Get the base dataset that supports label setting
-        base_dataset = get_base_dataset(dataset)
-        
-        # Map loader indices to original dataset indices
-        if isinstance(dataset, Subset):
-            # Traverse through subset wrappers
-            current = dataset
-            while isinstance(current, Subset):
-                # Map indices through each subset layer
-                all_index = [current.indices[i] for i in all_index]
-                current = current.dataset
-            base_dataset = current
-        else:
-            base_dataset = dataset
-        
-        # Set labels on the base dataset
-        if hasattr(base_dataset, 'set_labels_by_index'):
-            base_dataset.set_labels_by_index(pred_label, all_index, 'pdlabel')
-            print(f"Set pseudo-labels on base dataset of type: {type(base_dataset).__name__}")
-        else:
-            print(f"Warning: Base dataset {type(base_dataset).__name__} has no set_labels_by_index method")
-        
-        # Print label distribution
-        counter = Counter(pred_label)
-        print(f"Pseudo-domain label distribution: {dict(counter)}")
-        
-        # Store labels for validation
-        self.dlabel = torch.from_numpy(pred_label).long().cuda()
-        
-        # Return to training mode
-        self.dbottleneck.train()
-        self.dclassifier.train()
-        self.featurizer.train()
+            # Handle dataset types
+            dataset = loader.dataset
+            
+            # Function to find base dataset with set_labels_by_index method
+            def get_base_dataset(ds):
+                while isinstance(ds, Subset) and not hasattr(ds, 'set_labels_by_index'):
+                    ds = ds.dataset
+                return ds
+            
+            # Get the base dataset that supports label setting
+            base_dataset = get_base_dataset(dataset)
+            
+            # Map loader indices to original dataset indices
+            if isinstance(dataset, Subset):
+                # Traverse through subset wrappers
+                current = dataset
+                while isinstance(current, Subset):
+                    # Map indices through each subset layer
+                    all_index = [current.indices[i] for i in all_index]
+                    current = current.dataset
+                base_dataset = current
+            else:
+                base_dataset = dataset
+            
+            # Set labels on the base dataset
+            if hasattr(base_dataset, 'set_labels_by_index'):
+                base_dataset.set_labels_by_index(pred_label, all_index, 'pdlabel')
+                print(f"Set pseudo-labels on base dataset of type: {type(base_dataset).__name__}")
+            else:
+                print(f"Warning: Base dataset {type(base_dataset).__name__} has no set_labels_by_index method")
+            
+            # Print label distribution
+            counter = Counter(pred_label)
+            print(f"Pseudo-domain label distribution: {dict(counter)}")
+            
+            # Store labels for validation
+            self.dlabel = torch.from_numpy(pred_label).long().cuda()
+            
+            # Return to training mode
+            self.dbottleneck.train()
+            self.dclassifier.train()
+            self.featurizer.train()
 
     def update(self, data, opt):
         """Update domain-invariant features"""

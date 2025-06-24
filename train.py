@@ -677,35 +677,37 @@ def main(args):
                 X_eval = transform_fn(X_eval)
             
             # Compute SHAP values safely
-            shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
+            shap_explanation = safe_compute_shap_values(algorithm, background, X_eval)
+            
+            # Extract values from Explanation object
+            shap_vals = shap_explanation.values
+            print(f"SHAP values shape: {shap_vals.shape}")
+            
             # Convert to numpy safely before visualization
             X_eval_np = X_eval.detach().cpu().numpy()
+            
             # Handle GNN dimensionality for visualization
             if args.use_gnn and GNN_AVAILABLE:
                 print(f"Original SHAP values shape: {shap_vals.shape}")
                 print(f"Original X_eval shape: {X_eval_np.shape}")
                 
-                # Check dimensions before transposing
+                # If 4D, reduce to 3D by summing over classes
+                if shap_vals.ndim == 4:
+                    # Sum across classes to get overall feature importance
+                    shap_vals = np.abs(shap_vals).sum(axis=-1)
+                    print(f"SHAP values after class sum: {shap_vals.shape}")
+                
+                # Now we should have 3D: [batch, time, channels]
                 if shap_vals.ndim == 3:
-                    # Convert 3D (batch, time, channels) to 4D (batch, channels, 1, time)
+                    # Convert to [batch, channels, 1, time] for visualization
                     shap_vals = np.transpose(shap_vals, (0, 2, 1))
                     shap_vals = np.expand_dims(shap_vals, axis=2)
+                    
                     X_eval_np = np.transpose(X_eval_np, (0, 2, 1))
                     X_eval_np = np.expand_dims(X_eval_np, axis=2)
-                elif shap_vals.ndim == 4:
-                    # Already in 4D format, no need to transpose
-                    pass
                 else:
                     print(f"⚠️ Unexpected SHAP values dimension: {shap_vals.ndim}")
                     print("Skipping visualization-specific reshaping")
-            # Handle GNN dimensionality for visualization
-            if args.use_gnn and GNN_AVAILABLE:
-                # Convert 3D (batch, time, channels) to 4D (batch, channels, 1, time)
-                shap_vals = np.transpose(shap_vals, (0, 2, 1))
-                shap_vals = np.expand_dims(shap_vals, axis=2)
-                
-                X_eval_np = np.transpose(X_eval_np, (0, 2, 1))
-                X_eval_np = np.expand_dims(X_eval_np, axis=2)
             
             # Generate core visualizations
             try:

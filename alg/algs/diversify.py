@@ -173,7 +173,9 @@ class Diversify(Algorithm):
             # Manually track the index counter
             index_counter = 0
             for batch in loader:
-                inputs = batch[0].cuda().float()
+               inputs = batch[0].cuda().float()
+               if self.args.use_gnn:
+                   inputs = transform_for_gnn(inputs)
                 # Apply temporary dimension fix if needed
                 inputs = self.ensure_correct_dimensions(inputs)
                 feas = self.dbottleneck(self.featurizer(inputs))

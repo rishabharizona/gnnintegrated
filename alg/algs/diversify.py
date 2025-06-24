@@ -132,8 +132,11 @@ class Diversify(Algorithm):
 
     def patch_skip_connection(self):
         """Dynamically adjust skip connection based on actual input shape"""
-        # Create a sample input based on expected input shape
-        sample_input = torch.randn(1, *self.args.input_shape)
+        # Get device from model parameters
+        device = next(self.featurizer.parameters()).device
+        
+        # Create sample input on the same device as the model
+        sample_input = torch.randn(1, *self.args.input_shape).to(device)
         
         # Forward pass to get actual feature dimension
         with torch.no_grad():
@@ -147,19 +150,19 @@ class Diversify(Algorithm):
                     print(f"Patching skip connection: {actual_features} features")
                     
                     # Create new layer with correct dimensions
-                    new_layer = nn.Linear(actual_features, module.out_features)
+                    new_layer = nn.Linear(actual_features, module.out_features).to(device)
                     
                     # Try to partially initialize with existing weights
                     if module.in_features > actual_features:
                         # Use first 'actual_features' channels from existing weights
-                        new_layer.weight.data = module.weight.data[:, :actual_features]
-                        new_layer.bias.data = module.bias.data
+                        new_layer.weight.data = module.weight.data[:, :actual_features].clone()
+                        new_layer.bias.data = module.bias.data.clone()
                     elif actual_features > module.in_features:
                         # Initialize new channels with small random values
-                        new_weights = torch.randn(module.out_features, actual_features) * 0.01
-                        new_weights[:, :module.in_features] = module.weight.data
+                        new_weights = torch.randn(module.out_features, actual_features).to(device) * 0.01
+                        new_weights[:, :module.in_features] = module.weight.data.clone()
                         new_layer.weight.data = new_weights
-                        new_layer.bias.data = module.bias.data
+                        new_layer.bias.data = module.bias.data.clone()
                     
                     # Replace the module
                     if '.' in name:
@@ -178,6 +181,7 @@ class Diversify(Algorithm):
         
         # If we reach here, no skip connection was found
         print("Warning: No skip connection layer found in featurizer")
+        self.actual_features = actual_features  # Store for later use
 
     def update_d(self, minibatch, opt):
         """Update domain characterization components"""
@@ -301,10 +305,16 @@ class Diversify(Algorithm):
     
     def ensure_correct_dimensions(self, inputs):
         """Ensure inputs have correct dimensions for skip connection"""
-        # Get actual feature dimension from sample input
-        sample_input = torch.randn(1, *self.args.input_shape)
-        with torch.no_grad():
-            actual_features = self.featurizer(sample_input).shape[-1]
+        # Use stored feature dimension if available
+        if hasattr(self, 'actual_features'):
+            actual_features = self.actual_features
+        else:
+            # Fallback: detect feature dimension
+            device = next(self.featurizer.parameters()).device
+            sample_input = torch.randn(1, *self.args.input_shape).to(device)
+            with torch.no_grad():
+                actual_features = self.featurizer(sample_input).shape[-1]
+            self.actual_features = actual_features
         
         # Reshape if needed
         if inputs.shape[-1] != actual_features:

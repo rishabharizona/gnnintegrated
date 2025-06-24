@@ -393,26 +393,61 @@ def main(args):
         else:
             current_epochs = args.local_epoch
         
-        # Curriculum learning setup
-        if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
-            print(f"Curriculum learning: Stage {round_idx}")
-            
-            # Use advanced domain-based curriculum loader
-            train_loader = get_curriculum_loader(
-                args,
-                algorithm,
-                tr,
-                val,
-                stage=round_idx,
-                transform_fn=transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
-            )
-            
-            # Update the no-shuffle loader as well
-            train_loader_noshuffle = DataLoader(
-                train_loader.dataset,
-                batch_size=args.batch_size,
-                shuffle=False,
-                num_workers=min(2, args.N_WORKERS))
+                # Curriculum learning setup
+                if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
+                    print(f"Curriculum learning: Stage {round_idx}")
+                    
+                    # Get the curriculum loader without transformation
+                    train_loader = get_curriculum_loader(
+                        args,
+                        algorithm,
+                        tr,
+                        val,
+                        stage=round_idx
+                    )
+                    
+                    # Apply GNN transformation if needed
+                    if args.use_gnn and GNN_AVAILABLE:
+                        # Create transformed dataset
+                        class TransformedDataset(torch.utils.data.Dataset):
+                            def __init__(self, original_dataset):
+                                self.original_dataset = original_dataset
+                                
+                            def __len__(self):
+                                return len(self.original_dataset)
+                            
+                            def __getitem__(self, idx):
+                                data = self.original_dataset[idx]
+                                # Handle both 3-element and 4-element tuples
+                                if len(data) == 3:  # (input, class_label, domain_label)
+                                    x, y, d = data
+                                    x = transform_for_gnn(x)
+                                    return x, y, d
+                                elif len(data) == 2:  # (input, class_label)
+                                    x, y = data
+                                    x = transform_for_gnn(x)
+                                    return x, y
+                                else:  # Handle unexpected formats
+                                    x = data[0]
+                                    x = transform_for_gnn(x)
+                                    return (x, *data[1:])
+                        
+                        # Wrap the dataset with transformation
+                        transformed_dataset = TransformedDataset(train_loader.dataset)
+                        train_loader = DataLoader(
+                            transformed_dataset,
+                            batch_size=args.batch_size,
+                            shuffle=True,
+                            num_workers=min(2, args.N_WORKERS)
+                        )
+                    
+                    # Update the no-shuffle loader as well
+                    train_loader_noshuffle = DataLoader(
+                        train_loader.dataset,
+                        batch_size=args.batch_size,
+                        shuffle=False,
+                        num_workers=min(2, args.N_WORKERS)
+                    )
         
         algorithm.train()
         

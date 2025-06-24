@@ -168,7 +168,9 @@ class Diversify(Algorithm):
         
         # Set labels on the base dataset
         if hasattr(base_dataset, 'set_labels_by_index'):
-            base_dataset.set_labels_by_index(pred_label, all_index, 'pdlabel')
+            # Convert numpy labels to torch tensor
+            pred_label_tensor = torch.from_numpy(pred_label).long()
+            base_dataset.set_labels_by_index(pred_label_tensor, all_index, 'pdlabel')
             print(f"Set pseudo-labels on base dataset of type: {type(base_dataset).__name__}")
         else:
             print(f"Warning: Base dataset {type(base_dataset).__name__} has no set_labels_by_index method")

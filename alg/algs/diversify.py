@@ -132,7 +132,7 @@ class Diversify(Algorithm):
         opt.step()
         return {'total': loss.item(), 'dis': disc_loss.item(), 'ent': ent_loss.item()}
 
-    def set_dlabel(self, loader):
+        def set_dlabel(self, loader):
         """Set pseudo-domain labels using clustering"""
         self.dbottleneck.eval()
         self.dclassifier.eval()
@@ -177,51 +177,33 @@ class Diversify(Algorithm):
         # Handle dataset types
         dataset = loader.dataset
         
-        # 1. Handle SafeSubset/Subset datasets
+        # Function to find base dataset with set_labels_by_index method
+        def get_base_dataset(ds):
+            while isinstance(ds, Subset) and not hasattr(ds, 'set_labels_by_index'):
+                ds = ds.dataset
+            return ds
+        
+        # Get the base dataset that supports label setting
+        base_dataset = get_base_dataset(dataset)
+        
+        # Map loader indices to original dataset indices
         if isinstance(dataset, Subset):
-            # Get underlying dataset and subset indices
-            underlying_dataset = dataset.dataset
-            subset_indices = dataset.indices
-            
-            # Map loader indices to original dataset indices
-            original_indices = [subset_indices[i] for i in all_index]
-            
-            # Set labels on underlying dataset
-            underlying_dataset.set_labels_by_index(pred_label, original_indices, 'pdlabel')
-            print(f"Set pseudo-labels on underlying dataset via SafeSubset")
-        
-        # 2. Handle ConcatDatasets
-        elif isinstance(dataset, ConcatDataset):
-            concat_dataset = dataset
-            cumulative_sizes = concat_dataset.cumulative_sizes
-            datasets = concat_dataset.datasets
-            starts = [0] + cumulative_sizes[:-1]
-            
-            per_ds_indices = [[] for _ in range(len(datasets))]
-            per_ds_labels = [[] for _ in range(len(datasets))]
-            
-            for idx, label in zip(all_index, pred_label):
-                for ds_idx, end in enumerate(cumulative_sizes):
-                    if idx < end:
-                        start = starts[ds_idx]
-                        local_idx = idx - start
-                        per_ds_indices[ds_idx].append(local_idx)
-                        per_ds_labels[ds_idx].append(label)
-                        break
-            
-            for ds_idx, dataset in enumerate(datasets):
-                if per_ds_indices[ds_idx]:
-                    dataset.set_labels_by_index(
-                        per_ds_labels[ds_idx],
-                        per_ds_indices[ds_idx],
-                        'pdlabel'
-                    )
-            print(f"Set pseudo-labels on ConcatDataset components")
-        
-        # 3. Handle regular datasets
+            # Traverse through subset wrappers
+            current = dataset
+            while isinstance(current, Subset):
+                # Map indices through each subset layer
+                all_index = [current.indices[i] for i in all_index]
+                current = current.dataset
+            base_dataset = current
         else:
-            dataset.set_labels_by_index(pred_label, all_index, 'pdlabel')
-            print(f"Set pseudo-labels directly on dataset")
+            base_dataset = dataset
+        
+        # Set labels on the base dataset
+        if hasattr(base_dataset, 'set_labels_by_index'):
+            base_dataset.set_labels_by_index(pred_label, all_index, 'pdlabel')
+            print(f"Set pseudo-labels on base dataset of type: {type(base_dataset).__name__}")
+        else:
+            print(f"Warning: Base dataset {type(base_dataset).__name__} has no set_labels_by_index method")
         
         # Print label distribution
         counter = Counter(pred_label)

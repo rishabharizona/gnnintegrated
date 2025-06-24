@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, confusion_matrix, ConfusionMatrixDisplay
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score  # Added Calinski-Harabasz
+from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score
 from alg.opt import *
 from alg import alg, modelopera
 from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ, disable_inplace_relu
@@ -60,12 +60,12 @@ def automated_k_estimation(features, k_min=2, k_max=10):
         else:
             silhouette = silhouette_score(features, labels)
             dbi = davies_bouldin_score(features, labels)
-            ch_score = calinski_harabasz_score(features, labels)  # Added CH metric
+            ch_score = calinski_harabasz_score(features, labels)
         
         # Combine scores: higher silhouette and CH are better, lower DBI is better
-        norm_silhouette = (silhouette + 1) / 2  # Map to [0,1]
-        norm_dbi = 1 / (1 + dbi)  # Map to (0,1]
-        norm_ch = ch_score / 1000  # Normalize CH score
+        norm_silhouette = (silhouette + 1) / 2
+        norm_dbi = 1 / (1 + dbi)
+        norm_ch = ch_score / 1000
         
         # Combined score gives weight to all three metrics
         combined_score = (0.5 * norm_silhouette) + (0.3 * norm_ch) + (0.2 * norm_dbi)
@@ -118,7 +118,6 @@ def calculate_h_divergence(features_source, features_target):
     domain_acc = domain_classifier.score(X_test, y_test)
     
     # Calculate h-divergence: d = 2(1 - 2ε)
-    # Where ε is the error rate of the domain classifier
     h_divergence = 2 * (1 - 2 * (1 - domain_acc))
     
     return h_divergence, domain_acc
@@ -191,28 +190,28 @@ def main(args):
         train_loader = DataLoader(
             dataset=tr,
             batch_size=args.batch_size,
-            num_workers=min(2, args.N_WORKERS),  # Limit workers
+            num_workers=min(2, args.N_WORKERS),
             drop_last=False,
             shuffle=True
         )
         train_loader_noshuffle = DataLoader(
             dataset=tr,
             batch_size=args.batch_size,
-            num_workers=min(2, args.N_WORKERS),  # Limit workers
+            num_workers=min(2, args.N_WORKERS),
             drop_last=False,
             shuffle=False
         )
         valid_loader = DataLoader(
             dataset=val,
             batch_size=args.batch_size,
-            num_workers=min(2, args.N_WORKERS),  # Limit workers
+            num_workers=min(2, args.N_WORKERS),
             drop_last=False,
             shuffle=False
         )
         target_loader = DataLoader(
             dataset=targetdata,
             batch_size=args.batch_size,
-            num_workers=min(2, args.N_WORKERS),  # Limit workers
+            num_workers=min(2, args.N_WORKERS),
             drop_last=False,
             shuffle=False
         )
@@ -234,21 +233,30 @@ def main(args):
             fully_connected_fallback=True
         )
         
-        # Initialize Temporal GCN model with skip connection
+        # FIXED: Enhanced Temporal GCN with proper skip connection
         class EnhancedTemporalGCN(TemporalGCN):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
-                # Add skip connection
+                # Add skip connection with temporal aggregation
                 if kwargs['input_dim'] != kwargs['output_dim']:
-                    self.skip_conn = nn.Linear(kwargs['input_dim'], kwargs['output_dim'])
+                    self.skip_conn = nn.Sequential(
+                        nn.Linear(kwargs['input_dim'], kwargs['output_dim']),
+                        nn.ReLU(),
+                    )
+                    self.temporal_aggregator = nn.AdaptiveAvgPool1d(1)
                 else:
                     self.skip_conn = nn.Identity()
+                    self.temporal_aggregator = nn.Identity()
                     
             def forward(self, x):
                 # Original processing
                 out = super().forward(x)
-                # Add skip connection
-                return out + self.skip_conn(x)
+                # Process skip connection with temporal aggregation
+                skip_out = self.skip_conn(x)  # [batch, time, output_dim]
+                skip_out = skip_out.permute(0, 2, 1)  # [batch, output_dim, time]
+                skip_out = self.temporal_aggregator(skip_out)  # [batch, output_dim, 1]
+                skip_out = skip_out.squeeze(2)  # [batch, output_dim]
+                return out + skip_out
         
         gnn_model = EnhancedTemporalGCN(
             input_dim=8,  # EMG channels
@@ -365,11 +373,11 @@ def main(args):
         tr,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=min(2, args.N_WORKERS)  # Limit workers
+        num_workers=min(2, args.N_WORKERS)
     )
     
     # Main training loop
-    global_step = 0  # Initialize global step counter
+    global_step = 0
     for round_idx in range(args.max_epoch):
         print(f'\n======== ROUND {round_idx} ========')
         
@@ -398,7 +406,7 @@ def main(args):
                 train_loader.dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
-                num_workers=min(2, args.N_WORKERS)  # Limit workers
+                num_workers=min(2, args.N_WORKERS)
             )
         
         algorithm.train()
@@ -487,14 +495,13 @@ def main(args):
         for step in range(current_epochs):
             step_start_time = time.time()
             for data in train_loader:
-                # ======================= GNN INPUT TRANSFORMATION =======================
+                # GNN input transformation
                 if args.use_gnn and GNN_AVAILABLE:
                     if data[0].dim() == 4 and data[0].shape[2] == 1:
                         data = list(data)
                         data[0] = data[0].squeeze(2).permute(0, 2, 1)
                     elif data[0].dim() != 3:
                         raise ValueError(f"GNN requires 3D input (B,T,C), got {data[0].shape}")
-                # ========================================================================
                 
                 step_vals = algorithm.update(data, opt)
                 
@@ -538,7 +545,7 @@ def main(args):
                 target_acc = results['target_acc']
             
             print_row([results[key] for key in print_key], colwidth=15)
-            global_step += 1  # Increment global step
+            global_step += 1
         
         logs['total_cost_time'].append(time.time() - round_start_time)
         
@@ -553,11 +560,10 @@ def main(args):
                 for data in entire_source_loader:
                     x = data[0].cuda().float()
                     
-                    # ======================= GNN INPUT TRANSFORMATION =======================
+                    # GNN input transformation
                     if args.use_gnn and GNN_AVAILABLE:
                         if x.dim() == 4 and x.shape[2] == 1:
                             x = x.squeeze(2).permute(0, 2, 1)
-                    # ========================================================================
                     
                     features = algorithm.featurizer(x).detach().cpu().numpy()
                     source_features.append(features)
@@ -569,11 +575,10 @@ def main(args):
                 for data in target_loader:
                     x = data[0].cuda().float()
                     
-                    # ======================= GNN INPUT TRANSFORMATION =======================
+                    # GNN input transformation
                     if args.use_gnn and GNN_AVAILABLE:
                         if x.dim() == 4 and x.shape[2] == 1:
                             x = x.squeeze(2).permute(0, 2, 1)
-                    # ========================================================================
                     
                     features = algorithm.featurizer(x).detach().cpu().numpy()
                     target_features.append(features)
@@ -764,7 +769,7 @@ if __name__ == '__main__':
     
     # Add GNN-specific parameters to args
     if not hasattr(args, 'use_gnn'):
-        args.use_gnn = False  # Default to CNN if not specified
+        args.use_gnn = False
         
     if args.use_gnn:
         if not GNN_AVAILABLE:
@@ -780,6 +785,6 @@ if __name__ == '__main__':
     
     # Increase adversarial weight for better domain adaptation
     if not hasattr(args, 'adv_weight'):
-        args.adv_weight = 2.0  # Increased from default 1.0
+        args.adv_weight = 2.0
     
     main(args)

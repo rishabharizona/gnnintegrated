@@ -132,6 +132,17 @@ class Diversify(Algorithm):
 
     def set_dlabel(self, loader):
         """Set pseudo-domain labels using clustering"""
+        # Apply dimension fix for skip connection layer
+        if hasattr(self.featurizer, 'skip_conn') and \
+           isinstance(self.featurizer.skip_conn, nn.Linear) and \
+           self.featurizer.skip_conn.in_features == 8:
+            
+            # Replace problematic layer
+            original_device = next(self.featurizer.skip_conn.parameters()).device
+            self.featurizer.skip_conn = nn.Linear(200, self.featurizer.skip_conn.out_features)
+            self.featurizer.skip_conn.to(original_device)
+            print("Patched skip_conn layer: changed input dimension from 8 to 200")
+        
         self.dbottleneck.eval()
         self.dclassifier.eval()
         self.featurizer.eval()

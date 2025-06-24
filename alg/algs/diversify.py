@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from scipy.spatial.distance import cdist
-from torch.utils.data import ConcatDataset
+from torch.utils.data import ConcatDataset, Subset
 from torch_geometric.nn import GCNConv, GATConv
 from sklearn.cluster import KMeans
 
@@ -174,9 +174,25 @@ class Diversify(Algorithm):
         # Ensure labels are in valid range
         pred_label = np.clip(pred_label, 0, K-1)
     
-        # Handle ConcatDataset
-        if isinstance(loader.dataset, ConcatDataset):
-            concat_dataset = loader.dataset
+        # Handle dataset types
+        dataset = loader.dataset
+        
+        # 1. Handle SafeSubset/Subset datasets
+        if isinstance(dataset, Subset):
+            # Get underlying dataset and subset indices
+            underlying_dataset = dataset.dataset
+            subset_indices = dataset.indices
+            
+            # Map loader indices to original dataset indices
+            original_indices = [subset_indices[i] for i in all_index]
+            
+            # Set labels on underlying dataset
+            underlying_dataset.set_labels_by_index(pred_label, original_indices, 'pdlabel')
+            print(f"Set pseudo-labels on underlying dataset via SafeSubset")
+        
+        # 2. Handle ConcatDatasets
+        elif isinstance(dataset, ConcatDataset):
+            concat_dataset = dataset
             cumulative_sizes = concat_dataset.cumulative_sizes
             datasets = concat_dataset.datasets
             starts = [0] + cumulative_sizes[:-1]
@@ -200,8 +216,12 @@ class Diversify(Algorithm):
                         per_ds_indices[ds_idx],
                         'pdlabel'
                     )
+            print(f"Set pseudo-labels on ConcatDataset components")
+        
+        # 3. Handle regular datasets
         else:
-            loader.dataset.set_labels_by_index(pred_label, all_index, 'pdlabel')
+            dataset.set_labels_by_index(pred_label, all_index, 'pdlabel')
+            print(f"Set pseudo-labels directly on dataset")
         
         # Print label distribution
         counter = Counter(pred_label)

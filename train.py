@@ -122,6 +122,12 @@ def calculate_h_divergence(features_source, features_target):
     
     return h_divergence, domain_acc
 
+def transform_for_gnn(x):
+    """Transform 4D input to 3D for GNN models"""
+    if x.dim() == 4 and x.shape[2] == 1:
+        return x.squeeze(2).permute(0, 2, 1)
+    return x
+
 def main(args):
     s = print_args(args, [])
     set_random_seed(args.seed)
@@ -318,10 +324,10 @@ def main(args):
                     
                     # Convert to (batch, time, features) format
                     if args.use_gnn and GNN_AVAILABLE:
-                        if x.dim() == 4 and x.shape[2] == 1:
-                            x = x.squeeze(2).permute(0, 2, 1)
-                        elif x.dim() != 3:
+                        x = transform_for_gnn(x)
+                        if x.dim() != 3:
                             raise ValueError(f"GNN requires 3D input (B,T,C), got {x.shape}")
+                    
                     # Calculate mean across time dimension
                     target = torch.mean(x, dim=1)  # [batch, channels]        
                     
@@ -373,8 +379,7 @@ def main(args):
         tr,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=min(2, args.N_WORKERS)
-    )
+        num_workers=min(2, args.N_WORKERS))
     
     # Main training loop
     global_step = 0
@@ -398,7 +403,8 @@ def main(args):
                 algorithm,
                 tr,
                 val,
-                stage=round_idx
+                stage=round_idx,
+                transform_fn=transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
             )
             
             # Update the no-shuffle loader as well
@@ -406,8 +412,7 @@ def main(args):
                 train_loader.dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
-                num_workers=min(2, args.N_WORKERS)
-            )
+                num_workers=min(2, args.N_WORKERS))
         
         algorithm.train()
         
@@ -421,11 +426,8 @@ def main(args):
             for data in train_loader:
                 # GNN input transformation
                 if args.use_gnn and GNN_AVAILABLE:
-                    if data[0].dim() == 4 and data[0].shape[2] == 1:
-                        data = list(data)
-                        data[0] = data[0].squeeze(2).permute(0, 2, 1)
-                    elif data[0].dim() != 3:
-                        raise ValueError(f"GNN requires 3D input (B,T,C), got {data[0].shape}")
+                    data = list(data)
+                    data[0] = transform_for_gnn(data[0])
                 
                 loss_result_dict = algorithm.update_a(data, opta)
                 
@@ -454,11 +456,8 @@ def main(args):
             for data in train_loader:
                 # GNN input transformation
                 if args.use_gnn and GNN_AVAILABLE:
-                    if data[0].dim() == 4 and data[0].shape[2] == 1:
-                        data = list(data)
-                        data[0] = data[0].squeeze(2).permute(0, 2, 1)
-                    elif data[0].dim() != 3:
-                        raise ValueError(f"GNN requires 3D input (B,T,C), got {data[0].shape}")
+                    data = list(data)
+                    data[0] = transform_for_gnn(data[0])
                 
                 loss_result_dict = algorithm.update_d(data, optd)
                 
@@ -497,11 +496,8 @@ def main(args):
             for data in train_loader:
                 # GNN input transformation
                 if args.use_gnn and GNN_AVAILABLE:
-                    if data[0].dim() == 4 and data[0].shape[2] == 1:
-                        data = list(data)
-                        data[0] = data[0].squeeze(2).permute(0, 2, 1)
-                    elif data[0].dim() != 3:
-                        raise ValueError(f"GNN requires 3D input (B,T,C), got {data[0].shape}")
+                    data = list(data)
+                    data[0] = transform_for_gnn(data[0])
                 
                 step_vals = algorithm.update(data, opt)
                 
@@ -509,26 +505,20 @@ def main(args):
                 torch.nn.utils.clip_grad_norm_(algorithm.parameters(), 1.0)
             
             # Create transform wrapper for GNN if needed
-            transform_fn = None
-            if args.use_gnn and GNN_AVAILABLE:
-                def gnn_transform(x):
-                    if x.dim() == 4 and x.shape[2] == 1:
-                        return x.squeeze(2).permute(0, 2, 1)
-                    return x
-            else:
-                gnn_transform = None
+            transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
                 
             # Calculate accuracies
             results = {
                 'epoch': global_step,
-                'train_acc': modelopera.accuracy(algorithm, train_loader_noshuffle, None, transform_fn=gnn_transform),
-                'valid_acc': modelopera.accuracy(algorithm, valid_loader, None, transform_fn=gnn_transform),
-                'target_acc': modelopera.accuracy(algorithm, target_loader, None, transform_fn=gnn_transform),
+                'train_acc': modelopera.accuracy(algorithm, train_loader_noshuffle, None, transform_fn=transform_fn),
+                'valid_acc': modelopera.accuracy(algorithm, valid_loader, None, transform_fn=transform_fn),
+                'target_acc': modelopera.accuracy(algorithm, target_loader, None, transform_fn=transform_fn),
                 'total_cost_time': time.time() - step_start_time
             }
             
             # Update scheduler
-            scheduler.step(results['valid_acc'])
+            if scheduler:
+                scheduler.step(results['valid_acc'])
             
             # Log losses
             for key in loss_list:
@@ -562,8 +552,7 @@ def main(args):
                     
                     # GNN input transformation
                     if args.use_gnn and GNN_AVAILABLE:
-                        if x.dim() == 4 and x.shape[2] == 1:
-                            x = x.squeeze(2).permute(0, 2, 1)
+                        x = transform_for_gnn(x)
                     
                     features = algorithm.featurizer(x).detach().cpu().numpy()
                     source_features.append(features)
@@ -577,8 +566,7 @@ def main(args):
                     
                     # GNN input transformation
                     if args.use_gnn and GNN_AVAILABLE:
-                        if x.dim() == 4 and x.shape[2] == 1:
-                            x = x.squeeze(2).permute(0, 2, 1)
+                        x = transform_for_gnn(x)
                     
                     features = algorithm.featurizer(x).detach().cpu().numpy()
                     target_features.append(features)
@@ -606,21 +594,10 @@ def main(args):
             disable_inplace_relu(algorithm)
             
             # Create transform wrapper for GNN if needed
-            transform_fn = None
-            if args.use_gnn and GNN_AVAILABLE:
-                def gnn_transform(x):
-                    if x.dim() == 4 and x.shape[2] == 1:
-                        return x.squeeze(2).permute(0, 2, 1)
-                    return x
-                
-                # Apply transformation for GNN
-                background = gnn_transform(background)
-                X_eval = gnn_transform(X_eval)
-            else:
-                gnn_transform = None
+            transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
                 
             # Compute SHAP values safely
-            shap_vals = safe_compute_shap_values(algorithm, background, X_eval)
+            shap_vals = safe_compute_shap_values(algorithm, background, X_eval, transform_fn=transform_fn)
             
             # Convert to numpy safely before visualization
             X_eval_np = X_eval.detach().cpu().numpy()
@@ -650,7 +627,7 @@ def main(args):
                             output_path=os.path.join(args.output, "shap_heatmap.png"))
             
             # Evaluate SHAP impact
-            base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
+            base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals, transform_fn=transform_fn)
             
             # Save SHAP values
             save_path = os.path.join(args.output, "shap_values.npy")
@@ -660,7 +637,7 @@ def main(args):
             print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
             print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
             print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
-            print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals):.4f}")
+            print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals, transform_fn=transform_fn):.4f}")
             
             # Compute advanced metrics
             metrics = evaluate_advanced_shap_metrics(shap_vals, X_eval)
@@ -697,8 +674,7 @@ def main(args):
                 with torch.no_grad():
                     # Apply transform for GNN if needed
                     if args.use_gnn and GNN_AVAILABLE:
-                        if x.dim() == 4 and x.shape[2] == 1:
-                            x = x.squeeze(2).permute(0, 2, 1)
+                        x = transform_for_gnn(x)
                     preds = algorithm.predict(x).cpu()
                     true_labels.extend(y.cpu().numpy())
                     pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())

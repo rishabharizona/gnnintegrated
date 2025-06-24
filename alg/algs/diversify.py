@@ -62,9 +62,7 @@ def init_gnn_model(args, input_dim, num_classes):
 
 class Diversify(Algorithm):
     def __init__(self, args):
-        # Explicitly call parent constructor
         super().__init__(args)
-        
         # Feature extractor
         self.featurizer = get_fea(args)
         # Domain characterization components
@@ -97,8 +95,40 @@ class Diversify(Algorithm):
         self.criterion = nn.CrossEntropyLoss()
         # Add flag for explainability mode
         self.explain_mode = False
-        # Domain label tracking
-        self.dlabel = None
+
+    def update_d(self, minibatch, opt):
+        """Update domain characterization components"""
+        all_x1 = minibatch[0].cuda().float()
+        all_d1 = minibatch[2].cuda().long()
+        all_c1 = minibatch[1].cuda().long()
+        
+        # Validate domain labels
+        n_domains = self.args.domain_num
+        min_label = torch.min(all_d1).item()
+        max_label = torch.max(all_d1).item()
+        
+        if min_label < 0 or max_label >= n_domains:
+            print(f"⚠️ Domain labels out of bounds! Clamping to [0, {n_domains-1}]")
+            all_d1 = torch.clamp(all_d1, 0, n_domains-1)
+        
+        # Forward pass
+        z1 = self.dbottleneck(self.featurizer(all_x1))
+        if self.explain_mode:
+            z1 = z1.clone()
+        disc_in1 = Adver_network.ReverseLayerF.apply(z1, self.args.alpha1)
+        disc_out1 = self.ddiscriminator(disc_in1)
+        cd1 = self.dclassifier(z1)
+        
+        # Loss calculation
+        disc_loss = F.cross_entropy(disc_out1, all_d1, reduction='mean')
+        ent_loss = Entropylogits(cd1) * self.args.lam + F.cross_entropy(cd1, all_c1)
+        loss = ent_loss + disc_loss
+        
+        # Optimization step
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        return {'total': loss.item(), 'dis': disc_loss.item(), 'ent': ent_loss.item()}
 
     def set_dlabel(self, loader):
         """Set pseudo-domain labels using clustering"""
@@ -145,13 +175,13 @@ class Diversify(Algorithm):
         # Handle dataset types
         dataset = loader.dataset
         
-        # Function to find base dataset with set_labels_by_index method
+        # Function to find base dataset
         def get_base_dataset(ds):
-            while isinstance(ds, Subset) and not hasattr(ds, 'set_labels_by_index'):
+            while isinstance(ds, Subset):
                 ds = ds.dataset
             return ds
         
-        # Get the base dataset that supports label setting
+        # Get the base dataset
         base_dataset = get_base_dataset(dataset)
         
         # Map loader indices to original dataset indices
@@ -163,8 +193,6 @@ class Diversify(Algorithm):
                 all_index = [current.indices[i] for i in all_index]
                 current = current.dataset
             base_dataset = current
-        else:
-            base_dataset = dataset
         
         # Set labels on the base dataset
         if hasattr(base_dataset, 'set_labels_by_index'):
@@ -179,47 +207,10 @@ class Diversify(Algorithm):
         counter = Counter(pred_label)
         print(f"Pseudo-domain label distribution: {dict(counter)}")
         
-        # Store labels for validation
-        self.dlabel = torch.from_numpy(pred_label).long().cuda()
-        
         # Return to training mode
         self.dbottleneck.train()
         self.dclassifier.train()
         self.featurizer.train()
-
-    def update_d(self, minibatch, opt):
-        """Update domain characterization components"""
-        all_x1 = minibatch[0].cuda().float()
-        all_d1 = minibatch[2].cuda().long()
-        all_c1 = minibatch[1].cuda().long()
-        
-        # Validate domain labels
-        n_domains = self.args.domain_num
-        min_label = torch.min(all_d1).item()
-        max_label = torch.max(all_d1).item()
-        
-        if min_label < 0 or max_label >= n_domains:
-            print(f"⚠️ Domain labels out of bounds! Clamping to [0, {n_domains-1}]")
-            all_d1 = torch.clamp(all_d1, 0, n_domains-1)
-        
-        # Forward pass
-        z1 = self.dbottleneck(self.featurizer(all_x1))
-        if self.explain_mode:
-            z1 = z1.clone()
-        disc_in1 = Adver_network.ReverseLayerF.apply(z1, self.args.alpha1)
-        disc_out1 = self.ddiscriminator(disc_in1)
-        cd1 = self.dclassifier(z1)
-        
-        # Loss calculation
-        disc_loss = F.cross_entropy(disc_out1, all_d1, reduction='mean')
-        ent_loss = Entropylogits(cd1) * self.args.lam + F.cross_entropy(cd1, all_c1)
-        loss = ent_loss + disc_loss
-        
-        # Optimization step
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
-        return {'total': loss.item(), 'dis': disc_loss.item(), 'ent': ent_loss.item()}
 
     def update(self, data, opt):
         """Update domain-invariant features"""
@@ -233,16 +224,23 @@ class Diversify(Algorithm):
         disc_input = Adver_network.ReverseLayerF.apply(all_z, self.args.alpha)
         disc_out = self.discriminator(disc_input)
         
-        # Get pseudo-domain labels
-        if self.dlabel is None:
-            disc_labels = data[4].cuda().long()
-        else:
-            batch_indices = data[-1]
-            disc_labels = self.dlabel[batch_indices]
-            
+        # Get pseudo-domain labels directly from batch
+        disc_labels = data[4].cuda().long()
+        
         # Validate labels and clamp to valid range
         n_domains = self.args.latent_domain_num
         disc_labels = torch.clamp(disc_labels, 0, n_domains-1)
+        
+        # Ensure discriminator output size matches domain count
+        if disc_out.size(1) != n_domains:
+            print(f"⚠️ Discriminator output size mismatch! Expected {n_domains}, got {disc_out.size(1)}")
+            # Create new discriminator with correct output size
+            self.discriminator = Adver_network.Discriminator(
+                self.args.bottleneck, 
+                self.args.dis_hidden, 
+                n_domains
+            ).cuda()
+            disc_out = self.discriminator(disc_input)
             
         disc_loss = F.cross_entropy(disc_out, disc_labels)
         
@@ -265,18 +263,19 @@ class Diversify(Algorithm):
         all_x = minibatches[0].cuda().float()
         all_c = minibatches[1].cuda().long()
         
-        # Get pseudo-domain labels
-        if self.dlabel is None:
-            all_d = minibatches[4].cuda().long()
-        else:
-            batch_indices = minibatches[-1]
-            all_d = self.dlabel[batch_indices]
+        # Get pseudo-domain labels directly from batch
+        all_d = minibatches[4].cuda().long()
             
         # Validate domain labels and clamp to valid range
         n_domains = self.args.latent_domain_num
         all_d = torch.clamp(all_d, 0, n_domains-1)
             
+        # Create combined labels
         all_y = all_d * self.args.num_classes + all_c
+        
+        # Ensure combined labels are within valid range
+        max_class = self.aclassifier.fc.out_features
+        all_y = torch.clamp(all_y, 0, max_class-1)
         
         # Forward pass
         all_z = self.abottleneck(self.featurizer(all_x))

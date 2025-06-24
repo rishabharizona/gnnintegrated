@@ -231,7 +231,6 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     Returns:
         Curriculum DataLoader with selected samples
     """
-    algorithm.eval()
     # Group validation indices by domain
     domain_indices = {}
     unique_domains = set()
@@ -247,7 +246,6 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     domain_metrics = []
 
     # Compute loss and accuracy for each domain
-    algorithm.eval()
     with torch.no_grad():
         for domain, indices in domain_indices.items():
             subset = Subset(val_dataset, indices)

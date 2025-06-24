@@ -466,8 +466,7 @@ def main(args):
                 temp_algorithm,
                 tr,
                 val,
-                stage=round_idx,
-                use_embeddings=False
+                stage=round_idx
             )
             
             # Update the no-shuffle loader as well

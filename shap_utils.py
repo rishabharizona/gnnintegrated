@@ -258,16 +258,21 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
     # Convert to numpy for processing
     base_preds_np = to_numpy(base_preds)
     inputs_np = to_numpy(inputs)
-    
-    # Extract SHAP values array
     shap_vals_np = to_numpy(_get_shap_array(shap_values))
     
+    # Handle 3D inputs by adding dummy spatial dimension
+    if inputs_np.ndim == 3:
+        inputs_np = inputs_np[:, :, np.newaxis, :]  # Add spatial dimension
+        shap_vals_np = shap_vals_np[:, :, np.newaxis, :]  # Match SHAP dimensions
+    
+    # Now safely unpack dimensions
+    batch_size, n_channels, n_spatial, n_timesteps = inputs_np.shape
+    
     masked_inputs = inputs_np.copy()
-    batch_size, n_channels, _, n_timesteps = inputs_np.shape
     
     # Mask top-K important features for each sample
     for i in range(batch_size):
-        # Calculate importance per time step (average across channels)
+        # Calculate importance per time step (average across channels and spatial)
         importance = np.abs(shap_vals_np[i]).mean(axis=(0, 1))
         
         # Determine threshold for top K%
@@ -308,13 +313,21 @@ def compute_confidence_change(base_preds, masked_preds):
 
 def compute_aopc(model, inputs, shap_values, steps=10):
     model.eval()
+    
+    # Handle 3D inputs by adding dummy spatial dimension
+    if inputs.dim() == 3:
+        inputs = inputs.unsqueeze(2)  # Add spatial dimension
+    
     inputs_np = to_numpy(inputs)
+    batch_size, n_channels, n_spatial, n_timesteps = inputs_np.shape
+    device = inputs.device
     
     # Extract SHAP values array
     shap_vals_np = to_numpy(_get_shap_array(shap_values))
     
-    batch_size, n_channels, _, n_timesteps = inputs_np.shape
-    device = inputs.device
+    # Handle 3D SHAP values
+    if shap_vals_np.ndim == 3:
+        shap_vals_np = shap_vals_np[:, :, np.newaxis, :]  # Match input dimensions
     
     with torch.no_grad():
         base_preds = model.predict(inputs)
@@ -323,7 +336,7 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     aopc_scores = []
     
     for i in range(batch_size):
-        # Get importance scores (average across channels)
+        # Get importance scores (average across channels and spatial)
         importance = np.abs(shap_vals_np[i]).mean(axis=(0, 1))
         sorted_indices = np.argsort(importance)[::-1].copy()
         mask_indices_tensor = torch.from_numpy(sorted_indices).to(device)
@@ -338,7 +351,7 @@ def compute_aopc(model, inputs, shap_values, steps=10):
             mask_indices = mask_indices_tensor[:k]
             
             modified_input = current_input.clone()
-            modified_input[:, :, mask_indices] = 0
+            modified_input[:, :, :, mask_indices] = 0
             
             # Get prediction
             with torch.no_grad():

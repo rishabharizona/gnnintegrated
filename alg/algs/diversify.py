@@ -8,12 +8,41 @@ from torch.utils.data import ConcatDataset, Subset
 from torch_geometric.nn import GCNConv, GATConv
 from sklearn.cluster import KMeans
 
-from datautil.getdataloader_single import transform_for_gnn
 from alg.modelopera import get_fea
 from network import Adver_network, common_network
 from alg.algs.base import Algorithm
 from loss.common_loss import Entropylogits
 
+def transform_for_gnn(x):
+    """Robust transformation for GNN input handling various formats"""
+    # Handle common 4D formats
+    if x.dim() == 4:
+        # Format 1: [batch, channels, 1, time] -> [batch, time, channels]
+        if x.size(1) == 8 or x.size(1) == 200:
+            return x.squeeze(2).permute(0, 2, 1)
+        # Format 2: [batch, 1, channels, time] -> [batch, time, channels]
+        elif x.size(2) == 8 or x.size(2) == 200:
+            return x.squeeze(1).permute(0, 2, 1)
+        # Format 3: [batch, time, 1, channels] -> [batch, time, channels]
+        elif x.size(3) == 8 or x.size(3) == 200:
+            return x.squeeze(2)
+        # New format: [batch, time, channels, 1]
+        elif x.size(3) == 1 and (x.size(2) == 8 or x.size(2) == 200):
+            return x.squeeze(3)
+    # Handle 3D formats
+    elif x.dim() == 3:
+        # Format 1: [batch, channels, time] -> [batch, time, channels]
+        if x.size(1) == 8 or x.size(1) == 200:
+            return x.permute(0, 2, 1)
+        # Format 2: [batch, time, channels] - already correct
+        elif x.size(2) == 8 or x.size(2) == 200:
+            return x
+    # Unsupported format
+    raise ValueError(
+        f"Cannot transform input of shape {x.shape} for GNN. "
+        f"Expected formats: [B, C, 1, T], [B, 1, C, T], [B, T, 1, C], [B, T, C, 1], "
+        f"or 3D formats [B, C, T] or [B, T, C] where C is 8 or 200."
+    )
 class GNNModel(nn.Module):
     """GNN model for activity recognition"""
     def __init__(self, input_dim, hidden_dim, num_classes, gnn_type='gcn'):

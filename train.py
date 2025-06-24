@@ -130,21 +130,36 @@ def transform_for_gnn(x):
     # Handle common 4D formats
     if x.dim() == 4:
         # Format 1: [batch, channels, 1, time] -> [batch, time, channels]
-        if x.size(1) == 8:  # EMG channels at dimension 1
+        if x.size(1) == 8 or x.size(1) == 200:  # Accept both raw/embedded
             return x.squeeze(2).permute(0, 2, 1)
         # Format 2: [batch, 1, channels, time] -> [batch, time, channels]
-        elif x.size(2) == 8:
+        elif x.size(2) == 8 or x.size(2) == 200:
             return x.squeeze(1).permute(0, 2, 1)
         # Format 3: [batch, time, 1, channels] -> [batch, time, channels]
-        elif x.size(3) == 8:
+        elif x.size(3) == 8 or x.size(3) == 200:
             return x.squeeze(2)
+        # New format: [batch, time, channels, 1]
+        elif x.size(2) == 8 or x.size(2) == 200:
+            return x.squeeze(3).permute(0, 1, 2)
     
-    # Already in correct 3D format
+    # Handle 3D formats
     elif x.dim() == 3:
-        return x
-        
+        # Format 1: [batch, channels, time] -> [batch, time, channels]
+        if x.size(1) == 8 or x.size(1) == 200:
+            return x.permute(0, 2, 1)
+        # Format 2: [batch, time, channels] - already correct
+        elif x.size(2) == 8 or x.size(2) == 200:
+            return x
+        # Format 3: [batch, features, time] - need to check if features are 8 or 200
+        elif x.size(1) == 8 or x.size(1) == 200:
+            return x.permute(0, 2, 1)
+    
     # Unsupported format
-    raise ValueError(f"Cannot transform input of shape {x.shape} for GNN")
+    raise ValueError(
+        f"Cannot transform input of shape {x.shape} for GNN. "
+        f"Expected formats: [B, C, 1, T], [B, 1, C, T], [B, T, 1, C], [B, T, C, 1], "
+        f"or 3D formats [B, C, T] or [B, T, C] where C is 8 or 200."
+    )
 
 def main(args):
     s = print_args(args, [])
@@ -271,13 +286,21 @@ def main(args):
                 self.temporal_aggregator = nn.AdaptiveAvgPool1d(1)
                 
             def forward(self, x):
-                # Input shape verification
-                if x.size(-1) != self.input_dim:
+                # Input shape verification - allow both 8 (raw) and 200 (embedded)
+                if x.size(-1) not in [8, 200]:
                     raise ValueError(
-                        f"Input features dim mismatch! Expected {self.input_dim}, "
+                        f"Input features dim mismatch! Expected 8 (raw) or 200 (embedded), "
                         f"got {x.size(-1)}. Full shape: {x.shape}"
                     )
-                    
+                
+                # Apply feature projection if needed (200 -> 8)
+                if x.size(-1) == 200 and self.input_dim == 8:
+                    if not hasattr(self, 'feature_projection'):
+                        # Create projection layer if not exists
+                        self.feature_projection = nn.Linear(200, 8).to(x.device)
+                        print("Created feature projection layer: 200 -> 8")
+                    x = self.feature_projection(x)
+                
                 # Original processing
                 out = super().forward(x)
                 
@@ -443,7 +466,8 @@ def main(args):
                 temp_algorithm,
                 tr,
                 val,
-                stage=round_idx
+                stage=round_idx,
+                use_embeddings=False
             )
             
             # Update the no-shuffle loader as well

@@ -8,7 +8,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, confusion_matrix, ConfusionMatrixDisplay
-from sklearn.linear_model import LogisticRegression  # For h-divergence
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score  # Added Calinski-Harabasz
 from alg.opt import *
 from alg import alg, modelopera
 from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ, disable_inplace_relu
@@ -16,7 +17,6 @@ from datautil.getdataloader_single import get_act_dataloader, get_curriculum_loa
 from torch_geometric.loader import DataLoader
 from torch.utils.data import ConcatDataset
 from network.act_network import ActNetwork
-from sklearn.metrics import davies_bouldin_score
 
 # Unified SHAP utilities import
 from shap_utils import (
@@ -56,19 +56,22 @@ def automated_k_estimation(features, k_min=2, k_max=10):
         if len(np.unique(labels)) < 2:
             silhouette = -1
             dbi = float('inf')
+            ch_score = -1
         else:
             silhouette = silhouette_score(features, labels)
             dbi = davies_bouldin_score(features, labels)
+            ch_score = calinski_harabasz_score(features, labels)  # Added CH metric
         
-        # Combine scores: higher silhouette is better, lower DBI is better
+        # Combine scores: higher silhouette and CH are better, lower DBI is better
         norm_silhouette = (silhouette + 1) / 2  # Map to [0,1]
-        norm_dbi = 1 / (1 + dbi)  # Map to (0,1] where higher is better
+        norm_dbi = 1 / (1 + dbi)  # Map to (0,1]
+        norm_ch = ch_score / 1000  # Normalize CH score
         
-        # Combined score gives equal weight to both metrics
-        combined_score = (norm_silhouette + norm_dbi) / 2
-        scores.append((k, silhouette, dbi, combined_score))
+        # Combined score gives weight to all three metrics
+        combined_score = (0.5 * norm_silhouette) + (0.3 * norm_ch) + (0.2 * norm_dbi)
+        scores.append((k, silhouette, dbi, ch_score, combined_score))
         
-        print(f"K={k}: Silhouette={silhouette:.4f}, DBI={dbi:.4f}, Combined={combined_score:.4f}")
+        print(f"K={k}: Silhouette={silhouette:.4f}, DBI={dbi:.4f}, CH={ch_score:.4f}, Combined={combined_score:.4f}")
         
         if combined_score > best_score:
             best_k = k
@@ -188,28 +191,28 @@ def main(args):
         train_loader = DataLoader(
             dataset=tr,
             batch_size=args.batch_size,
-            num_workers=args.N_WORKERS,
+            num_workers=min(2, args.N_WORKERS),  # Limit workers
             drop_last=False,
             shuffle=True
         )
         train_loader_noshuffle = DataLoader(
             dataset=tr,
             batch_size=args.batch_size,
-            num_workers=args.N_WORKERS,
+            num_workers=min(2, args.N_WORKERS),  # Limit workers
             drop_last=False,
             shuffle=False
         )
         valid_loader = DataLoader(
             dataset=val,
             batch_size=args.batch_size,
-            num_workers=args.N_WORKERS,
+            num_workers=min(2, args.N_WORKERS),  # Limit workers
             drop_last=False,
             shuffle=False
         )
         target_loader = DataLoader(
             dataset=targetdata,
             batch_size=args.batch_size,
-            num_workers=args.N_WORKERS,
+            num_workers=min(2, args.N_WORKERS),  # Limit workers
             drop_last=False,
             shuffle=False
         )
@@ -231,8 +234,23 @@ def main(args):
             fully_connected_fallback=True
         )
         
-        # Initialize Temporal GCN model
-        gnn_model = TemporalGCN(
+        # Initialize Temporal GCN model with skip connection
+        class EnhancedTemporalGCN(TemporalGCN):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                # Add skip connection
+                if kwargs['input_dim'] != kwargs['output_dim']:
+                    self.skip_conn = nn.Linear(kwargs['input_dim'], kwargs['output_dim'])
+                else:
+                    self.skip_conn = nn.Identity()
+                    
+            def forward(self, x):
+                # Original processing
+                out = super().forward(x)
+                # Add skip connection
+                return out + self.skip_conn(x)
+        
+        gnn_model = EnhancedTemporalGCN(
             input_dim=8,  # EMG channels
             hidden_dim=args.gnn_hidden_dim,
             output_dim=args.gnn_output_dim,
@@ -271,7 +289,7 @@ def main(args):
         # Create both bottlenecks (classifier and adversarial)
         algorithm.bottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
         algorithm.abottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
-        algorithm.dbottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()  # Add this line
+        algorithm.dbottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
         print(f"Created bottlenecks: {input_dim} -> {output_dim}")
         print(f"Bottleneck architecture: {algorithm.bottleneck}")
         
@@ -306,6 +324,11 @@ def main(args):
                     reconstructed = gnn_model.reconstruct(features)
                     loss = torch.nn.functional.mse_loss(reconstructed, target)
                     
+                    # Skip update if NaN loss
+                    if torch.isnan(loss):
+                        print("NaN loss detected during pretraining, skipping update")
+                        continue
+                    
                     # Optimization with gradient clipping
                     gnn_optimizer.zero_grad()
                     loss.backward()
@@ -326,6 +349,11 @@ def main(args):
     opt = get_optimizer(algorithm, args, nettype='Diversify-cls')
     opta = get_optimizer(algorithm, args, nettype='Diversify-all')
     
+    # Add learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        opt, mode='max', factor=0.5, patience=3, verbose=True
+    )
+    
     # Training metrics logging
     logs = {k: [] for k in ['epoch', 'class_loss', 'dis_loss', 'ent_loss',
                            'total_loss', 'train_acc', 'valid_acc', 'target_acc',
@@ -337,7 +365,7 @@ def main(args):
         tr,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=args.N_WORKERS
+        num_workers=min(2, args.N_WORKERS)  # Limit workers
     )
     
     # Main training loop
@@ -370,7 +398,7 @@ def main(args):
                 train_loader.dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
-                num_workers=args.N_WORKERS
+                num_workers=min(2, args.N_WORKERS)  # Limit workers
             )
         
         algorithm.train()
@@ -393,6 +421,7 @@ def main(args):
                 
                 loss_result_dict = algorithm.update_a(data, opta)
                 
+                # Skip update if NaN loss
                 if not np.isfinite(loss_result_dict['class']):
                     print("Skipping step due to non-finite loss")
                     continue
@@ -491,6 +520,9 @@ def main(args):
                 'total_cost_time': time.time() - step_start_time
             }
             
+            # Update scheduler
+            scheduler.step(results['valid_acc'])
+            
             # Log losses
             for key in loss_list:
                 results[f"{key}_loss"] = step_vals[key]
@@ -588,13 +620,29 @@ def main(args):
             # Convert to numpy safely before visualization
             X_eval_np = X_eval.detach().cpu().numpy()
             
+            # Handle GNN dimensionality for visualization
+            if args.use_gnn and GNN_AVAILABLE:
+                # Convert 3D (batch, time, channels) to 4D (batch, channels, 1, time)
+                shap_vals = np.transpose(shap_vals, (0, 2, 1))
+                shap_vals = np.expand_dims(shap_vals, axis=2)
+                
+                X_eval_np = np.transpose(X_eval_np, (0, 2, 1))
+                X_eval_np = np.expand_dims(X_eval_np, axis=2)
+            
             # Generate core visualizations
-            plot_summary(shap_vals, X_eval_np, 
-                         output_path=os.path.join(args.output, "shap_summary.png"))
+            try:
+                plot_summary(shap_vals, X_eval_np, 
+                            output_path=os.path.join(args.output, "shap_summary.png"))
+            except IndexError as e:
+                print(f"SHAP summary plot dimension error: {str(e)}")
+                print(f"Using fallback 3D visualization instead")
+                plot_emg_shap_4d(X_eval, shap_vals, 
+                                output_path=os.path.join(args.output, "shap_3d_fallback.html"))
+            
             overlay_signal_with_shap(X_eval_np[0], shap_vals, 
-                                     output_path=os.path.join(args.output, "shap_overlay.png"))
+                                    output_path=os.path.join(args.output, "shap_overlay.png"))
             plot_shap_heatmap(shap_vals, 
-                              output_path=os.path.join(args.output, "shap_heatmap.png"))
+                            output_path=os.path.join(args.output, "shap_heatmap.png"))
             
             # Evaluate SHAP impact
             base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
@@ -633,9 +681,9 @@ def main(args):
             
             # Generate 4D visualizations
             plot_emg_shap_4d(X_eval, shap_vals, 
-                             output_path=os.path.join(args.output, "shap_4d_scatter.html"))
+                            output_path=os.path.join(args.output, "shap_4d_scatter.html"))
             plot_4d_shap_surface(shap_vals, 
-                                 output_path=os.path.join(args.output, "shap_4d_surface.html"))
+                                output_path=os.path.join(args.output, "shap_4d_surface.html"))
             
             # Confusion matrix
             true_labels, pred_labels = [], []
@@ -729,5 +777,9 @@ if __name__ == '__main__':
             args.gnn_lr = getattr(args, 'gnn_lr', 0.001)
             args.gnn_weight_decay = getattr(args, 'gnn_weight_decay', 0.0001)
             args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)
+    
+    # Increase adversarial weight for better domain adaptation
+    if not hasattr(args, 'adv_weight'):
+        args.adv_weight = 2.0  # Increased from default 1.0
     
     main(args)

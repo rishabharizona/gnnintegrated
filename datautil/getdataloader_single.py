@@ -13,27 +13,29 @@ from datautil.graph_utils import convert_to_graph
 task_act = {'cross_people': cross_people}
 
 class SafeSubset(Subset):
-    """Safe subset that converts all data to PyTorch tensors"""
+    """Safe subset that eliminates all numpy types"""
     def __init__(self, dataset, indices):
         super().__init__(dataset, indices)
         self.indices = indices
         
     def __getitem__(self, idx):
         data = self.dataset[self.indices[idx]]
-        return self.convert_to_tensor(data)
+        return self.convert_data(data)
     
-    def convert_to_tensor(self, data):
-        """Recursively convert numpy types to PyTorch tensors"""
+    def convert_data(self, data):
+        """Recursively convert numpy types to PyTorch-compatible formats"""
         if isinstance(data, tuple):
-            return tuple(self.convert_to_tensor(x) for x in data)
+            return tuple(self.convert_data(x) for x in data)
         elif isinstance(data, list):
-            return [self.convert_to_tensor(x) for x in data]
-        elif isinstance(data, np.ndarray):
-            return torch.from_numpy(data)
+            return [self.convert_data(x) for x in data]
+        elif isinstance(data, dict):
+            return {k: self.convert_data(v) for k, v in data.items()}
         elif isinstance(data, np.generic):
-            return torch.tensor(data)
+            return data.item()  # Convert numpy scalar to Python primitive
+        elif isinstance(data, np.ndarray):
+            return torch.from_numpy(data)  # Convert numpy array to tensor
         elif isinstance(data, torch.Tensor):
-            return data
+            return data  # Already good
         else:
             # Try to convert any other numeric types
             try:
@@ -321,7 +323,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
 
     print(f"Selected {len(selected_indices)} samples from {len(selected_domains)} domains")
     
-    # Create curriculum subset without label setter
+    # Create curriculum subset
     curriculum_subset = SafeSubset(train_dataset, selected_indices)
     
     # ===== GNN-SPECIFIC CURRICULUM LOADER =====

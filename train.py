@@ -6,7 +6,6 @@ tf.get_logger().setLevel('ERROR')  # Suppress TensorFlow warnings
 import logging
 logging.getLogger("shap").setLevel(logging.WARNING)  # Suppress SHAP warnings
 import os
-- os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
 import sys
 import subprocess
 import time

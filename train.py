@@ -536,7 +536,7 @@ def main(args):
             n_layers=getattr(args, 'gnn_layers', 3),  # Use getattr for safety
             use_tcn=args.use_tcn
         ).cuda()
-        else:
+    else:
             print("Using CNN for feature extraction")
             temp_model = ActNetwork(args.dataset).cuda()
         

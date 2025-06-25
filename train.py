@@ -1202,7 +1202,7 @@ if getattr(args, 'automated_k', False):
 
 if __name__ == '__main__':
     args = get_args()
-    
+
     # Add GNN-specific parameters to args
     if not hasattr(args, 'use_gnn'):
         args.use_gnn = False
@@ -1219,38 +1219,37 @@ if __name__ == '__main__':
             args.gnn_weight_decay = getattr(args, 'gnn_weight_decay', 0.0001)
             args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)
             
-            # Increase adversarial weight for better domain adaptation
-            if not hasattr(args, 'adv_weight'):
-                args.adv_weight = 2.0
-                
             # Add LSTM parameters if using GNN
             args.lstm_hidden_size = getattr(args, 'lstm_hidden_size', 128)
             args.lstm_layers = getattr(args, 'lstm_layers', 1)
             args.bidirectional = getattr(args, 'bidirectional', False)
             args.lstm_dropout = getattr(args, 'lstm_dropout', 0.2)
-    
+
+    # Increase adversarial weight for better domain adaptation
+    if not hasattr(args, 'adv_weight'):
+        args.adv_weight = 2.0
+
     # Add new hyperparameters
     args.optimizer = getattr(args, 'optimizer', 'adamw')
     args.weight_decay = getattr(args, 'weight_decay', 1e-4)
     args.domain_adv_weight = getattr(args, 'domain_adv_weight', 0.5)
-    
+
     # Augmentation parameters
     args.jitter_scale = getattr(args, 'jitter_scale', 0.05)
     args.scaling_std = getattr(args, 'scaling_std', 0.1)
     args.warp_ratio = getattr(args, 'warp_ratio', 0.1)
     args.channel_dropout = getattr(args, 'channel_dropout', 0.1)
     args.aug_prob = getattr(args, 'aug_prob', 0.7)
-    
+
     # Training schedule
     args.max_epoch = getattr(args, 'max_epoch', 100)
     args.early_stopping_patience = getattr(args, 'early_stopping_patience', 10)
-    
+
     # Domain adaptation
     if not hasattr(args, 'adv_weight'):
         args.adv_weight = 1.5  # Increased adversarial weight
-    
-    # Global constants
-    global MAX_GRAD_NORM
+
+    # Set gradient clipping norm
     MAX_GRAD_NORM = getattr(args, 'max_grad_norm', 1.0)
-    
+
     main(args)

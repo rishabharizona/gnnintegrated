@@ -234,32 +234,29 @@ class EMGDataAugmentation(nn.Module):
 
         # Random time warping - fixed for both 3D and 4D inputs
         if torch.rand(1) < self.aug_prob and self.warp_ratio > 0:
-            # Determine time dimension based on input shape
+            # Calculate warp_amount first
             if x.dim() == 4:  # [batch, channels, 1, time]
                 seq_len = x.size(3)
-                if torch.rand(1) > 0.5:  # Forward warp
-                    x = torch.cat([x[:, :, :, warp_amount:], x[:, :, :, :warp_amount]], dim=3)
-                else:  # Backward warp
-                    x = torch.cat([x[:, :, :, -warp_amount:], x[:, :, :, :-warp_amount]], dim=3)
             elif x.dim() == 3:  # [batch, time, channels]
                 seq_len = x.size(1)
-                warp_amount = int(torch.rand(1).item() * self.warp_ratio * seq_len)
-                warp_amount = min(warp_amount, seq_len - 1)  # Ensure valid slice
-                if warp_amount > 0:
+            else:
+                seq_len = x.size(-1)  # Last dimension as fallback
+            
+            warp_amount = int(torch.rand(1).item() * self.warp_ratio * seq_len)
+            warp_amount = min(warp_amount, seq_len - 1)  # Ensure valid slice
+            
+            if warp_amount > 0:
+                # Apply warping based on input dimensions
+                if x.dim() == 4:  # CNN format: [batch, channels, 1, time]
                     if torch.rand(1) > 0.5:  # Forward warp
                         x = torch.cat([x[:, :, :, warp_amount:], x[:, :, :, :warp_amount]], dim=3)
                     else:  # Backward warp
                         x = torch.cat([x[:, :, :, -warp_amount:], x[:, :, :, :-warp_amount]], dim=3)
-            elif x.dim() == 3:  # [batch, time, channels]
-                seq_len = x.size(1)
-                warp_amount = int(torch.rand(1).item() * self.warp_ratio * seq_len)
-                warp_amount = min(warp_amount, seq_len - 1)  # Ensure valid slice
-                if warp_amount > 0:
+                elif x.dim() == 3:  # GNN format: [batch, time, channels]
                     if torch.rand(1) > 0.5:  # Forward warp
                         x = torch.cat([x[:, warp_amount:, :], x[:, :warp_amount, :]], dim=1)
                     else:  # Backward warp
                         x = torch.cat([x[:, -warp_amount:, :], x[:, :-warp_amount, :]], dim=1)
-            # Skip warping for unsupported dimensions
 
         # Random channel dropout
         if torch.rand(1) < self.aug_prob:

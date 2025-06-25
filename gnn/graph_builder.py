@@ -7,13 +7,7 @@ import itertools
 class GraphBuilder:
     """
     Builds dynamic correlation graphs from EMG time-series data with PyTorch support.
-    Features:
-    - Multiple similarity metrics (correlation, covariance, Euclidean distance)
-    - Adaptive thresholding based on data distribution
-    - Edge weight preservation
-    - Batch processing support
-    - Comprehensive validation checks
-    - GPU acceleration support
+    Now handles 3D inputs (batch, time_steps, features) by processing each sample individually.
     
     Args:
         method: Similarity metric ('correlation', 'covariance', 'euclidean')
@@ -46,11 +40,27 @@ class GraphBuilder:
         Build temporal graph from feature sequence (post-convolution)
         
         Args:
-            feature_sequence: Feature tensor of shape (time_steps, features)
+            feature_sequence: Feature tensor of shape (batch, time_steps, features) or (time_steps, features)
             
         Returns:
             edge_index: Tensor of shape [2, num_edges]
         """
+        # Handle 3D input by processing first sample only
+        if feature_sequence.ndim == 3:
+            batch_size, T, F = feature_sequence.shape
+            if batch_size > 1:
+                print(f"⚠️ GraphBuilder received batch size {batch_size}, using first sample only")
+            return self._build_single_graph(feature_sequence[0])
+            
+        # Handle 2D input
+        elif feature_sequence.ndim == 2:
+            return self._build_single_graph(feature_sequence)
+            
+        else:
+            raise ValueError(f"Input must be 2D or 3D tensor, got shape {feature_sequence.shape}")
+
+    def _build_single_graph(self, feature_sequence: torch.Tensor) -> torch.LongTensor:
+        """Build graph for a single sample (2D tensor)"""
         # Validate input
         if not isinstance(feature_sequence, torch.Tensor):
             raise TypeError(f"Input must be torch.Tensor, got {type(feature_sequence)}")
@@ -88,14 +98,16 @@ class GraphBuilder:
                 data = data + noise * constant_mask.unsqueeze(1)
             
             # Compute time-step correlation
-            cov_matrix = torch.cov(data.t())
+            centered = data - torch.mean(data, dim=1, keepdim=True)
+            cov_matrix = torch.mm(centered, centered.t()) / (F - 1)
             std_products = torch.outer(stds, stds)
             std_products[std_products < 1e-10] = 1e-10
             corr = cov_matrix / std_products
             return torch.clamp(corr, -1.0, 1.0)
             
         elif self.method == 'covariance':
-            cov = torch.cov(data.t())
+            centered = data - torch.mean(data, dim=1, keepdim=True)
+            cov = torch.mm(centered, centered.t()) / (F - 1)
             return torch.nan_to_num(cov, nan=0.0)
             
         elif self.method == 'euclidean':

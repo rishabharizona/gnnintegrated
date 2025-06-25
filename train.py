@@ -446,9 +446,9 @@ class DomainAdversarialLoss(nn.Module):
         self.domain_classifier = nn.Sequential(
             nn.Linear(bottleneck_dim, 50),
             nn.ReLU(),
-            nn.Linear(50, 1),
-        self.loss_fn = nn.BCEWithLogitsLoss()
+            nn.Linear(50, 1)
         )
+        self.loss_fn = nn.BCEWithLogitsLoss()
     
     def forward(self, features, domain_labels):
         domain_pred = self.domain_classifier(features)

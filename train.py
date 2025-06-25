@@ -1214,12 +1214,13 @@ if __name__ == '__main__':
             # GNN hyperparameters
             args.gnn_hidden_dim = getattr(args, 'gnn_hidden_dim', 64)
             args.gnn_output_dim = getattr(args, 'gnn_output_dim', 256)
-            args.gnn_layers = getattr(args, 'gnn_layers', 3)  # Add this line
+            args.gnn_layers = getattr(args, 'gnn_layers', 3)
             args.gnn_lr = getattr(args, 'gnn_lr', 0.001)
             args.gnn_weight_decay = getattr(args, 'gnn_weight_decay', 0.0001)
             args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)
             
-            # Add LSTM parameters if using GNN
+            # TCN/LSTM parameters
+            args.use_tcn = getattr(args, 'use_tcn', True)  # Add this line
             args.lstm_hidden_size = getattr(args, 'lstm_hidden_size', 128)
             args.lstm_layers = getattr(args, 'lstm_layers', 1)
             args.bidirectional = getattr(args, 'bidirectional', False)

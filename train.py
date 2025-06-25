@@ -329,7 +329,7 @@ class EnhancedTemporalGCN(TemporalGCN):
         super().__init__(*args, **kwargs)
         
         # Define skip connection layer
-        self.skip_conn = nn.Linear(self.input_dim, self.output_dim)
+        self.skip_conn = nn.Linear(self.hidden_dim, self.output_dim)
         
         # Enhanced GNN architecture
         self.gnn_layers = nn.ModuleList()
@@ -439,7 +439,8 @@ class EnhancedTemporalGCN(TemporalGCN):
                 self.feature_projection = nn.Linear(200, 8).to(x.device)
                 print("Created feature projection layer: 200 -> 8")
             x = self.feature_projection(x)
-        
+        # Store original input for skip connection
+        original_x = x.clone()
         # GNN processing with normalization
         for layer, norm in zip(self.gnn_layers, self.norms):
             x = layer(x)
@@ -469,12 +470,11 @@ class EnhancedTemporalGCN(TemporalGCN):
         gnn_out = self.temporal_norm(gnn_out)
         
         # Process skip connection with temporal aggregation
-        if x.dim() == 4:
+        if original_x.dim() == 4:
             # For 4D: [batch, channels, 1, time]
-            skip_out = x.squeeze(2)  # [batch, channels, time]
-            skip_out = skip_out.permute(0, 2, 1)  # [batch, time, channels]
+            skip_out = original_x.squeeze(2).permute(0, 2, 1)
         else:
-            skip_out = x
+            skip_out = original_x
             
         # Skip connection processing
         skip_out = skip_out.mean(dim=1)  # [batch, channels]

@@ -328,14 +328,20 @@ class EnhancedTemporalGCN(TemporalGCN):
         # Extract parameters specific to EnhancedTemporalGCN
         self.n_layers = kwargs.pop('n_layers', 3)
         self.use_tcn = kwargs.pop('use_tcn', False)
+        
         # Extract LSTM parameters
         lstm_hidden_size = kwargs.pop('lstm_hidden_size', 128)
         lstm_layers = kwargs.pop('lstm_layers', 1)
         bidirectional = kwargs.pop('bidirectional', False)
         lstm_dropout = kwargs.pop('lstm_dropout', 0.2)
+        
+        # Now call super with cleaned kwargs
         super().__init__(*args, **kwargs)
         
-        # Enhanced GNN architecture  # Add configurable layers
+        # Define skip connection layer
+        self.skip_conn = nn.Linear(self.input_dim, self.output_dim)
+        
+        # Enhanced GNN architecture
         self.gnn_layers = nn.ModuleList()
         self.norms = nn.ModuleList()
         
@@ -358,23 +364,19 @@ class EnhancedTemporalGCN(TemporalGCN):
         )
         
         # Add TCN as alternative to LSTM
-        self.use_tcn = kwargs.get('use_tcn', False)
         if self.use_tcn:
             tcn_layers = []
             num_channels = [self.hidden_dim] * 3
             kernel_size = 5
             dropout = 0.1
-            
             for i in range(len(num_channels)):
                 dilation = 2 ** i
                 in_channels = self.hidden_dim if i == 0 else num_channels[i-1]
                 out_channels = num_channels[i]
-                
                 tcn_layers += [TemporalBlock(
                     in_channels, out_channels, kernel_size,
                     stride=1, dilation=dilation, dropout=dropout
                 )]
-            
             self.tcn = nn.Sequential(*tcn_layers)
         else:
             # LSTM remains as fallback

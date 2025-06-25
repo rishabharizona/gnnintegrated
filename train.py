@@ -228,7 +228,7 @@ class EMGDataAugmentation(nn.Module):
         # Random scaling - FIXED BROADCASTING
         if torch.rand(1) < self.aug_prob:
             # Create scale factor with proper dimensions for broadcasting
-            scale_factor = torch.randn(x.size(0), *([1] * (x.dim() - 1)), device=x.device
+            scale_factor = torch.randn(x.size(0), *([1] * (x.dim() - 1))), device=x.device
             scale_factor = scale_factor * self.scaling_std + 1.0
             x = x * scale_factor
 

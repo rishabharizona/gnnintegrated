@@ -368,6 +368,7 @@ class EnhancedTemporalGCN(TemporalGCN):
                     stride=1, dilation=dilation, dropout=dropout
                 )]
             self.tcn = nn.Sequential(*tcn_layers)
+            # Update projection to match actual output channels
             self.tcn_proj = nn.Linear(num_channels[-1], self.output_dim)
         else:
             # LSTM remains as fallback
@@ -453,10 +454,14 @@ class EnhancedTemporalGCN(TemporalGCN):
         if self.use_tcn:
             # TCN expects (batch, channels, time)
             tcn_in = x.permute(0, 2, 1)
+            print(f"TCN input shape: {tcn_in.shape}")
             tcn_out = self.tcn(tcn_in)
+            print(f"TCN output shape: {tcn_out.shape}")
             temporal_out = tcn_out.permute(0, 2, 1)
+            print(f"TCN permuted shape: {tcn_out.shape}")
             # Project to output dimension
             temporal_out = self.tcn_proj(tcn_out)
+            print(f"Projected shape: {temporal_out.shape}")
         else:
             # LSTM processing
             lstm_out, _ = self.lstm(x)
@@ -534,7 +539,7 @@ def main(args):
                 output_dim=args.gnn_output_dim,
                 graph_builder=graph_builder,
                 n_layers=getattr(args, 'gnn_layers', 3),
-                use_tcn=getattr(args, 'use_tcn', True)  # Safe access
+                use_tcn=getattr(args, 'use_tcn', True)
             ).cuda()
         else:
             print("Using CNN for feature extraction")
@@ -551,13 +556,16 @@ def main(args):
                 if args.use_gnn and GNN_AVAILABLE:
                     # Convert to (batch, time, channels) format
                     inputs = transform_for_gnn(inputs)
+                    
+                    # Debug print input shape
+                    print(f"GNN input shape: {inputs.shape}")
+                    
                     # Ensure it's 3D: [batch, time, channels]
-                    if inputs.dim() != 3:
+                    if inputs.dim() == 4:
                         # For 4D: [batch, channels, 1, time] -> [batch, time, channels]
-                        if inputs.dim() == 4:
-                            inputs = inputs.squeeze(2).permute(0, 2, 1)
-                        else:
-                            raise ValueError(f"Unsupported GNN input dimension: {inputs.dim()}")
+                        inputs = inputs.squeeze(2).permute(0, 2, 1)
+                    elif inputs.dim() != 3:
+                        raise ValueError(f"Unsupported GNN input dimension: {inputs.dim()}")
                 
                 features = temp_model(inputs)
                 feature_list.append(features.detach().cpu().numpy())

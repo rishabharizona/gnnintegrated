@@ -454,14 +454,10 @@ class EnhancedTemporalGCN(TemporalGCN):
         if self.use_tcn:
             # TCN expects (batch, channels, time)
             tcn_in = x.permute(0, 2, 1)
-            print(f"TCN input shape: {tcn_in.shape}")
             tcn_out = self.tcn(tcn_in)
-            print(f"TCN output shape: {tcn_out.shape}")
-            temporal_out = tcn_out.permute(0, 2, 1)
-            print(f"TCN permuted shape: {tcn_out.shape}")
+            tcn_out = tcn_out.permute(0, 2, 1))
             # Project to output dimension
             temporal_out = self.tcn_proj(tcn_out)
-            print(f"Projected shape: {temporal_out.shape}")
         else:
             # LSTM processing
             lstm_out, _ = self.lstm(x)

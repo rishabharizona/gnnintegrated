@@ -266,6 +266,19 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
                 if hasattr(args, 'model_type') and args.model_type == 'gnn':
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
+                    # Ensure sufficient time steps for GNN [ADDED PADDING]
+                    if inputs.num_nodes > 0 and hasattr(inputs, 'num_nodes'):
+                        # Handle PyG Batch object
+                        if inputs.num_node_features < 200:
+                            # This requires more complex handling - skip for now
+                            pass
+                    elif isinstance(inputs, torch.Tensor) and inputs.dim() == 3:
+                        if inputs.size(1) < 200:
+                            padding = 200 - inputs.size(1)
+                            inputs = torch.nn.functional.pad(inputs, (0, 0, 0, padding), "constant", 0)
+                else:
+                    inputs = batch[0].cuda().float()
+                    labels = batch[1].cuda().long()
                 else:
                     inputs = batch[0].cuda().float()
                     labels = batch[1].cuda().long()

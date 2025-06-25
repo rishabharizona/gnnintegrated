@@ -448,6 +448,7 @@ class DomainAdversarialLoss(nn.Module):
             nn.ReLU(),
             nn.Linear(50, 1)
         self.loss_fn = nn.BCEWithLogitsLoss()
+        )
     
     def forward(self, features, domain_labels):
         domain_pred = self.domain_classifier(features)

@@ -517,58 +517,58 @@ def main(args):
     # Automated K estimation if enabled
     if getattr(args, 'automated_k', False):
         print("\nRunning automated K estimation...")
-    
-    # Use GNN if enabled and available, otherwise use standard CNN
-    if args.use_gnn and GNN_AVAILABLE:
-        print("Using GNN for feature extraction")
-        # Initialize graph builder for feature extraction
-        graph_builder = GraphBuilder(
-            method='correlation',
-            threshold_type='adaptive',
-            default_threshold=0.3,
-            adaptive_factor=1.5
-        )
-        temp_model = EnhancedTemporalGCN(
-            input_dim=8,  # EMG channels
-            hidden_dim=args.gnn_hidden_dim,
-            output_dim=args.gnn_output_dim,
-            graph_builder=graph_builder,
-            n_layers=getattr(args, 'gnn_layers', 3),  # Use getattr for safety
-            use_tcn=args.use_tcn
-        ).cuda()
-    else:
+        
+        # Use GNN if enabled and available, otherwise use standard CNN
+        if args.use_gnn and GNN_AVAILABLE:
+            print("Using GNN for feature extraction")
+            # Initialize graph builder for feature extraction
+            graph_builder = GraphBuilder(
+                method='correlation',
+                threshold_type='adaptive',
+                default_threshold=0.3,
+                adaptive_factor=1.5
+            )
+            temp_model = EnhancedTemporalGCN(
+                input_dim=8,  # EMG channels
+                hidden_dim=args.gnn_hidden_dim,
+                output_dim=args.gnn_output_dim,
+                graph_builder=graph_builder,
+                n_layers=getattr(args, 'gnn_layers', 3),
+                use_tcn=getattr(args, 'use_tcn', True)  # Safe access
+            ).cuda()
+        else:
             print("Using CNN for feature extraction")
             temp_model = ActNetwork(args.dataset).cuda()
         
-    temp_model.eval()
-    feature_list = []
-    
-    with torch.no_grad():
-        for batch in train_loader:
-            inputs = batch[0].cuda().float()
-            
-            # Handle GNN input format if needed
-            if args.use_gnn and GNN_AVAILABLE:
-                # Convert to (batch, time, channels) format
-                inputs = transform_for_gnn(inputs)
-                # Ensure it's 3D: [batch, time, channels]
-                if inputs.dim() != 3:
-                    # For 4D: [batch, channels, 1, time] -> [batch, time, channels]
-                    if inputs.dim() == 4:
-                        inputs = inputs.squeeze(2).permute(0, 2, 1)
-                    else:
-                        raise ValueError(f"Unsupported GNN input dimension: {inputs.dim()}")
-            
-            features = temp_model(inputs)
-            feature_list.append(features.detach().cpu().numpy())
-    
-    all_features = np.concatenate(feature_list, axis=0)
-    optimal_k = automated_k_estimation(all_features)
-    args.latent_domain_num = optimal_k
-    print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
-    
-    del temp_model
-    torch.cuda.empty_cache()
+        temp_model.eval()
+        feature_list = []
+        
+        with torch.no_grad():
+            for batch in train_loader:
+                inputs = batch[0].cuda().float()
+                
+                # Handle GNN input format if needed
+                if args.use_gnn and GNN_AVAILABLE:
+                    # Convert to (batch, time, channels) format
+                    inputs = transform_for_gnn(inputs)
+                    # Ensure it's 3D: [batch, time, channels]
+                    if inputs.dim() != 3:
+                        # For 4D: [batch, channels, 1, time] -> [batch, time, channels]
+                        if inputs.dim() == 4:
+                            inputs = inputs.squeeze(2).permute(0, 2, 1)
+                        else:
+                            raise ValueError(f"Unsupported GNN input dimension: {inputs.dim()}")
+                
+                features = temp_model(inputs)
+                feature_list.append(features.detach().cpu().numpy())
+        
+        all_features = np.concatenate(feature_list, axis=0)
+        optimal_k = automated_k_estimation(all_features)
+        args.latent_domain_num = optimal_k
+        print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
+        
+        del temp_model
+        torch.cuda.empty_cache()
     
     # Batch size adjustment
     if args.latent_domain_num < 6:

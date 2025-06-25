@@ -439,17 +439,20 @@ class EnhancedTemporalGCN(TemporalGCN):
                 self.feature_projection = nn.Linear(200, 8).to(x.device)
                 print("Created feature projection layer: 200 -> 8")
             x = self.feature_projection(x)
+        
         # Store original input for skip connection
         original_x = x.clone()
+        
         # GNN processing with normalization
+        gnn_features = x  # We'll keep track of the GNN processed features
         for layer, norm in zip(self.gnn_layers, self.norms):
-            x = layer(x)
-            x = norm(x)
-            x = F.gelu(x)
+            gnn_features = layer(gnn_features)
+            gnn_features = norm(gnn_features)
+            gnn_features = F.gelu(gnn_features)
         
         # Attention pooling
-        attn_out, _ = self.attention(x, x, x)
-        x = x + attn_out  # Residual connection
+        attn_out, _ = self.attention(gnn_features, gnn_features, gnn_features)
+        x = gnn_features + attn_out  # Residual connection
         
         # Temporal modeling
         if self.use_tcn:
@@ -469,14 +472,11 @@ class EnhancedTemporalGCN(TemporalGCN):
         gnn_out = temporal_out.mean(dim=1)  # [batch, output_dim]
         gnn_out = self.temporal_norm(gnn_out)
         
+        # Skip connection processing - USE GNN PROCESSED FEATURES!
         # Process skip connection with temporal aggregation
-        if original_x.dim() == 4:
-            # For 4D: [batch, channels, 1, time]
-            skip_out = original_x.squeeze(2).permute(0, 2, 1)
-        else:
-            skip_out = original_x
-            
-        # Skip connection processing
+        skip_out = gnn_features  # Use the GNN processed features instead of original input
+        
+        # Temporal aggregation for skip connection
         skip_out = skip_out.mean(dim=1)  # [batch, channels]
         skip_out = self.skip_conn(skip_out)  # [batch, output_dim]
         

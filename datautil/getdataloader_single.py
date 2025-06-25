@@ -315,9 +315,10 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             domain, difficulty = domain_scores[rank]
             print(f"{rank+1}. Domain {domain}: Difficulty = {difficulty:.4f}")
 
-    # Curriculum progression
+    # Curriculum progression - FIXED HERE
     num_domains = len(domain_scores)
-    progress = min(1.0, (stage + 1) / args.CL_PHASE_EPOCHS)
+    total_stages = len(args.CL_PHASE_EPOCHS)  # Get the number of stages
+    progress = min(1.0, (stage + 1) / total_stages)  # Calculate progress correctly
     progress = np.sqrt(progress)  # Slower initial progression
     
     num_selected = max(2, min(num_domains, int(np.ceil(progress * num_domains * 0.8))))

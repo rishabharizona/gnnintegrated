@@ -189,6 +189,11 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     """
     Create a curriculum data loader based on domain difficulty
     """
+    # Safely get device from args or algorithm
+    device = getattr(args, 'device', None)
+    if device is None:
+        device = next(algorithm.parameters()).device
+    
     # Group validation indices by domain
     domain_indices = {}
     unique_domains = set()
@@ -220,16 +225,16 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             for batch in loader:
                 # Handle GNN vs standard model inputs
                 if hasattr(args, 'model_type') and args.model_type == 'gnn':
-                    inputs = batch[0].to(args.device)
-                    labels = batch[1].to(args.device)
+                    inputs = batch[0].to(device)
+                    labels = batch[1].to(device)
                     
                     # Convert to dense batch format if needed
                     if isinstance(inputs, Batch) and hasattr(inputs, 'batch'):
                         x_dense, mask = to_dense_batch(inputs.x, inputs.batch)
                         inputs = x_dense
                 else:
-                    inputs = batch[0].to(args.device).float()
-                    labels = batch[1].to(args.device).long()
+                    inputs = batch[0].to(device).float()
+                    labels = batch[1].to(device).long()
                 
                 output = algorithm.predict(inputs)
                 loss = torch.nn.functional.cross_entropy(output, labels)

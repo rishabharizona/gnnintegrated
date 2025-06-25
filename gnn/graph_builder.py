@@ -60,8 +60,9 @@ class GraphBuilder:
             raise ValueError(f"Input must be 2D (time_steps, features), got shape {feature_sequence.shape}")
             
         T, F = feature_sequence.shape
-        if T < 2:
-            raise ValueError(f"Need at least 2 time steps, got {T}")
+        if T < 10:
+            print(f"⚠️ Insufficient time steps ({T}), using fully connected graph")
+            return self._build_fully_connected(T)
 
         # Compute similarity matrix between TIME STEPS
         similarity_matrix = self._compute_similarity(feature_sequence)

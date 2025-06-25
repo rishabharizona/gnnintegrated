@@ -290,7 +290,7 @@ class TemporalGCNLayer(nn.Module):
         edge_indices = self.graph_builder.build_graph_for_batch(x)
         
         # Graph convolution operation
-        x = torch.bmm(adj_matrix, x)  # [batch, time, features]
+        x = torch.bmm(edge_indices, x)  # [batch, time, features]
         
         # Linear transformation
         x = self.linear(x)

@@ -8,6 +8,12 @@ class GraphBuilder:
     """
     Builds dynamic correlation graphs from EMG time-series data with PyTorch support.
     Now handles 3D inputs (batch, time_steps, features) by processing each sample individually.
+    Features:
+    - Multiple similarity metrics (correlation, covariance, Euclidean distance)
+    - Adaptive thresholding based on data distribution
+    - Efficient star topology for small sequences
+    - Batch processing support
+    - Comprehensive validation checks
     
     Args:
         method: Similarity metric ('correlation', 'covariance', 'euclidean')
@@ -71,9 +77,9 @@ class GraphBuilder:
         T, F = feature_sequence.shape
         device = feature_sequence.device
         
-        if T < 10:
-            print(f"⚠️ Insufficient time steps ({T}), using fully connected graph")
-            return self._create_fully_connected(T).to(device)
+        # Handle small sequences with star topology
+        if T < 5:
+            return self._create_star_topology(T).to(device)
 
         # Compute similarity matrix between TIME STEPS
         similarity_matrix = self._compute_similarity(feature_sequence)
@@ -171,6 +177,19 @@ class GraphBuilder:
         
         return edges
 
+    def _create_star_topology(self, num_nodes: int) -> torch.LongTensor:
+        """Create star topology for small sequences (more efficient than fully connected)"""
+        if num_nodes < 2:
+            return torch.empty((2, 0), dtype=torch.long)
+        
+        center = num_nodes // 2
+        edges = []
+        for i in range(num_nodes):
+            if i != center:
+                edges.append([center, i])
+                edges.append([i, center])
+        return torch.tensor(edges, dtype=torch.long).t().contiguous()
+
     def _create_fully_connected(self, num_nodes: int) -> torch.LongTensor:
         """Create fully connected graph between TIME STEPS"""
         # Create all possible edges except self-loops
@@ -200,7 +219,7 @@ class GraphBuilder:
         
         for i in range(batch_data.size(0)):
             sample = batch_data[i]
-            edge_index = self.build_graph(sample)
+            edge_index = self._build_single_graph(sample)
             edge_indices.append(edge_index)
             
         return edge_indices

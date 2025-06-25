@@ -276,6 +276,9 @@ def get_optimizer_adamw(algorithm, args, nettype='Diversify'):
 # ======================= ENHANCED GNN ARCHITECTURE =======================
 class EnhancedTemporalGCN(TemporalGCN):
     def __init__(self, *args, **kwargs):
+        # Extract parameters specific to EnhancedTemporalGCN
+        self.n_layers = kwargs.pop('n_layers', 3)
+        self.use_tcn = kwargs.pop('use_tcn', False)
         # Extract LSTM parameters
         lstm_hidden_size = kwargs.pop('lstm_hidden_size', 128)
         lstm_layers = kwargs.pop('lstm_layers', 1)
@@ -283,8 +286,7 @@ class EnhancedTemporalGCN(TemporalGCN):
         lstm_dropout = kwargs.pop('lstm_dropout', 0.2)
         super().__init__(*args, **kwargs)
         
-        # Enhanced GNN architecture
-        self.n_layers = kwargs.get('n_layers', 3)  # Add configurable layers
+        # Enhanced GNN architecture  # Add configurable layers
         self.gnn_layers = nn.ModuleList()
         self.norms = nn.ModuleList()
         
@@ -293,7 +295,7 @@ class EnhancedTemporalGCN(TemporalGCN):
             layer = TemporalGCNLayer(
                 input_dim=self.input_dim if i == 0 else self.hidden_dim,
                 output_dim=self.hidden_dim,
-                graph_builder=kwargs['graph_builder']
+                graph_builder=self.graph_builder
             )
             self.gnn_layers.append(layer)
             self.norms.append(nn.LayerNorm(self.hidden_dim))

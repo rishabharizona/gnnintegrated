@@ -272,7 +272,30 @@ def get_optimizer_adamw(algorithm, args, nettype='Diversify'):
             weight_decay=args.weight_decay)
     
     return optimizer
-
+# ======================= TEMPORAL GCN LAYER =======================
+class TemporalGCNLayer(nn.Module):
+    def __init__(self, input_dim, output_dim, graph_builder):
+        super().__init__()
+        self.graph_builder = graph_builder
+        self.linear = nn.Linear(input_dim, output_dim)
+        self.activation = nn.GELU()
+        self.dropout = nn.Dropout(0.1)
+        
+    def forward(self, x):
+        # x shape: [batch, time, features]
+        batch_size, seq_len, n_features = x.shape
+        
+        # Build graph adjacency matrix
+        adj_matrix = self.graph_builder.build_graph(x)
+        
+        # Graph convolution operation
+        x = torch.bmm(adj_matrix, x)  # [batch, time, features]
+        
+        # Linear transformation
+        x = self.linear(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        return x
 # ======================= ENHANCED GNN ARCHITECTURE =======================
 class EnhancedTemporalGCN(TemporalGCN):
     def __init__(self, *args, **kwargs):

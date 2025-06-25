@@ -225,9 +225,11 @@ class EMGDataAugmentation(nn.Module):
             noise = torch.randn_like(x) * self.jitter_scale
             x = x + noise
 
-        # Random scaling
+        # Random scaling - FIXED BROADCASTING
         if torch.rand(1) < self.aug_prob:
-            scale_factor = torch.randn(x.size(0), 1, 1, device=x.device) * self.scaling_std + 1.0
+            # Create scale factor with proper dimensions for broadcasting
+            scale_factor = torch.randn(x.size(0), *([1] * (x.dim() - 1)), device=x.device
+            scale_factor = scale_factor * self.scaling_std + 1.0
             x = x * scale_factor
 
         # Random time warping
@@ -243,7 +245,7 @@ class EMGDataAugmentation(nn.Module):
         # Random channel dropout
         if torch.rand(1) < self.aug_prob:
             x = self.dropout(x)
-            
+
         return x
 
 # ======================= OPTIMIZER FUNCTION =======================

@@ -717,8 +717,11 @@ def main(args):
     
     # Curriculum learning configuration
     if getattr(args, 'curriculum', False):
-        args.CL_PHASE_EPOCHS = [10, 15, 20]  # Progressive phases
-        args.CL_DIFFICULTY = [0.2, 0.5, 0.8]  # Difficulty levels
+        # Ensure we have phase definitions
+        if not hasattr(args, 'CL_PHASE_EPOCHS'):
+            args.CL_PHASE_EPOCHS = [10, 15, 20]  # Default progressive phases
+        if not hasattr(args, 'CL_DIFFICULTY'):
+            args.CL_DIFFICULTY = [0.2, 0.5, 0.8]  # Default difficulty levels
     
     # Add domain adversarial training if enabled
     if getattr(args, 'domain_adv_weight', 0.0) > 0:
@@ -756,14 +759,14 @@ def main(args):
             break
             
         # Determine epochs for this round
-        if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
+        if getattr(args, 'curriculum', False) and round_idx < len(args.CL_PHASE_EPOCHS):
             current_epochs = args.CL_PHASE_EPOCHS[round_idx]
             print(f"Curriculum learning: Stage {round_idx} (using {current_epochs} epochs)")
         else:
             current_epochs = args.local_epoch
         
         # Curriculum learning setup
-        if getattr(args, 'curriculum', False) and round_idx < getattr(args, 'CL_PHASE_EPOCHS', 5):
+        if getattr(args, 'curriculum', False) and round_idx < len(args.CL_PHASE_EPOCHS):
             print(f"Curriculum learning: Stage {round_idx}")
             
             # Set algorithm to evaluation mode

@@ -19,24 +19,37 @@ def transform_for_gnn(x):
     if x.dim() == 4:
         # Format 1: [batch, channels, 1, time] -> [batch, time, channels]
         if x.size(1) == 8 or x.size(1) == 200:
-            return x.squeeze(2).permute(0, 2, 1)
+            x = x.squeeze(2).permute(0, 2, 1)
         # Format 2: [batch, 1, channels, time] -> [batch, time, channels]
         elif x.size(2) == 8 or x.size(2) == 200:
-            return x.squeeze(1).permute(0, 2, 1)
+            x = x.squeeze(1).permute(0, 2, 1)
         # Format 3: [batch, time, 1, channels] -> [batch, time, channels]
         elif x.size(3) == 8 or x.size(3) == 200:
-            return x.squeeze(2)
+            x = x.squeeze(2)
         # New format: [batch, time, channels, 1]
         elif x.size(3) == 1 and (x.size(2) == 8 or x.size(2) == 200):
-            return x.squeeze(3)
+            x = x.squeeze(3)
+    
     # Handle 3D formats
     elif x.dim() == 3:
         # Format 1: [batch, channels, time] -> [batch, time, channels]
         if x.size(1) == 8 or x.size(1) == 200:
-            return x.permute(0, 2, 1)
+            x = x.permute(0, 2, 1)
         # Format 2: [batch, time, channels] - already correct
         elif x.size(2) == 8 or x.size(2) == 200:
-            return x
+            pass  # Already in correct format
+    
+    # Add fallback to ensure 200 time steps
+    if x.dim() >= 2 and x.size(1) != 200:
+        # Pad or truncate time dimension (index1) to 200 steps
+        current_timesteps = x.size(1)
+        if current_timesteps < 200:
+            padding = 200 - current_timesteps
+            x = torch.nn.functional.pad(x, (0, 0, 0, padding), "constant", 0)
+        else:
+            x = x[:, :200, :]
+    
+    return x
     # Unsupported format
     raise ValueError(
         f"Cannot transform input of shape {x.shape} for GNN. "

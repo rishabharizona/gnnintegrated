@@ -1,4 +1,12 @@
+# Suppress TensorFlow and SHAP warnings
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TensorFlow logging
+import tensorflow as tf
+tf.get_logger().setLevel('ERROR')  # Suppress TensorFlow warnings
+import logging
+logging.getLogger("shap").setLevel(logging.WARNING)  # Suppress SHAP warnings
+import os
+- os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
 import sys
 import subprocess
 import time
@@ -17,14 +25,6 @@ from datautil.getdataloader_single import get_act_dataloader, get_curriculum_loa
 from torch_geometric.loader import DataLoader
 from torch.utils.data import ConcatDataset
 from network.act_network import ActNetwork
-
-# Suppress TensorFlow and SHAP warnings
-import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
-import tensorflow as tf
-tf.get_logger().setLevel('ERROR')  # Suppress TensorFlow warnings
-import logging
-logging.getLogger("shap").setLevel(logging.WARNING)  # Suppress SHAP warnings
 
 # Unified SHAP utilities import
 from shap_utils import (

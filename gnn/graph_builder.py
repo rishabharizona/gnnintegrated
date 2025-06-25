@@ -1,20 +1,19 @@
 import torch
 import numpy as np
 from scipy.spatial.distance import pdist, squareform
-from typing import Tuple, Union, List
+from typing import Tuple, Union, List, Optional
 import itertools
 
 class GraphBuilder:
     """
-    Builds dynamic correlation graphs from EMG time-series data with multiple
-    connectivity strategies and adaptive thresholding for biomedical research.
-    
+    Builds dynamic correlation graphs from EMG time-series data with PyTorch support.
     Features:
     - Multiple similarity metrics (correlation, covariance, Euclidean distance)
     - Adaptive thresholding based on data distribution
     - Edge weight preservation
     - Batch processing support
     - Comprehensive validation checks
+    - GPU acceleration support
     
     Args:
         method: Similarity metric ('correlation', 'covariance', 'euclidean')
@@ -42,27 +41,29 @@ class GraphBuilder:
         if threshold_type not in {'fixed', 'adaptive'}:
             raise ValueError(f"Invalid threshold_type '{threshold_type}'. Choose 'fixed' or 'adaptive'")
 
-    def build_graph(self, feature_sequence: np.ndarray) -> torch.LongTensor:
+    def build_graph(self, feature_sequence: torch.Tensor) -> torch.LongTensor:
         """
         Build temporal graph from feature sequence (post-convolution)
         
         Args:
-            feature_sequence: Feature array of shape (time_steps, features)
+            feature_sequence: Feature tensor of shape (time_steps, features)
             
         Returns:
             edge_index: Tensor of shape [2, num_edges]
         """
         # Validate input
-        if not isinstance(feature_sequence, np.ndarray):
-            raise TypeError(f"Input must be numpy array, got {type(feature_sequence)}")
+        if not isinstance(feature_sequence, torch.Tensor):
+            raise TypeError(f"Input must be torch.Tensor, got {type(feature_sequence)}")
             
         if feature_sequence.ndim != 2:
             raise ValueError(f"Input must be 2D (time_steps, features), got shape {feature_sequence.shape}")
             
         T, F = feature_sequence.shape
+        device = feature_sequence.device
+        
         if T < 10:
             print(f"⚠️ Insufficient time steps ({T}), using fully connected graph")
-            return self._create_fully_connected(T)  # Fixed method name
+            return self._create_fully_connected(T).to(device)
 
         # Compute similarity matrix between TIME STEPS
         similarity_matrix = self._compute_similarity(feature_sequence)
@@ -71,103 +72,106 @@ class GraphBuilder:
         threshold = self._determine_threshold(similarity_matrix)
         
         # Build edges using TIME STEPS as nodes
-        return self._create_edges(similarity_matrix, threshold, T)
+        return self._create_edges(similarity_matrix, threshold, T, device)
 
-    def _compute_similarity(self, data: np.ndarray) -> np.ndarray:
-        """Compute similarity between time steps (temporal correlation)"""
+    def _compute_similarity(self, data: torch.Tensor) -> torch.Tensor:
+        """Compute similarity between time steps (temporal correlation) using PyTorch"""
         T, F = data.shape
         
         if self.method == 'correlation':
             # Compute row-wise (time steps) std
-            stds = np.std(data, axis=1)
+            stds = torch.std(data, dim=1)
             constant_mask = stds < 1e-8
-            if np.any(constant_mask):
+            if torch.any(constant_mask):
                 # Add small noise to constant time steps
-                noise = np.random.normal(0, 1e-8, data.shape)
-                data = data + noise * constant_mask[:, np.newaxis]
+                noise = torch.randn_like(data) * 1e-8
+                data = data + noise * constant_mask.unsqueeze(1)
             
             # Compute time-step correlation
-            cov_matrix = np.cov(data, rowvar=True)
-            std_products = np.outer(stds, stds)
+            cov_matrix = torch.cov(data.t())
+            std_products = torch.outer(stds, stds)
             std_products[std_products < 1e-10] = 1e-10
             corr = cov_matrix / std_products
-            np.clip(corr, -1.0, 1.0, out=corr)
-            return corr
+            return torch.clamp(corr, -1.0, 1.0)
             
         elif self.method == 'covariance':
-            cov = np.cov(data, rowvar=True)
-            np.nan_to_num(cov, copy=False, nan=0.0)
-            return cov
+            cov = torch.cov(data.t())
+            return torch.nan_to_num(cov, nan=0.0)
             
         elif self.method == 'euclidean':
-            dist_matrix = squareform(pdist(data, 'euclidean'))
-            max_dist = np.max(dist_matrix)
+            dist_matrix = torch.cdist(data, data, p=2)
+            max_dist = torch.max(dist_matrix)
             if max_dist < 1e-8:
-                return np.ones_like(dist_matrix)
+                return torch.ones_like(dist_matrix)
             similarity = 1 - (dist_matrix / max_dist)
-            np.clip(similarity, -1.0, 1.0, out=similarity)
-            return similarity
+            return torch.clamp(similarity, -1.0, 1.0)
 
-    def _determine_threshold(self, matrix: np.ndarray) -> float:
+    def _determine_threshold(self, matrix: torch.Tensor) -> float:
         """Calculate appropriate threshold based on type"""
         if self.threshold_type == 'fixed':
             return self.default_threshold
         
         # Adaptive threshold based on median absolute similarity
-        abs_matrix = np.abs(matrix)
-        np.fill_diagonal(abs_matrix, 0)  # Ignore self-connections
-        non_zero_elements = abs_matrix[abs_matrix > 0]
+        abs_matrix = torch.abs(matrix)
+        # Ignore self-connections
+        abs_matrix.fill_diagonal_(0)
         
-        # Handle case where all similarities are zero
-        if non_zero_elements.size == 0:
+        # Flatten and remove zeros
+        flat_matrix = abs_matrix.flatten()
+        non_zero = flat_matrix[flat_matrix > 0]
+        
+        if non_zero.numel() == 0:
             return 0.0
             
-        median_val = np.median(non_zero_elements)
+        median_val = torch.median(non_zero).item()
         return median_val * self.adaptive_factor
 
-    def _create_edges(self, matrix: np.ndarray, threshold: float, num_nodes: int) -> torch.LongTensor:
+    def _create_edges(self, matrix: torch.Tensor, threshold: float, 
+                     num_nodes: int, device: torch.device) -> torch.LongTensor:
         """Create edge connections between TIME STEPS (nodes)"""
-        edges = []
+        # Vectorized approach for better performance
+        indices = torch.triu_indices(num_nodes, num_nodes, 1, device=device)
+        i, j = indices[0], indices[1]
+        similarities = matrix[i, j]
         
-        # Create edges where absolute similarity exceeds threshold
-        for i in range(num_nodes):
-            for j in range(i+1, num_nodes):  # Only upper triangle
-                similarity = matrix[i, j]
-                if abs(similarity) > threshold:
-                    # Add both directions for undirected graph
-                    edges.append([i, j])
-                    edges.append([j, i])
+        # Find edges above threshold
+        mask = torch.abs(similarities) > threshold
+        valid_i = i[mask]
+        valid_j = j[mask]
+        
+        # Create bidirectional edges
+        if valid_i.numel() > 0:
+            edges = torch.stack([
+                torch.cat([valid_i, valid_j]),
+                torch.cat([valid_j, valid_i])
+            ], dim=0)
+        else:
+            edges = torch.empty((2, 0), dtype=torch.long, device=device)
         
         # Handle no-edge case
-        if not edges and self.fully_connected_fallback:
-            return self._create_fully_connected(num_nodes)
-        
-        # Convert to tensor
-        if not edges:
-            return torch.empty((2, 0), dtype=torch.long)
-        
-        edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
+        if edges.numel() == 0 and self.fully_connected_fallback:
+            return self._create_fully_connected(num_nodes).to(device)
         
         # Validate indices
-        if torch.any(edge_index >= num_nodes) or torch.any(edge_index < 0):
-            min_index = torch.min(edge_index).item()
-            max_index = torch.max(edge_index).item()
-            print(f"Edge indices out of bounds! Min: {min_index}, Max: {max_index} (should be 0-{num_nodes-1})")
-            edge_index = torch.clamp(edge_index, 0, num_nodes-1)
+        if edges.numel() > 0:
+            if torch.any(edges >= num_nodes) or torch.any(edges < 0):
+                edges = torch.clamp(edges, 0, num_nodes-1)
         
-        return edge_index
+        return edges
 
     def _create_fully_connected(self, num_nodes: int) -> torch.LongTensor:
         """Create fully connected graph between TIME STEPS"""
-        edges = []
+        # Create all possible edges except self-loops
+        rows, cols = [], []
         for i in range(num_nodes):
             for j in range(num_nodes):
                 if i != j:
-                    edges.append([i, j])
+                    rows.append(i)
+                    cols.append(j)
         
-        return torch.tensor(edges, dtype=torch.long).t().contiguous()
+        return torch.tensor([rows, cols], dtype=torch.long)
 
-    def build_graph_for_batch(self, batch_data: np.ndarray) -> List[torch.LongTensor]:
+    def build_graph_for_batch(self, batch_data: torch.Tensor) -> List[torch.LongTensor]:
         """
         Build graphs for a batch of EMG samples.
         
@@ -182,7 +186,8 @@ class GraphBuilder:
             
         edge_indices = []
         
-        for sample in batch_data:
+        for i in range(batch_data.size(0)):
+            sample = batch_data[i]
             edge_index = self.build_graph(sample)
             edge_indices.append(edge_index)
             

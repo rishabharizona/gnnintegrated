@@ -244,6 +244,16 @@ class EMGDataAugmentation(nn.Module):
             elif x.dim() == 3:  # [batch, time, channels]
                 seq_len = x.size(1)
                 warp_amount = int(torch.rand(1).item() * self.warp_ratio * seq_len)
+                warp_amount = min(warp_amount, seq_len - 1)  # Ensure valid slice
+                if warp_amount > 0:
+                    if torch.rand(1) > 0.5:  # Forward warp
+                        x = torch.cat([x[:, :, :, warp_amount:], x[:, :, :, :warp_amount]], dim=3)
+                    else:  # Backward warp
+                        x = torch.cat([x[:, :, :, -warp_amount:], x[:, :, :, :-warp_amount]], dim=3)
+            elif x.dim() == 3:  # [batch, time, channels]
+                seq_len = x.size(1)
+                warp_amount = int(torch.rand(1).item() * self.warp_ratio * seq_len)
+                warp_amount = min(warp_amount, seq_len - 1)  # Ensure valid slice
                 if warp_amount > 0:
                     if torch.rand(1) > 0.5:  # Forward warp
                         x = torch.cat([x[:, warp_amount:, :], x[:, :warp_amount, :]], dim=1)

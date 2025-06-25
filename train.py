@@ -516,7 +516,7 @@ def main(args):
     
     # Automated K estimation if enabled
     if getattr(args, 'automated_k', False):
-    print("\nRunning automated K estimation...")
+        print("\nRunning automated K estimation...")
     
     # Use GNN if enabled and available, otherwise use standard CNN
     if args.use_gnn and GNN_AVAILABLE:

@@ -446,7 +446,7 @@ class DomainAdversarialLoss(nn.Module):
         self.domain_classifier = nn.Sequential(
             nn.Linear(bottleneck_dim, 50),
             nn.ReLU(),
-            nn.Linear(50, 1)
+            nn.Linear(50, 1),
         self.loss_fn = nn.BCEWithLogitsLoss()
         )
     

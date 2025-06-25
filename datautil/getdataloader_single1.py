@@ -7,8 +7,9 @@ import datautil.actdata.util as actutil
 from datautil.util import combindataset, subdataset
 import datautil.actdata.cross_people as cross_people
 from torch_geometric.data import Batch, Data
-from datautil.graph_utils import convert_to_graph
-import torch.nn as nn  # Added for nn.Module inheritance
+from torch_geometric.utils import to_dense_batch
+import datautil.graph_utils as graph_utils  # Added for graph conversion
+from typing import List, Tuple, Dict, Any, Optional
 
 # Task mapping for activity recognition
 task_act = {'cross_people': cross_people}
@@ -65,7 +66,7 @@ def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
         num_workers=num_workers,
         shuffle=shuffle,
         drop_last=shuffle,
-        collate_fn=collate_gnn  # Add custom collate function
+        collate_fn=collate_gnn  # Custom collate for GNN
     )
 
 def get_dataloader(args, tr, val, tar):
@@ -150,7 +151,7 @@ def get_act_dataloader(args):
     for i, item in enumerate(tmpp):
         # ===== GNN TRANSFORM SELECTION =====
         if hasattr(args, 'model_type') and args.model_type == 'gnn':
-            transform = actutil.act_to_graph_transform(args)
+            transform = actutil.act_to_graph_transform(args)  # Use graph transform
         else:
             transform = actutil.act_train()
         
@@ -196,28 +197,6 @@ def get_act_dataloader(args):
     # Create data loaders
     loaders = get_dataloader(args, tr, val, targetdata)
     return (*loaders, tr, val, targetdata)
-
-def get_shap_batch(loader, size=100):
-    """
-    Extract a batch of data for SHAP analysis
-    Args:
-        loader: DataLoader to extract from
-        size: Number of samples to extract
-    Returns:
-        Concatenated tensor of input samples
-    """
-    X_val = []
-    for batch in loader:
-        # Extract inputs from batch (could be tuple or tensor)
-        inputs = batch[0] if isinstance(batch, (list, tuple)) else batch
-        X_val.append(inputs)
-        
-        # Stop when we have enough samples
-        if len(torch.cat(X_val)) >= size:
-            break
-    
-    # Return exactly size samples
-    return torch.cat(X_val)[:size]
 
 def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     """
@@ -266,16 +245,12 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
                 if hasattr(args, 'model_type') and args.model_type == 'gnn':
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
-                    # Ensure sufficient time steps for GNN [ADDED PADDING]
-                    if inputs.num_nodes > 0 and hasattr(inputs, 'num_nodes'):
-                        # Handle PyG Batch object
-                        if inputs.num_node_features < 200:
-                            # This requires more complex handling - skip for now
-                            pass
-                    elif isinstance(inputs, torch.Tensor) and inputs.dim() == 3:
-                        if inputs.size(1) < 200:
-                            padding = 200 - inputs.size(1)
-                            inputs = torch.nn.functional.pad(inputs, (0, 0, 0, padding), "constant", 0)
+                    
+                    # Handle PyG Batch object - convert to dense representation if needed
+                    if isinstance(inputs, Batch) and inputs.num_node_features > 0:
+                        # Convert to dense batch format for compatibility
+                        x_dense, mask = to_dense_batch(inputs.x, inputs.batch)
+                        inputs = (x_dense, mask)
                 else:
                     inputs = batch[0].cuda().float()
                     labels = batch[1].cuda().long()

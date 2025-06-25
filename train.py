@@ -1,6 +1,6 @@
 # Suppress TensorFlow and SHAP warnings
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TensorFlow logging
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
 import tensorflow as tf
 tf.get_logger().setLevel('ERROR')  # Suppress TensorFlow warnings
 import logging

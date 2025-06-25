@@ -62,7 +62,7 @@ class GraphBuilder:
         T, F = feature_sequence.shape
         if T < 10:
             print(f"⚠️ Insufficient time steps ({T}), using fully connected graph")
-            return self._build_fully_connected(T)
+            return self._create_fully_connected(T)  # Fixed method name
 
         # Compute similarity matrix between TIME STEPS
         similarity_matrix = self._compute_similarity(feature_sequence)

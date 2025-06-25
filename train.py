@@ -455,7 +455,7 @@ class EnhancedTemporalGCN(TemporalGCN):
             # TCN expects (batch, channels, time)
             tcn_in = x.permute(0, 2, 1)
             tcn_out = self.tcn(tcn_in)
-            tcn_out = tcn_out.permute(0, 2, 1))
+            tcn_out = tcn_out.permute(0, 2, 1)
             # Project to output dimension
             temporal_out = self.tcn_proj(tcn_out)
         else:

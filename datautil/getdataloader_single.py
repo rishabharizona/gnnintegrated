@@ -279,9 +279,6 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
                 else:
                     inputs = batch[0].cuda().float()
                     labels = batch[1].cuda().long()
-                else:
-                    inputs = batch[0].cuda().float()
-                    labels = batch[1].cuda().long()
                 
                 output = algorithm.predict(inputs)
                 loss = torch.nn.functional.cross_entropy(output, labels)

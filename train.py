@@ -368,6 +368,7 @@ class EnhancedTemporalGCN(TemporalGCN):
                     stride=1, dilation=dilation, dropout=dropout
                 )]
             self.tcn = nn.Sequential(*tcn_layers)
+            self.tcn_proj = nn.Linear(num_channels[-1], self.output_dim)
         else:
             # LSTM remains as fallback
             self.lstm = nn.LSTM(
@@ -454,6 +455,8 @@ class EnhancedTemporalGCN(TemporalGCN):
             tcn_in = x.permute(0, 2, 1)
             tcn_out = self.tcn(tcn_in)
             temporal_out = tcn_out.permute(0, 2, 1)
+            # Project to output dimension
+            temporal_out = self.tcn_proj(tcn_out)
         else:
             # LSTM processing
             lstm_out, _ = self.lstm(x)

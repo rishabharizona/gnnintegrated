@@ -192,8 +192,17 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # Safely get device from args or algorithm's model
     device = getattr(args, 'device', None)
     if device is None:
-        # Access model through algorithm's network attribute
-        device = next(algorithm.network.parameters()).device
+        # Try different common attribute names for the model
+        model = getattr(algorithm, 'network', None) or \
+                getattr(algorithm, 'model', None) or \
+                getattr(algorithm, 'module', None)
+        
+        if model is not None:
+            device = next(model.parameters()).device
+        else:
+            # Fallback to CPU if model can't be found
+            device = torch.device('cpu')
+            print("Warning: Could not find model in algorithm. Using CPU device")
     
     # Group validation indices by domain
     domain_indices = {}

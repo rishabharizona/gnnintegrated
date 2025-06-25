@@ -285,39 +285,29 @@ class TemporalGCNLayer(nn.Module):
         # x shape: [batch, time, features]
         batch_size, seq_len, n_features = x.shape
         
-        # Build graphs for each sample in the batch
+        # Get edge indices for all samples in the batch
         edge_indices = self.graph_builder.build_graph_for_batch(x)
         
-        # Instead of torch.bmm, we'll do graph convolution per sample
         outputs = []
         for i in range(batch_size):
-            # Get features for this sample: [time, features]
             sample_features = x[i]
-            
-            # Get edge index for this sample: [2, num_edges]
             edge_index = edge_indices[i]
             
-            # If there are edges, perform graph convolution
-            if edge_index.size(1) > 0:
-                # Create sparse adjacency matrix
+            # Create sparse adjacency matrix
+            if edge_index.numel() > 0:
                 adj_matrix = torch.sparse_coo_tensor(
                     edge_index,
                     torch.ones(edge_index.size(1), device=x.device),
                     size=(seq_len, seq_len)
-                )
-                
-                # Graph convolution: A * X
-                conv_result = torch.sparse.mm(adj_matrix, sample_features)
+                ).to_dense()
             else:
-                # If no edges, just use original features
-                conv_result = sample_features
+                adj_matrix = torch.eye(seq_len, device=x.device)
                 
+            # Graph convolution: A * X
+            conv_result = torch.mm(adj_matrix, sample_features)
             outputs.append(conv_result)
         
-        # Stack results back to batch
         x = torch.stack(outputs, dim=0)
-        
-        # Then apply linear transformation, activation, etc.
         x = self.linear(x)
         x = self.activation(x)
         x = self.dropout(x)
@@ -522,45 +512,61 @@ def main(args):
     train_loader, train_loader_noshuffle, valid_loader, target_loader, tr, val, targetdata = loader_data[:7]
     
     # Automated K estimation if enabled
-    if getattr(args, 'automated_k', False):
-        print("\nRunning automated K estimation...")
-        # Use GNN if enabled, otherwise use standard CNN
-        if args.use_gnn and GNN_AVAILABLE:
-            print("Using GNN for feature extraction")
-            # Initialize graph builder for feature extraction
-            graph_builder = GraphBuilder(
-                method='correlation',
-                threshold_type='adaptive',
-                default_threshold=0.3,
-                adaptive_factor=1.5
-            )
-            temp_model = TemporalGCN(
-                input_dim=8,  # EMG channels
-                hidden_dim=args.gnn_hidden_dim,
-                output_dim=args.gnn_output_dim,
-                graph_builder=graph_builder
-            ).cuda()
-        else:
-            temp_model = ActNetwork(args.dataset).cuda()
+    # Automated K estimation if enabled
+if getattr(args, 'automated_k', False):
+    print("\nRunning automated K estimation...")
+    
+    # Use GNN if enabled and available, otherwise use standard CNN
+    if args.use_gnn and GNN_AVAILABLE:
+        print("Using GNN for feature extraction")
+        # Initialize graph builder for feature extraction
+        graph_builder = GraphBuilder(
+            method='correlation',
+            threshold_type='adaptive',
+            default_threshold=0.3,
+            adaptive_factor=1.5
+        )
+        temp_model = EnhancedTemporalGCN(
+            input_dim=8,  # EMG channels
+            hidden_dim=args.gnn_hidden_dim,
+            output_dim=args.gnn_output_dim,
+            graph_builder=graph_builder,
+            n_layers=args.gnn_layers,
+            use_tcn=args.use_tcn
+        ).cuda()
+    else:
+        print("Using CNN for feature extraction")
+        temp_model = ActNetwork(args.dataset).cuda()
+    
+    temp_model.eval()
+    feature_list = []
+    
+    with torch.no_grad():
+        for batch in train_loader:
+            inputs = batch[0].cuda().float()
             
-        temp_model.eval()
-        feature_list = []
-        with torch.no_grad():
-            for batch in train_loader:
-                inputs = batch[0].cuda().float()
-                # Handle GNN input format if needed
-                if args.use_gnn and GNN_AVAILABLE:
-                    inputs = transform_for_gnn(inputs)
-                    if inputs.dim() != 3:
-                        raise ValueError(f"GNN requires 3D input (B,T,C), got {inputs.shape}")
-                features = temp_model(inputs)
-                feature_list.append(features.cpu().numpy())
-                
-        all_features = np.concatenate(feature_list, axis=0)
-        optimal_k = automated_k_estimation(all_features)
-        args.latent_domain_num = optimal_k
-        print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
-        del temp_model
+            # Handle GNN input format if needed
+            if args.use_gnn and GNN_AVAILABLE:
+                # Convert to (batch, time, channels) format
+                inputs = transform_for_gnn(inputs)
+                # Ensure it's 3D: [batch, time, channels]
+                if inputs.dim() != 3:
+                    # For 4D: [batch, channels, 1, time] -> [batch, time, channels]
+                    if inputs.dim() == 4:
+                        inputs = inputs.squeeze(2).permute(0, 2, 1)
+                    else:
+                        raise ValueError(f"Unsupported GNN input dimension: {inputs.dim()}")
+            
+            features = temp_model(inputs)
+            feature_list.append(features.detach().cpu().numpy())
+    
+    all_features = np.concatenate(feature_list, axis=0)
+    optimal_k = automated_k_estimation(all_features)
+    args.latent_domain_num = optimal_k
+    print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
+    
+    del temp_model
+    torch.cuda.empty_cache()
     
     # Batch size adjustment
     if args.latent_domain_num < 6:

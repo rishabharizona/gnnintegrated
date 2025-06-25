@@ -189,10 +189,11 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     """
     Create a curriculum data loader based on domain difficulty
     """
-    # Safely get device from args or algorithm
+    # Safely get device from args or algorithm's model
     device = getattr(args, 'device', None)
     if device is None:
-        device = next(algorithm.parameters()).device
+        # Access model through algorithm's network attribute
+        device = next(algorithm.network.parameters()).device
     
     # Group validation indices by domain
     domain_indices = {}

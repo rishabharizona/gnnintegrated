@@ -515,28 +515,27 @@ def main(args):
     train_loader, train_loader_noshuffle, valid_loader, target_loader, tr, val, targetdata = loader_data[:7]
     
     # Automated K estimation if enabled
-    # Automated K estimation if enabled
     if getattr(args, 'automated_k', False):
-        print("\nRunning automated K estimation...")
-        
-        # Use GNN if enabled and available, otherwise use standard CNN
-        if args.use_gnn and GNN_AVAILABLE:
-            print("Using GNN for feature extraction")
-            # Initialize graph builder for feature extraction
-            graph_builder = GraphBuilder(
-                method='correlation',
-                threshold_type='adaptive',
-                default_threshold=0.3,
-                adaptive_factor=1.5
-            )
-            temp_model = EnhancedTemporalGCN(
-                input_dim=8,  # EMG channels
-                hidden_dim=args.gnn_hidden_dim,
-                output_dim=args.gnn_output_dim,
-                graph_builder=graph_builder,
-                n_layers=args.gnn_layers,
-                use_tcn=args.use_tcn
-            ).cuda()
+    print("\nRunning automated K estimation...")
+    
+    # Use GNN if enabled and available, otherwise use standard CNN
+    if args.use_gnn and GNN_AVAILABLE:
+        print("Using GNN for feature extraction")
+        # Initialize graph builder for feature extraction
+        graph_builder = GraphBuilder(
+            method='correlation',
+            threshold_type='adaptive',
+            default_threshold=0.3,
+            adaptive_factor=1.5
+        )
+        temp_model = EnhancedTemporalGCN(
+            input_dim=8,  # EMG channels
+            hidden_dim=args.gnn_hidden_dim,
+            output_dim=args.gnn_output_dim,
+            graph_builder=graph_builder,
+            n_layers=getattr(args, 'gnn_layers', 3),  # Use getattr for safety
+            use_tcn=args.use_tcn
+        ).cuda()
         else:
             print("Using CNN for feature extraction")
             temp_model = ActNetwork(args.dataset).cuda()
@@ -1215,6 +1214,7 @@ if __name__ == '__main__':
             # GNN hyperparameters
             args.gnn_hidden_dim = getattr(args, 'gnn_hidden_dim', 64)
             args.gnn_output_dim = getattr(args, 'gnn_output_dim', 256)
+            args.gnn_layers = getattr(args, 'gnn_layers', 3)  # Add this line
             args.gnn_lr = getattr(args, 'gnn_lr', 0.001)
             args.gnn_weight_decay = getattr(args, 'gnn_weight_decay', 0.0001)
             args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)

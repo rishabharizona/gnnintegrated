@@ -285,14 +285,39 @@ class TemporalGCNLayer(nn.Module):
         # x shape: [batch, time, features]
         batch_size, seq_len, n_features = x.shape
         
-        # Build graph adjacency matrix
-        # Get edge indices for all samples in the batch
+        # Build graphs for each sample in the batch
         edge_indices = self.graph_builder.build_graph_for_batch(x)
         
-        # Graph convolution operation
-        x = torch.bmm(edge_indices, x)  # [batch, time, features]
+        # Instead of torch.bmm, we'll do graph convolution per sample
+        outputs = []
+        for i in range(batch_size):
+            # Get features for this sample: [time, features]
+            sample_features = x[i]
+            
+            # Get edge index for this sample: [2, num_edges]
+            edge_index = edge_indices[i]
+            
+            # If there are edges, perform graph convolution
+            if edge_index.size(1) > 0:
+                # Create sparse adjacency matrix
+                adj_matrix = torch.sparse_coo_tensor(
+                    edge_index,
+                    torch.ones(edge_index.size(1), device=x.device),
+                    size=(seq_len, seq_len)
+                )
+                
+                # Graph convolution: A * X
+                conv_result = torch.sparse.mm(adj_matrix, sample_features)
+            else:
+                # If no edges, just use original features
+                conv_result = sample_features
+                
+            outputs.append(conv_result)
         
-        # Linear transformation
+        # Stack results back to batch
+        x = torch.stack(outputs, dim=0)
+        
+        # Then apply linear transformation, activation, etc.
         x = self.linear(x)
         x = self.activation(x)
         x = self.dropout(x)

@@ -286,7 +286,8 @@ class TemporalGCNLayer(nn.Module):
         batch_size, seq_len, n_features = x.shape
         
         # Build graph adjacency matrix
-        adj_matrix = self.graph_builder.build_graph(x)
+        # Get edge indices for all samples in the batch
+        edge_indices = self.graph_builder.build_graph_for_batch(x)
         
         # Graph convolution operation
         x = torch.bmm(adj_matrix, x)  # [batch, time, features]

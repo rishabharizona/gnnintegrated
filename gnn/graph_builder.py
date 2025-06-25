@@ -41,7 +41,7 @@ class GraphBuilder:
         if threshold_type not in {'fixed', 'adaptive'}:
             raise ValueError(f"Invalid threshold_type '{threshold_type}'. Choose 'fixed' or 'adaptive'")
 
-    def build_graph(self, feature_sequence: torch.Tensor) -> torch.LongTensor:
+    def build_graph(self, feature_sequence: Union[torch.Tensor, np.ndarray]) -> torch.LongTensor:
         """
         Build temporal graph from feature sequence (post-convolution)
         
@@ -51,6 +51,10 @@ class GraphBuilder:
         Returns:
             edge_index: Tensor of shape [2, num_edges]
         """
+        """Handle both tensor and numpy inputs"""
+        # Convert numpy arrays to tensors
+        if isinstance(feature_sequence, np.ndarray):
+            feature_sequence = torch.from_numpy(feature_sequence).float()
         # Handle 3D input by processing first sample only
         if feature_sequence.ndim == 3:
             batch_size, T, F = feature_sequence.shape

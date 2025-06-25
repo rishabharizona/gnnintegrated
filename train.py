@@ -174,7 +174,7 @@ class TemporalBlock(nn.Module):
         super().__init__()
         padding = (kernel_size - 1) * dilation
         
-        self.conv1 = nn.utils.weight_norm(nn.Conv1d(
+        self.conv1 = nn.utils.parametrizations.weight_norm(nn.Conv1d(
             n_inputs, n_outputs, kernel_size,
             stride=stride, padding=padding, dilation=dilation
         ))
@@ -545,6 +545,9 @@ def main(args):
         feature_list = []
         
         with torch.no_grad():
+            # Print input shape once for verification
+            first_batch = True
+            
             for batch in train_loader:
                 inputs = batch[0].cuda().float()
                 
@@ -553,15 +556,18 @@ def main(args):
                     # Convert to (batch, time, channels) format
                     inputs = transform_for_gnn(inputs)
                     
-                    # Debug print input shape
-                    print(f"GNN input shape: {inputs.shape}")
-                    
                     # Ensure it's 3D: [batch, time, channels]
-                    if inputs.dim() == 4:
+                    if inputs.dim() != 3:
                         # For 4D: [batch, channels, 1, time] -> [batch, time, channels]
-                        inputs = inputs.squeeze(2).permute(0, 2, 1)
-                    elif inputs.dim() != 3:
-                        raise ValueError(f"Unsupported GNN input dimension: {inputs.dim()}")
+                        if inputs.dim() == 4:
+                            inputs = inputs.squeeze(2).permute(0, 2, 1)
+                        else:
+                            raise ValueError(f"Unsupported GNN input dimension: {inputs.dim()}")
+                    
+                    # Only print first batch shape for verification
+                    if first_batch:
+                        print(f"GNN input shape: {inputs.shape}")
+                        first_batch = False
                 
                 features = temp_model(inputs)
                 feature_list.append(features.detach().cpu().numpy())

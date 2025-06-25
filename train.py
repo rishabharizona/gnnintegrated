@@ -715,14 +715,6 @@ def main(args):
     # Add data augmentation module
     augmenter = EMGDataAugmentation(args).cuda()
     
-    # Curriculum learning configuration
-    if getattr(args, 'curriculum', False):
-        # Ensure we have phase definitions
-        if not hasattr(args, 'CL_PHASE_EPOCHS'):
-            args.CL_PHASE_EPOCHS = [10, 15, 20]  # Default progressive phases
-        if not hasattr(args, 'CL_DIFFICULTY'):
-            args.CL_DIFFICULTY = [0.2, 0.5, 0.8]  # Default difficulty levels
-    
     # Add domain adversarial training if enabled
     if getattr(args, 'domain_adv_weight', 0.0) > 0:
         algorithm.domain_adv_loss = DomainAdversarialLoss(
@@ -759,9 +751,22 @@ def main(args):
             break
             
         # Determine epochs for this round
-        if getattr(args, 'curriculum', False) and round_idx < len(args.CL_PHASE_EPOCHS):
-            current_epochs = args.CL_PHASE_EPOCHS[round_idx]
-            print(f"Curriculum learning: Stage {round_idx} (using {current_epochs} epochs)")
+        # Determine epochs for this round
+        if getattr(args, 'curriculum', False):
+            # Ensure CL_PHASE_EPOCHS is a list
+            if not hasattr(args, 'CL_PHASE_EPOCHS') or not isinstance(args.CL_PHASE_EPOCHS, list):
+                args.CL_PHASE_EPOCHS = [10, 15, 20]  # Default to list of phases
+            
+            # Ensure CL_DIFFICULTY is a list
+            if not hasattr(args, 'CL_DIFFICULTY') or not isinstance(args.CL_DIFFICULTY, list):
+                args.CL_DIFFICULTY = [0.2, 0.5, 0.8]  # Default difficulty levels
+            
+            # Check if current round is within curriculum phases
+            if round_idx < len(args.CL_PHASE_EPOCHS):
+                current_epochs = args.CL_PHASE_EPOCHS[round_idx]
+                print(f"Curriculum learning: Stage {round_idx} (using {current_epochs} epochs)")
+            else:
+                current_epochs = args.local_epoch
         else:
             current_epochs = args.local_epoch
         

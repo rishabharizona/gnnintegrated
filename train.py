@@ -225,22 +225,31 @@ class EMGDataAugmentation(nn.Module):
             noise = torch.randn_like(x) * self.jitter_scale
             x = x + noise
 
-        # Random scaling - FIXED BROADCASTING
+        # Random scaling
         if torch.rand(1) < self.aug_prob:
             # Create scale factor with proper dimensions for broadcasting
             scale_factor = torch.randn(x.size(0), *([1] * (x.dim() - 1)), device=x.device)
             scale_factor = scale_factor * self.scaling_std + 1.0
             x = x * scale_factor
 
-        # Random time warping
+        # Random time warping - fixed for both 3D and 4D inputs
         if torch.rand(1) < self.aug_prob and self.warp_ratio > 0:
-            seq_len = x.size(-1)
-            warp_amount = int(torch.rand(1).item() * self.warp_ratio * seq_len)
-            if warp_amount > 0:
-                if torch.rand(1) > 0.5:  # Forward or backward warp
-                    x = torch.cat([x[:, :, warp_amount:], x[:, :, :warp_amount]], dim=-1)
-                else:
-                    x = torch.cat([x[:, :, -warp_amount:], x[:, :, :-warp_amount]], dim=-1)
+            # Determine time dimension based on input shape
+            if x.dim() == 4:  # [batch, channels, 1, time]
+                seq_len = x.size(3)
+                if torch.rand(1) > 0.5:  # Forward warp
+                    x = torch.cat([x[:, :, :, warp_amount:], x[:, :, :, :warp_amount]], dim=3)
+                else:  # Backward warp
+                    x = torch.cat([x[:, :, :, -warp_amount:], x[:, :, :, :-warp_amount]], dim=3)
+            elif x.dim() == 3:  # [batch, time, channels]
+                seq_len = x.size(1)
+                warp_amount = int(torch.rand(1).item() * self.warp_ratio * seq_len)
+                if warp_amount > 0:
+                    if torch.rand(1) > 0.5:  # Forward warp
+                        x = torch.cat([x[:, warp_amount:, :], x[:, :warp_amount, :]], dim=1)
+                    else:  # Backward warp
+                        x = torch.cat([x[:, -warp_amount:, :], x[:, :-warp_amount, :]], dim=1)
+            # Skip warping for unsupported dimensions
 
         # Random channel dropout
         if torch.rand(1) < self.aug_prob:

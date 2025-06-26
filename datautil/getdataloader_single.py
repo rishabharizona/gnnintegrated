@@ -70,6 +70,14 @@ def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
     )
 
 def get_dataloader(args, tr, val, tar):
+    # Detect if we have graph data by checking the first sample
+    is_graph_data = False
+    if len(tr) > 0:
+        sample = tr[0]
+        # Check for (graph, label, domain) tuple format
+        if (isinstance(sample, tuple) and len(sample) >= 3 and 
+            isinstance(sample[0], Data)):
+            is_graph_data = True
     """
     Create data loaders for training, validation, and target datasets
     Args:
@@ -81,7 +89,7 @@ def get_dataloader(args, tr, val, tar):
         Tuple of DataLoader objects
     """
     # ======= GNN-SPECIFIC LOADERS =======
-    if hasattr(args, 'model_type') and args.model_type == 'gnn':
+    if is_graph_data or (hasattr(args, 'model_type') and args.model_type == 'gnn'):
         train_loader = get_gnn_dataloader(
             tr, args.batch_size, args.N_WORKERS, shuffle=True)
         

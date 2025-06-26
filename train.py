@@ -609,7 +609,7 @@ def main(args):
     train_loader = DataLoader(
         dataset=tr,
         batch_size=args.batch_size,
-        num_workers=min(2, args.N_WORKERS),
+        num_workers=min(4, args.N_WORKERS),
         drop_last=False,
         shuffle=True
     )
@@ -617,7 +617,7 @@ def main(args):
     train_loader_noshuffle = DataLoader(
         dataset=tr,
         batch_size=args.batch_size,
-        num_workers=min(2, args.N_WORKERS),
+        num_workers=min(4, args.N_WORKERS),
         drop_last=False,
         shuffle=False
     )
@@ -625,7 +625,7 @@ def main(args):
     valid_loader = DataLoader(
         dataset=val,
         batch_size=args.batch_size,
-        num_workers=min(2, args.N_WORKERS),
+        num_workers=min(4, args.N_WORKERS),
         drop_last=False,
         shuffle=False
     )
@@ -633,7 +633,7 @@ def main(args):
     target_loader = DataLoader(
         dataset=targetdata,
         batch_size=args.batch_size,
-        num_workers=min(2, args.N_WORKERS),
+        num_workers=min(4, args.N_WORKERS),
         drop_last=False,
         shuffle=False
     )
@@ -797,12 +797,12 @@ def main(args):
         tr,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=min(2, args.N_WORKERS))
+        num_workers=min(4, args.N_WORKERS))
     
     # Early stopping tracking
     best_valid_acc = 0
     epochs_without_improvement = 0
-    early_stopping_patience = getattr(args, 'early_stopping_patience', 10)
+    early_stopping_patience = getattr(args, 'early_stopping_patience', 3)
     
     # Main training loop
     global_step = 0
@@ -815,11 +815,10 @@ def main(args):
             break
             
         # Determine epochs for this round
-        # Determine epochs for this round
         if getattr(args, 'curriculum', False):
             # Ensure CL_PHASE_EPOCHS is a list
             if not hasattr(args, 'CL_PHASE_EPOCHS') or not isinstance(args.CL_PHASE_EPOCHS, list):
-                args.CL_PHASE_EPOCHS = [10, 15, 20]  # Default to list of phases
+                args.CL_PHASE_EPOCHS = [3, 5, 8]  # Default to list of phases
             
             # Ensure CL_DIFFICULTY is a list
             if not hasattr(args, 'CL_DIFFICULTY') or not isinstance(args.CL_DIFFICULTY, list):
@@ -868,7 +867,7 @@ def main(args):
                 train_loader.dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
-                num_workers=min(2, args.N_WORKERS)
+                num_workers=min(4, args.N_WORKERS)
             )
             
             # Set algorithm back to training mode

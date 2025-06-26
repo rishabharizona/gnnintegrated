@@ -772,10 +772,8 @@ def main(args):
     opta = get_optimizer_adamw(algorithm, args, nettype='Diversify-all')
     
     # Add learning rate scheduler
-from torch.optim.lr_scheduler import CosineAnnealingLR
-scheduler = CosineAnnealingLR(optimizer, T_max=args.max_epoch)
-        opt, mode='max', factor=0.5, patience=3, verbose=True
-    )
+    from torch.optim.lr_scheduler import CosineAnnealingLR
+    scheduler = CosineAnnealingLR(opt, T_max=args.max_epoch)
     
     # Add data augmentation module
     augmenter = EMGDataAugmentation(args).cuda()
@@ -805,14 +803,25 @@ scheduler = CosineAnnealingLR(optimizer, T_max=args.max_epoch)
     epochs_without_improvement = 0
     early_stopping_patience = getattr(args, 'early_stopping_patience', 3)
     
+    # Set gradient clipping norm
+    MAX_GRAD_NORM = getattr(args, 'max_grad_norm', 5.0)
+    
     # Main training loop
     global_step = 0
     for round_idx in range(args.max_epoch):
-    if hasattr(algorithm.featurizer, 'dropout'):
+        # Dropout adjustment
+        if hasattr(algorithm.featurizer, 'dropout'):
+            if round_idx < 10:
+                algorithm.featurizer.dropout.p = 0.1
+            else:
+                algorithm.featurizer.dropout.p = 0.5
+        
+        # Adaptive data augmentation
         if round_idx < 10:
-            algorithm.featurizer.dropout.p = 0.1
+            augmenter.aug_prob = 0.3
         else:
-            algorithm.featurizer.dropout.p = 0.5
+            augmenter.aug_prob = getattr(args, 'aug_prob', 0.7)
+        
         print(f'\n======== ROUND {round_idx} ========')
         
         # Early stopping check
@@ -987,7 +996,7 @@ scheduler = CosineAnnealingLR(optimizer, T_max=args.max_epoch)
             
             # Update scheduler
             if scheduler:
-                scheduler.step(results['valid_acc'])
+                scheduler.step()
             
             # Log losses
             for key in loss_list:
@@ -1234,11 +1243,11 @@ scheduler = CosineAnnealingLR(optimizer, T_max=args.max_epoch)
 
 if __name__ == '__main__':
     args = get_args()
-args.lambda_cls = getattr(args, 'lambda_cls', 1.0)
-args.lambda_dis = getattr(args, 'lambda_dis', 0.1)
-args.label_smoothing = getattr(args, 'label_smoothing', 0.1)
-args.max_grad_norm = getattr(args, 'max_grad_norm', 5.0)
-args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 20)
+    args.lambda_cls = getattr(args, 'lambda_cls', 1.0)
+    args.lambda_dis = getattr(args, 'lambda_dis', 0.1)
+    args.label_smoothing = getattr(args, 'label_smoothing', 0.1)
+    args.max_grad_norm = getattr(args, 'max_grad_norm', 5.0)
+    args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 20)
 
     # Add GNN-specific parameters to args
     if not hasattr(args, 'use_gnn'):
@@ -1258,7 +1267,7 @@ args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 20)
             args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)
             
             # TCN/LSTM parameters
-            args.use_tcn = getattr(args, 'use_tcn', True)  # Add this line
+            args.use_tcn = getattr(args, 'use_tcn', True)
             args.lstm_hidden_size = getattr(args, 'lstm_hidden_size', 128)
             args.lstm_layers = getattr(args, 'lstm_layers', 1)
             args.bidirectional = getattr(args, 'bidirectional', False)
@@ -1287,8 +1296,5 @@ args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 20)
     # Domain adaptation
     if not hasattr(args, 'adv_weight'):
         args.adv_weight = 1.5  # Increased adversarial weight
-
-    # Set gradient clipping norm
-    MAX_GRAD_NORM = getattr(args, 'max_grad_norm', 1.0)
 
     main(args)

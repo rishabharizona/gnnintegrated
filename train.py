@@ -563,11 +563,15 @@ def main(args):
         feature_list = []
         
         with torch.no_grad():
-            # Print input shape once for verification
             first_batch = True
             
             for batch in train_loader:
-                inputs = batch[0].cuda().float()
+                # Handle GNN data differently
+                if args.use_gnn and GNN_AVAILABLE:
+                    # For GNN: batch[0] is a Batch object, batch[1] is labels, batch[2] is domains
+                    inputs = batch[0].to(args.device)
+                else:
+                    inputs = batch[0].to(args.device).float()
                 
                 # Handle GNN input format if needed
                 if args.use_gnn and GNN_AVAILABLE:
@@ -728,7 +732,17 @@ def main(args):
                 gnn_model.train()
                 total_loss = 0
                 for batch in train_loader:
-                    x = batch[0].cuda().float()
+                    # Handle GNN data differently
+                    if args.use_gnn and GNN_AVAILABLE:
+                        inputs = batch[0].to(args.device)
+                        labels = batch[1].to(args.device)
+                        domains = batch[2].to(args.device)
+                        x = inputs
+                    else:
+                        inputs = batch[0].to(args.device).float()
+                        labels = batch[1].to(args.device).long()
+                        domains = batch[2].to(args.device).long()
+                        x = inputs
                     
                     # Convert to (batch, time, features) format
                     if args.use_gnn and GNN_AVAILABLE:
@@ -894,14 +908,22 @@ def main(args):
         for step in range(current_epochs):
             epoch_class_loss = 0.0
             batch_count = 0
-            for data in train_loader:
-                # Apply data augmentation
-                data = list(data)
-                data[0] = augmenter(data[0])
-                
-                # GNN input transformation
+            for batch in train_loader:
+                # Handle GNN data differently
                 if args.use_gnn and GNN_AVAILABLE:
-                    data[0] = transform_for_gnn(data[0])
+                    # For GNN: batch[0] is a Batch object, batch[1] is labels, batch[2] is domains
+                    inputs = batch[0].to(args.device)
+                    labels = batch[1].to(args.device)
+                    domains = batch[2].to(args.device)
+                    data = [inputs, labels, domains]
+                else:
+                    # For non-GNN data
+                    inputs = batch[0].to(args.device).float()
+                    labels = batch[1].to(args.device).long()
+                    domains = batch[2].to(args.device).long()
+                    # Apply augmentation
+                    inputs = augmenter(inputs)
+                    data = [inputs, labels, domains]
                 
                 loss_result_dict = algorithm.update_a(data, opta)
                 
@@ -927,14 +949,22 @@ def main(args):
             epoch_ent = 0.0
             batch_count = 0
             
-            for data in train_loader:
-                # Apply data augmentation
-                data = list(data)
-                data[0] = augmenter(data[0])
-                
-                # GNN input transformation
+            for batch in train_loader:
+                # Handle GNN data differently
                 if args.use_gnn and GNN_AVAILABLE:
-                    data[0] = transform_for_gnn(data[0])
+                    # For GNN: batch[0] is a Batch object, batch[1] is labels, batch[2] is domains
+                    inputs = batch[0].to(args.device)
+                    labels = batch[1].to(args.device)
+                    domains = batch[2].to(args.device)
+                    data = [inputs, labels, domains]
+                else:
+                    # For non-GNN data
+                    inputs = batch[0].to(args.device).float()
+                    labels = batch[1].to(args.device).long()
+                    domains = batch[2].to(args.device).long()
+                    # Apply augmentation
+                    inputs = augmenter(inputs)
+                    data = [inputs, labels, domains]
                 
                 loss_result_dict = algorithm.update_d(data, optd)
                 
@@ -968,14 +998,22 @@ def main(args):
         round_start_time = time.time()
         for step in range(current_epochs):
             step_start_time = time.time()
-            for data in train_loader:
-                # Apply data augmentation
-                data = list(data)
-                data[0] = augmenter(data[0])
-                
-                # GNN input transformation
+            for batch in train_loader:
+                # Handle GNN data differently
                 if args.use_gnn and GNN_AVAILABLE:
-                    data[0] = transform_for_gnn(data[0])
+                    # For GNN: batch[0] is a Batch object, batch[1] is labels, batch[2] is domains
+                    inputs = batch[0].to(args.device)
+                    labels = batch[1].to(args.device)
+                    domains = batch[2].to(args.device)
+                    data = [inputs, labels, domains]
+                else:
+                    # For non-GNN data
+                    inputs = batch[0].to(args.device).float()
+                    labels = batch[1].to(args.device).long()
+                    domains = batch[2].to(args.device).long()
+                    # Apply augmentation
+                    inputs = augmenter(inputs)
+                    data = [inputs, labels, domains]
                 
                 step_vals = algorithm.update(data, opt)
                 
@@ -1031,11 +1069,15 @@ def main(args):
             source_features = []
             with torch.no_grad():
                 for data in entire_source_loader:
-                    x = data[0].cuda().float()
-                    # GNN input transformation
+                    # Handle GNN data differently
                     if args.use_gnn and GNN_AVAILABLE:
-                        x = transform_for_gnn(x)
-                    features = algorithm.featurizer(x).detach().cpu().numpy()
+                        inputs = data[0].to(args.device)
+                        # Convert to (batch, time, channels) format
+                        inputs = transform_for_gnn(inputs)
+                    else:
+                        inputs = data[0].to(args.device).float()
+                    
+                    features = algorithm.featurizer(inputs).detach().cpu().numpy()
                     source_features.append(features)
             source_features = np.concatenate(source_features, axis=0)
             
@@ -1043,11 +1085,15 @@ def main(args):
             target_features = []
             with torch.no_grad():
                 for data in target_loader:
-                    x = data[0].cuda().float()
-                    # GNN input transformation
+                    # Handle GNN data differently
                     if args.use_gnn and GNN_AVAILABLE:
-                        x = transform_for_gnn(x)
-                    features = algorithm.featurizer(x).detach().cpu().numpy()
+                        inputs = data[0].to(args.device)
+                        # Convert to (batch, time, channels) format
+                        inputs = transform_for_gnn(inputs)
+                    else:
+                        inputs = data[0].to(args.device).float()
+                    
+                    features = algorithm.featurizer(inputs).detach().cpu().numpy()
                     target_features.append(features)
             target_features = np.concatenate(target_features, axis=0)
             
@@ -1066,8 +1112,18 @@ def main(args):
         print("\n📊 Running SHAP explainability...")
         try:
             # Prepare background and evaluation data
-            background = get_background_batch(valid_loader, size=64).cuda()
-            X_eval = background[:10]
+            if args.use_gnn and GNN_AVAILABLE:
+                # For GNN, we need to sample individual graphs
+                background = []
+                for data in valid_loader:
+                    background.extend(data[0].to_data_list())
+                    if len(background) >= 64:
+                        break
+                background = background[:64]
+                X_eval = background[:10]
+            else:
+                background = get_background_batch(valid_loader, size=64).cuda()
+                X_eval = background[:10]
             
             # Disable inplace operations in the model
             disable_inplace_relu(algorithm)
@@ -1076,7 +1132,7 @@ def main(args):
             transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
             
             # Transform background and X_eval if necessary
-            if transform_fn is not None:
+            if transform_fn is not None and not args.use_gnn:
                 background = transform_fn(background)
                 X_eval = transform_fn(X_eval)
             
@@ -1088,94 +1144,64 @@ def main(args):
             print(f"SHAP values shape: {shap_vals.shape}")
             
             # Convert to numpy safely before visualization
-            X_eval_np = X_eval.detach().cpu().numpy()
+            X_eval_np = X_eval
+            if isinstance(X_eval, list):
+                # Handle PyG data list
+                X_eval_np = [d.x.detach().cpu().numpy() for d in X_eval]
+            else:
+                X_eval_np = X_eval.detach().cpu().numpy()
             
             # Handle GNN dimensionality for visualization
             if args.use_gnn and GNN_AVAILABLE:
                 print(f"Original SHAP values shape: {shap_vals.shape}")
-                print(f"Original X_eval shape: {X_eval_np.shape}")
+                print(f"Original X_eval shape: {X_eval_np[0].shape}")
                 
                 # If 4D, reduce to 3D by summing over classes
-                if shap_vals.ndim == 4:
-                    # Sum across classes to get overall feature importance
-                    shap_vals = np.abs(shap_vals).sum(axis=-1)
-                    print(f"SHAP values after class sum: {shap_vals.shape}")
+                if isinstance(shap_vals, list):
+                    # For GNN, shap_vals is a list of arrays
+                    shap_vals = [np.abs(sv).sum(axis=-1) for sv in shap_vals]
+                    print(f"SHAP values after class sum: {shap_vals[0].shape}")
                 
-                # Now we should have 3D: [batch, time, channels]
-                if shap_vals.ndim == 3:
-                    # Convert to [batch, channels, 1, time] for visualization
-                    shap_vals = np.transpose(shap_vals, (0, 2, 1))
-                    shap_vals = np.expand_dims(shap_vals, axis=2)
-                    X_eval_np = np.transpose(X_eval_np, (0, 2, 1))
-                    X_eval_np = np.expand_dims(X_eval_np, axis=2)
-                else:
-                    print(f"⚠️ Unexpected SHAP values dimension: {shap_vals.ndim}")
-                    print("Skipping visualization-specific reshaping")
-            
-            # Generate core visualizations
-            try:
-                plot_summary(shap_vals, X_eval_np, 
-                            output_path=os.path.join(args.output, "shap_summary.png"))
-            except IndexError as e:
-                print(f"SHAP summary plot dimension error: {str(e)}")
-                print(f"Using fallback 3D visualization instead")
-                plot_emg_shap_4d(X_eval, shap_vals, 
-                                output_path=os.path.join(args.output, "shap_3d_fallback.html"))
-                
-            overlay_signal_with_shap(X_eval_np[0], shap_vals, 
-                                    output_path=os.path.join(args.output, "shap_overlay.png"))
-            plot_shap_heatmap(shap_vals, 
-                             output_path=os.path.join(args.output, "shap_heatmap.png"))
-            
-            # Evaluate SHAP impact
-            base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
+                # Now we should have list of 3D arrays: [channels, time] for each graph
+                # We'll just visualize the first sample
+                plot_emg_shap_4d(X_eval_np[0], shap_vals[0], 
+                                output_path=os.path.join(args.output, "shap_gnn_sample.html"))
+            else:
+                # Generate core visualizations for non-GNN data
+                try:
+                    plot_summary(shap_vals, X_eval_np, 
+                                output_path=os.path.join(args.output, "shap_summary.png"))
+                except IndexError as e:
+                    print(f"SHAP summary plot dimension error: {str(e)}")
+                    print(f"Using fallback 3D visualization instead")
+                    plot_emg_shap_4d(X_eval, shap_vals, 
+                                    output_path=os.path.join(args.output, "shap_3d_fallback.html"))
+                    
+                overlay_signal_with_shap(X_eval_np[0], shap_vals, 
+                                        output_path=os.path.join(args.output, "shap_overlay.png"))
+                plot_shap_heatmap(shap_vals, 
+                                 output_path=os.path.join(args.output, "shap_heatmap.png"))
             
             # Save SHAP values
             save_path = os.path.join(args.output, "shap_values.npy")
             save_shap_numpy(shap_vals, save_path=save_path)
             
-            # Compute impact metrics
-            print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
-            print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
-            print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
-            print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals):.4f}")
-            
-            # Compute advanced metrics
-            metrics = evaluate_advanced_shap_metrics(shap_vals, X_eval)
-            print(f"[SHAP] Entropy: {metrics.get('shap_entropy', 0):.4f}")
-            print(f"[SHAP] Coherence: {metrics.get('feature_coherence', 0):.4f}")
-            print(f"[SHAP] Channel Variance: {metrics.get('channel_variance', 0):.4f}")
-            print(f"[SHAP] Temporal Entropy: {metrics.get('temporal_entropy', 0):.4f}")
-            print(f"[SHAP] Mutual Info: {metrics.get('mutual_info', 0):.4f}")
-            print(f"[SHAP] PCA Alignment: {metrics.get('pca_alignment', 0):.4f}")
-            
-            # Compute similarity metrics between first two samples
-            shap_array = _get_shap_array(shap_vals)
-            if len(shap_array) >= 2:
-                # Extract SHAP values for first two samples
-                sample1 = shap_array[0]
-                sample2 = shap_array[1]
-                print(f"[SHAP] Jaccard (top-10): {compute_jaccard_topk(sample1, sample2, k=10):.4f}")
-                print(f"[SHAP] Kendall's Tau: {compute_kendall_tau(sample1, sample2):.4f}")
-                print(f"[SHAP] Cosine Similarity: {cosine_similarity_shap(sample1, sample2):.4f}")
-            else:
-                print("[SHAP] Not enough samples for similarity metrics")
-            
-            # Generate 4D visualizations
-            plot_emg_shap_4d(X_eval, shap_vals, 
-                            output_path=os.path.join(args.output, "shap_4d_scatter.html"))
-            plot_4d_shap_surface(shap_vals, 
-                                output_path=os.path.join(args.output, "shap_4d_surface.html"))
-            
             # Confusion matrix
             true_labels, pred_labels = [], []
             for data in valid_loader:
-                x, y = data[0].cuda(), data[1]
+                # Handle GNN data differently
+                if args.use_gnn and GNN_AVAILABLE:
+                    inputs = data[0].to(args.device)
+                    y = data[1]
+                else:
+                    inputs = data[0].to(args.device).float()
+                    y = data[1]
+                
                 with torch.no_grad():
                     # Apply transform for GNN if needed
                     if args.use_gnn and GNN_AVAILABLE:
-                        x = transform_for_gnn(x)
-                    preds = algorithm.predict(x).cpu()
+                        inputs = transform_for_gnn(inputs)
+                    preds = algorithm.predict(inputs).cpu()
                     true_labels.extend(y.cpu().numpy())
                     pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
             

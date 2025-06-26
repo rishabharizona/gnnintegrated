@@ -74,11 +74,16 @@ def get_dataloader(args, tr, val, tar):
     is_graph_data = False
     if len(tr) > 0:
         sample = tr[0]
-        # Check for different graph data formats
+        # Check for different graph data formats:
+        # 1. Tuple format: (graph, label, domain)
         if (isinstance(sample, tuple) and len(sample) >= 3 and 
             isinstance(sample[0], Data)):
             is_graph_data = True
+        # 2. Direct Data object
         elif isinstance(sample, Data):
+            is_graph_data = True
+        # 3. Dictionary format
+        elif isinstance(sample, dict) and 'graph' in sample:
             is_graph_data = True
     """
     Create data loaders for training, validation, and target datasets
@@ -91,6 +96,7 @@ def get_dataloader(args, tr, val, tar):
         Tuple of DataLoader objects
     """
     # ======= GNN-SPECIFIC LOADERS =======
+    # Use GNN loaders for graph data
     if is_graph_data or (hasattr(args, 'model_type') and args.model_type == 'gnn'):
         train_loader = get_gnn_dataloader(
             tr, args.batch_size, args.N_WORKERS, shuffle=True)

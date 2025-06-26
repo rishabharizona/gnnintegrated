@@ -239,7 +239,7 @@ class EMGDataAugmentation(nn.Module):
         if torch.rand(1) < self.aug_prob:
             # Create scale factor with proper dimensions for broadcasting
             scale_factor = torch.randn(x.size(0), *([1] * (x.dim() - 1)), device=x.device)
-            scale_factor = scale_factor * self.scaling_std + 1.0
+            scale_factor = scale_factor * self.scaling_std + 0.1
             x = x * scale_factor
 
         # Random time warping - fixed for both 3D and 4D inputs
@@ -517,7 +517,7 @@ class EnhancedTemporalGCN(TemporalGCN):
         skip_out = self.skip_conn(skip_out)  # [batch, output_dim]
         
         # Residual connection with gating mechanism
-        gate = torch.sigmoid(0.5 * gnn_out + 0.5 * skip_out)
+        gate = torch.sigmoid(0.1 * gnn_out + 0.1 * skip_out)
         output = gate * gnn_out + (1 - gate) * skip_out
         
         return output
@@ -592,7 +592,7 @@ def main(args):
                 hidden_dim=args.gnn_hidden_dim,
                 output_dim=args.gnn_output_dim,
                 graph_builder=graph_builder,
-                n_layers=getattr(args, 'gnn_layers', 3),
+                n_layers=getattr(args, 'gnn_layers', 9),
                 use_tcn=getattr(args, 'use_tcn', True)
             ).to(args.device)
         else:
@@ -703,7 +703,7 @@ def main(args):
         )
         
         # Add GNN parameters to args
-        args.gnn_layers = getattr(args, 'gnn_layers', 3)
+        args.gnn_layers = getattr(args, 'gnn_layers', 9)
         args.use_tcn = getattr(args, 'use_tcn', True)
         
         # Initialize enhanced GNN model
@@ -835,7 +835,7 @@ def main(args):
     warmup_epochs = 5
     warmup_scheduler = LambdaLR(
         opta,
-        lr_lambda=lambda epoch: min(1.0, (epoch + 1) / warmup_epochs)
+        lr_lambda=lambda epoch: min(0.1, (epoch + 1) / warmup_epochs)
     )
     
     # Add data augmentation module
@@ -867,7 +867,7 @@ def main(args):
     early_stopping_patience = getattr(args, 'early_stopping_patience', 3)
     
     # Set gradient clipping norm
-    MAX_GRAD_NORM = 1.0  # Reduced from 5.0 for tighter control
+    MAX_GRAD_NORM = 0.1  # Reduced from 5.0 for tighter control
     
     # Main training loop
     global_step = 0
@@ -875,15 +875,15 @@ def main(args):
         # Dropout adjustment - extended gentle period
         if hasattr(algorithm.featurizer, 'dropout'):
             if round_idx < 20:  # Longer gentle dropout period
-                algorithm.featurizer.dropout.p = 0.1
+                algorithm.featurizer.dropout.p = 0.01
             else:
-                algorithm.featurizer.dropout.p = 0.3  # Less dropout than before
+                algorithm.featurizer.dropout.p = 0.03  # Less dropout than before
         
         # Adaptive data augmentation
         if round_idx < 10:
-            augmenter.aug_prob = 0.5  # Increased from 0.3
+            augmenter.aug_prob = 0.1  # Increased from 0.3
         else:
-            augmenter.aug_prob = getattr(args, 'aug_prob', 0.9)
+            augmenter.aug_prob = getattr(args, 'aug_prob', 0.1)
         
         print(f'\n======== ROUND {round_idx} ========')
         

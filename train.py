@@ -569,10 +569,13 @@ def main(args):
             
             for batch in train_loader:
                 # Handle GNN data differently
-                inputs = batch[0].cuda().float()
+                
                 if args.use_gnn and GNN_AVAILABLE:
-                    # For GNN: batch[0] is a Batch object, batch[1] is labels, batch[2] is domains
                     inputs = batch[0].to(args.device)
+                    # Convert PyG Batch to dense tensor
+                    from torch_geometric.utils import to_dense_batch
+                    x_dense, mask = to_dense_batch(inputs.x, inputs.batch)
+                    inputs = x_dense  # [batch_size, max_nodes, features]
                 else:
                     inputs = batch[0].to(args.device).float()
                 

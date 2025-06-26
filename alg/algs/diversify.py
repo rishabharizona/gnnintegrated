@@ -338,8 +338,6 @@ class Diversify(Algorithm):
         """Update auxiliary classifier"""
         # Extract inputs, class labels, and domain labels
         inputs = minibatches[0]
-        class_labels = minibatches[1]
-        domain_labels = minibatches[2]  # Domain labels are at index 2
         
         # Import PyG modules only when needed
         from torch_geometric.data import Data, Batch
@@ -348,16 +346,32 @@ class Diversify(Algorithm):
         if isinstance(inputs, (Data, Batch)):  # Handle both single graphs and batches
             # Move graph data to GPU
             inputs = inputs.to('cuda')
-            # Extract class labels from the Data object if available
-            if hasattr(inputs, 'y'):
+            
+            # Extract class labels from the Data object
+            if hasattr(inputs, 'y') and inputs.y is not None:
                 class_labels = inputs.y
-            # Extract domain labels from the Data object if available
-            if hasattr(inputs, 'domain'):
+            else:
+                # Fallback to batch[1] if y attribute is missing
+                class_labels = minibatches[1]
+            
+            # Extract domain labels from the Data object
+            if hasattr(inputs, 'domain') and inputs.domain is not None:
                 domain_labels = inputs.domain
+            else:
+                # Fallback to batch[2] if domain attribute is missing
+                domain_labels = minibatches[2]
         else:
             # Handle tensor inputs
             inputs = inputs.cuda().float()
             inputs = self.ensure_correct_dimensions(inputs)
+            class_labels = minibatches[1]
+            domain_labels = minibatches[2]
+        
+        # Ensure labels are not None
+        if class_labels is None:
+            raise RuntimeError("Class labels are None in update_a")
+        if domain_labels is None:
+            raise RuntimeError("Domain labels are None in update_a")
         
         # Convert labels to tensors if needed
         if not isinstance(class_labels, torch.Tensor):
@@ -381,14 +395,11 @@ class Diversify(Algorithm):
         all_y = torch.clamp(all_y, 0, max_class-1)
         
         # Forward pass
-        if isinstance(inputs, (Data, Batch)):
-            # For PyG Data objects, pass directly to featurizer
-            all_z = self.abottleneck(self.featurizer(inputs))
-        else:
-            all_z = self.abottleneck(self.featurizer(inputs))
+        all_z = self.abottleneck(self.featurizer(inputs))
         
         if self.explain_mode:
             all_z = all_z.clone()
+        
         all_preds = self.aclassifier(all_z)
         
         # Loss calculation and optimization

@@ -10,6 +10,7 @@ from torch_geometric.data import Batch, Data
 from torch_geometric.utils import to_dense_batch
 import datautil.graph_utils as graph_utils
 from typing import List, Tuple, Dict, Any, Optional
+import collections
 
 # Task mapping for activity recognition
 task_act = {'cross_people': cross_people}
@@ -39,7 +40,17 @@ class SafeSubset(Subset):
         elif isinstance(data, torch.Tensor):
             return data  # Already good
         elif isinstance(data, Data):  # Handle PyG Data objects
-            for key in data.keys:
+            # FIXED: Handle both keys and keys() methods
+            try:
+                # First try to get keys as a method
+                keys = data.keys()
+            except TypeError:
+                # If that fails, try to access as an attribute
+                keys = data.keys
+            # Make sure keys is iterable
+            if not isinstance(keys, collections.abc.Iterable):
+                keys = [keys]
+            for key in keys:
                 data[key] = self.convert_data(data[key])
             return data
         else:

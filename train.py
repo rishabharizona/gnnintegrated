@@ -136,10 +136,13 @@ def transform_for_gnn(x):
     if not GNN_AVAILABLE:
         return x
     
+    # Import PyG modules only when needed
+    from torch_geometric.data import Data
+    from torch_geometric.utils import to_dense_batch
+    
     # Handle PyG Data objects directly
     if isinstance(x, Data):
         # Convert to dense representation
-        from torch_geometric.utils import to_dense_batch
         x_dense, mask = to_dense_batch(x.x, x.batch)
         return x_dense
     

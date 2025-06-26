@@ -14,6 +14,20 @@ from alg.algs.base import Algorithm
 from loss.common_loss import Entropylogits
 from torch_geometric.data import Data
 from torch_geometric.utils import to_dense_batch
+
+# Focal Loss for handling class imbalance
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2.0, alpha=0.25):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = (self.alpha * (1-pt)**self.gamma * ce_loss).mean()
+        return focal_loss
+        
 def transform_for_gnn(x):
     """Robust transformation for GNN input handling various formats"""
     if not GNN_AVAILABLE:
@@ -115,7 +129,7 @@ class Diversify(Algorithm):
         self.aclassifier = common_network.feat_classifier(int(args.num_classes * args.latent_domain_num), args.bottleneck, args.classifier)
         self.discriminator = Adver_network.Discriminator(args.bottleneck, args.dis_hidden, args.latent_domain_num)
         self.args = args
-        self.criterion = nn.CrossEntropyLoss(label_smoothing=getattr(args, "label_smoothing", 0.0))
+        self.criterion = FocalLoss(gamma=2.0, alpha=0.25)
         self.lambda_cls = getattr(args, "lambda_cls", 1.0)
         self.lambda_dis = getattr(args, "lambda_dis", 0.1)
         self.explain_mode = False

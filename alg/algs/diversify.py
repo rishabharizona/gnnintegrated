@@ -458,7 +458,7 @@ class Diversify(Algorithm):
         return {'total': loss.item(), 'class': classifier_loss.item(), 'dis': disc_loss.item()}
 
     def update_a(self, minibatches, opt):
-    """Update auxiliary classifier"""
+    
     # Extract inputs, class labels, and domain labels
         inputs = minibatches[0]
     

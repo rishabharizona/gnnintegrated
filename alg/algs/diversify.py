@@ -15,45 +15,44 @@ from loss.common_loss import Entropylogits
 
 def transform_for_gnn(x):
     """Robust transformation for GNN input handling various formats"""
+    if not GNN_AVAILABLE:
+        return x
+    
+    # Handle PyG Data objects directly
+    if isinstance(x, Data):
+        # Convert to dense representation
+        from torch_geometric.utils import to_dense_batch
+        x_dense, mask = to_dense_batch(x.x, x.batch)
+        return x_dense
+    
     # Handle common 4D formats
     if x.dim() == 4:
         # Format 1: [batch, channels, 1, time] -> [batch, time, channels]
         if x.size(1) == 8 or x.size(1) == 200:
-            x = x.squeeze(2).permute(0, 2, 1)
+            return x.squeeze(2).permute(0, 2, 1)
         # Format 2: [batch, 1, channels, time] -> [batch, time, channels]
         elif x.size(2) == 8 or x.size(2) == 200:
-            x = x.squeeze(1).permute(0, 2, 1)
+            return x.squeeze(1).permute(0, 2, 1)
         # Format 3: [batch, time, 1, channels] -> [batch, time, channels]
         elif x.size(3) == 8 or x.size(3) == 200:
-            x = x.squeeze(2)
+            return x.squeeze(2)
         # New format: [batch, time, channels, 1]
         elif x.size(3) == 1 and (x.size(2) == 8 or x.size(2) == 200):
-            x = x.squeeze(3)
+            return x.squeeze(3)
     
     # Handle 3D formats
     elif x.dim() == 3:
         # Format 1: [batch, channels, time] -> [batch, time, channels]
         if x.size(1) == 8 or x.size(1) == 200:
-            x = x.permute(0, 2, 1)
+            return x.permute(0, 2, 1)
         # Format 2: [batch, time, channels] - already correct
         elif x.size(2) == 8 or x.size(2) == 200:
-            pass  # Already in correct format
+            return x
     
-    # Add fallback to ensure 200 time steps
-    if x.dim() >= 2 and x.size(1) != 200:
-        # Pad or truncate time dimension (index1) to 200 steps
-        current_timesteps = x.size(1)
-        if current_timesteps < 200:
-            padding = 200 - current_timesteps
-            x = torch.nn.functional.pad(x, (0, 0, 0, padding), "constant", 0)
-        else:
-            x = x[:, :200, :]
-    
-    return x
     # Unsupported format
     raise ValueError(
-        f"Cannot transform input of shape {x.shape} for GNN. "
-        f"Expected formats: [B, C, 1, T], [B, 1, C, T], [B, T, 1, C], [B, T, C, 1], "
+        f"Cannot transform input of shape {x.shape if hasattr(x, 'shape') else type(x)} for GNN. "
+        f"Expected formats: PyG Data object, [B, C, 1, T], [B, 1, C, T], [B, T, 1, C], [B, T, C, 1], "
         f"or 3D formats [B, C, T] or [B, T, C] where C is 8 or 200."
     )
 

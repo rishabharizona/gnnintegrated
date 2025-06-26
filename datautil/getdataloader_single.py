@@ -322,9 +322,25 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage, lo
     # Group validation indices by domain
     domain_indices = {}
     unique_domains = set()
+    
+    # Gather domains from validation dataset
     for idx in range(len(val_dataset)):
-        # Get domain ID from dataset (index 2 is domain label)
-        domain = val_dataset[idx][2].item() if isinstance(val_dataset[idx][2], torch.Tensor) else val_dataset[idx][2]
+        sample = val_dataset[idx]
+        
+        # Handle different sample formats to extract domain
+        if isinstance(sample, tuple) and len(sample) >= 3:
+            domain = sample[2]
+        elif isinstance(sample, Data) and hasattr(sample, 'domain'):
+            domain = sample.domain
+        elif isinstance(sample, dict) and 'domain' in sample:
+            domain = sample['domain']
+        else:
+            domain = 0  # Default domain
+            
+        # Convert to scalar if needed
+        if isinstance(domain, torch.Tensor):
+            domain = domain.item()
+            
         unique_domains.add(domain)
         domain_indices.setdefault(domain, []).append(idx)
     
@@ -341,8 +357,20 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage, lo
         for domain, indices in domain_indices.items():
             subset = Subset(val_dataset, indices)
             
+            # Detect graph data format
+            is_graph_data = False
+            if len(subset) > 0:
+                sample0 = subset[0]
+                # Handle tuple format: (graph, label, domain)
+                if isinstance(sample0, tuple) and len(sample0) > 0:
+                    if isinstance(sample0[0], Data):
+                        is_graph_data = True
+                # Handle raw Data object
+                elif isinstance(sample0, Data):
+                    is_graph_data = True
+            
             # Handle GNN vs standard model inputs
-            if hasattr(args, 'model_type') and args.model_type == 'gnn':
+            if is_graph_data:
                 loader = get_gnn_dataloader(subset, args.batch_size, num_workers_val, shuffle=False)
             else:
                 loader = DataLoader(subset, batch_size=args.batch_size, 
@@ -355,7 +383,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage, lo
 
             for batch in loader:
                 # Handle GNN vs standard model inputs
-                if hasattr(args, 'model_type') and args.model_type == 'gnn':
+                if is_graph_data:
                     batched_graph, labels, domains = batch
                     inputs = batched_graph.to(args.device)
                     labels = labels.to(args.device)
@@ -423,7 +451,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage, lo
             domain, difficulty = domain_scores[rank]
             print(f"{rank+1}. Domain {domain}: Difficulty = {difficulty:.4f}")
 
-    # Curriculum progression - FIXED HERE
+    # Curriculum progression
     num_domains = len(domain_scores)
     total_stages = len(args.CL_PHASE_EPOCHS)  # Get the number of stages
     progress = min(1.0, (stage + 1) / total_stages)  # Calculate progress correctly
@@ -442,8 +470,22 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage, lo
     train_domain_indices = {}
     max_domain_size = 0
     for idx in range(len(train_dataset)):
-        # Get domain ID from dataset (index 2 is domain label)
-        domain = train_dataset[idx][2].item() if isinstance(train_dataset[idx][2], torch.Tensor) else train_dataset[idx][2]
+        sample = train_dataset[idx]
+        
+        # Extract domain from different sample formats
+        if isinstance(sample, tuple) and len(sample) >= 3:
+            domain = sample[2]
+        elif isinstance(sample, Data) and hasattr(sample, 'domain'):
+            domain = sample.domain
+        elif isinstance(sample, dict) and 'domain' in sample:
+            domain = sample['domain']
+        else:
+            domain = 0  # Default domain
+            
+        # Convert to scalar if needed
+        if isinstance(domain, torch.Tensor):
+            domain = domain.item()
+            
         train_domain_indices.setdefault(domain, []).append(idx)
         if len(train_domain_indices[domain]) > max_domain_size:
             max_domain_size = len(train_domain_indices[domain])
@@ -475,7 +517,17 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage, lo
     # Handle loader creation based on provided loader class
     if loader_class is None:
         # Backward compatibility
-        if hasattr(args, 'model_type') and args.model_type == 'gnn':
+        # Detect if we have graph data
+        is_graph_data = False
+        if len(curriculum_subset) > 0:
+            sample0 = curriculum_subset[0]
+            if isinstance(sample0, tuple) and len(sample0) > 0:
+                if isinstance(sample0[0], Data):
+                    is_graph_data = True
+            elif isinstance(sample0, Data):
+                is_graph_data = True
+        
+        if is_graph_data:
             return get_gnn_dataloader(
                 curriculum_subset,
                 args.batch_size,

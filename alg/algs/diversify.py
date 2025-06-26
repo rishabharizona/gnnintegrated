@@ -17,10 +17,12 @@ def transform_for_gnn(x):
     """Robust transformation for GNN input handling various formats"""
     if not GNN_AVAILABLE:
         return x
-    
-    # Import PyG modules only when needed
-    from torch_geometric.data import Data
-    from torch_geometric.utils import to_dense_batch
+# Import PyG modules only when needed
+from torch_geometric.data import Data
+from torch_geometric.utils import to_dense_batch    
+# Import PyG modules only when needed
+from torch_geometric.data import Data
+from torch_geometric.utils import to_dense_batch
     
     # Handle PyG Data objects directly
     if isinstance(x, Data):

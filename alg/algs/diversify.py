@@ -107,42 +107,23 @@ def init_gnn_model(args, input_dim, num_classes):
 class Diversify(Algorithm):
     def __init__(self, args):
         super().__init__(args)
-        # Feature extractor
         self.featurizer = get_fea(args)
-        # Domain characterization components
-        self.dbottleneck = common_network.feat_bottleneck(
-            self.featurizer.in_features, args.bottleneck, args.layer)
-        self.ddiscriminator = Adver_network.Discriminator(
-            args.bottleneck, args.dis_hidden, args.domain_num)
-        self.dclassifier = common_network.feat_classifier(
-            args.num_classes,
-            args.bottleneck,
-            args.classifier
-        )
-        # Main classification components
-        self.bottleneck = common_network.feat_bottleneck(
-            self.featurizer.in_features, args.bottleneck, args.layer)
-        self.classifier = common_network.feat_classifier(
-            args.num_classes, args.bottleneck, args.classifier)
-        # Auxiliary classification components
-        self.abottleneck = common_network.feat_bottleneck(
-            self.featurizer.in_features, args.bottleneck, args.layer)
-        self.aclassifier = common_network.feat_classifier(
-            int(args.num_classes * args.latent_domain_num),
-            args.bottleneck,
-            args.classifier
-        )
-        # Domain discrimination components
-        self.discriminator = Adver_network.Discriminator(
-            args.bottleneck, args.dis_hidden, args.latent_domain_num)
+        self.dbottleneck = common_network.feat_bottleneck(self.featurizer.in_features, args.bottleneck, args.layer)
+        self.ddiscriminator = Adver_network.Discriminator(args.bottleneck, args.dis_hidden, args.domain_num)
+        self.dclassifier = common_network.feat_classifier(args.num_classes, args.bottleneck, args.classifier)
+        self.bottleneck = common_network.feat_bottleneck(self.featurizer.in_features, args.bottleneck, args.layer)
+        self.classifier = common_network.feat_classifier(args.num_classes, args.bottleneck, args.classifier)
+        self.abottleneck = common_network.feat_bottleneck(self.featurizer.in_features, args.bottleneck, args.layer)
+        self.aclassifier = common_network.feat_classifier(int(args.num_classes * args.latent_domain_num), args.bottleneck, args.classifier)
+        self.discriminator = Adver_network.Discriminator(args.bottleneck, args.dis_hidden, args.latent_domain_num)
         self.args = args
-        self.criterion = nn.CrossEntropyLoss()
-        # Add flag for explainability mode
+        self.criterion = nn.CrossEntropyLoss(label_smoothing=getattr(args, "label_smoothing", 0.0))
+        self.lambda_cls = getattr(args, "lambda_cls", 1.0)
+        self.lambda_dis = getattr(args, "lambda_dis", 0.1)
         self.explain_mode = False
-        
-        # Apply permanent fix to skip connection layer
+        self.global_step = 0
         self.patch_skip_connection()
-
+        
     def patch_skip_connection(self):
         """Dynamically adjust skip connection based on actual input shape"""
         # Get device from model parameters
@@ -197,34 +178,20 @@ class Diversify(Algorithm):
         self.actual_features = actual_features  # Store for later use
 
     def update_d(self, minibatch, opt):
-        """Update domain characterization components"""
         all_x1 = minibatch[0].cuda().float()
         all_d1 = minibatch[2].cuda().long()
         all_c1 = minibatch[1].cuda().long()
-        
-        # Validate domain labels
         n_domains = self.args.domain_num
-        min_label = torch.min(all_d1).item()
-        max_label = torch.max(all_d1).item()
-        
-        if min_label < 0 or max_label >= n_domains:
-            print(f"⚠️ Domain labels out of bounds! Clamping to [0, {n_domains-1}]")
-            all_d1 = torch.clamp(all_d1, 0, n_domains-1)
-        
-        # Forward pass
+        all_d1 = torch.clamp(all_d1, 0, n_domains - 1)
         z1 = self.dbottleneck(self.featurizer(all_x1))
         if self.explain_mode:
             z1 = z1.clone()
         disc_in1 = Adver_network.ReverseLayerF.apply(z1, self.args.alpha1)
         disc_out1 = self.ddiscriminator(disc_in1)
         cd1 = self.dclassifier(z1)
-        
-        # Loss calculation
         disc_loss = F.cross_entropy(disc_out1, all_d1, reduction='mean')
-        ent_loss = Entropylogits(cd1) * self.args.lam + F.cross_entropy(cd1, all_c1)
-        loss = ent_loss + disc_loss
-        
-        # Optimization step
+        ent_loss = Entropylogits(cd1) * self.args.lam + self.criterion(cd1, all_c1)
+        loss = ent_loss + self.lambda_dis * disc_loss
         opt.zero_grad()
         loss.backward()
         opt.step()
@@ -343,50 +310,30 @@ class Diversify(Algorithm):
         return inputs
 
     def update(self, data, opt):
-        """Update domain-invariant features"""
         all_x = data[0].cuda().float()
         all_x = self.ensure_correct_dimensions(all_x)
         all_y = data[1].cuda().long()
         all_z = self.bottleneck(self.featurizer(all_x))
         if self.explain_mode:
             all_z = all_z.clone()
-        
-        # Domain discrimination
-        disc_input = Adver_network.ReverseLayerF.apply(all_z, self.args.alpha)
+        self.global_step += 1
+        alpha = getattr(self.args, "alpha", 1.0)
+        if hasattr(self.args, "alpha_warmup") and self.args.alpha_warmup:
+            total_steps = getattr(self.args, "warmup_steps", 1000)
+            alpha = min(1.0, self.global_step / total_steps)
+        disc_input = Adver_network.ReverseLayerF.apply(all_z, alpha)
         disc_out = self.discriminator(disc_input)
-        
-        # Get pseudo-domain labels directly from batch
         disc_labels = data[4].cuda().long()
-        
-        # Validate labels and clamp to valid range
-        n_domains = self.args.latent_domain_num
-        disc_labels = torch.clamp(disc_labels, 0, n_domains-1)
-        
-        # Ensure discriminator output size matches domain count
-        if disc_out.size(1) != n_domains:
-            print(f"⚠️ Discriminator output size mismatch! Expected {n_domains}, got {disc_out.size(1)}")
-            # Create new discriminator with correct output size
-            self.discriminator = Adver_network.Discriminator(
-                self.args.bottleneck, 
-                self.args.dis_hidden, 
-                n_domains
-            ).cuda()
-            disc_out = self.discriminator(disc_input)
-            
+        disc_labels = torch.clamp(disc_labels, 0, self.args.latent_domain_num - 1)
         disc_loss = F.cross_entropy(disc_out, disc_labels)
-        
-        # Classification
         all_preds = self.classifier(all_z)
-        classifier_loss = F.cross_entropy(all_preds, all_y)
-        
-        # Combined loss
-        loss = classifier_loss + disc_loss
-        
-        # Optimization step
+        classifier_loss = self.criterion(all_preds, all_y)
+        loss = self.lambda_cls * classifier_loss + self.lambda_dis * disc_loss
         opt.zero_grad()
         loss.backward()
         opt.step()
-        
+        if self.global_step % 100 == 0:
+            print(f"[Step {self.global_step}] ClassLoss={classifier_loss.item():.4f} | DiscLoss={disc_loss.item():.4f}")
         return {'total': loss.item(), 'class': classifier_loss.item(), 'dis': disc_loss.item()}
 
     def update_a(self, minibatches, opt):

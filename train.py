@@ -447,6 +447,12 @@ class EnhancedTemporalGCN(TemporalGCN):
                     param.data[n//4:n//2].fill_(1)
 
     def forward(self, x):
+        # Convert PyG Data objects to dense tensors
+        if hasattr(x, 'x') and hasattr(x, 'batch'):
+            from torch_geometric.utils import to_dense_batch
+            # Convert to dense representation
+            x, mask = to_dense_batch(x.x, x.batch)
+            # x now has shape [batch_size, max_nodes, features]
         # Convert 4D input to 3D if necessary
         if x.dim() == 4:
             # Handle 4D input: [batch, channels, 1, time]

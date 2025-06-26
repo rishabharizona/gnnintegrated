@@ -569,6 +569,7 @@ def main(args):
             
             for batch in train_loader:
                 # Handle GNN data differently
+                inputs = batch.x.cuda().float()
                 if args.use_gnn and GNN_AVAILABLE:
                     # For GNN: batch[0] is a Batch object, batch[1] is labels, batch[2] is domains
                     inputs = batch[0].to(args.device)
@@ -578,7 +579,7 @@ def main(args):
                 # Handle GNN input format if needed
                 if args.use_gnn and GNN_AVAILABLE:
                     # Convert to (batch, time, channels) format
-                    inputs = transform_for_gnn(inputs)
+                    inputs = inputs.reshape(args.batch_size, -1, 8)
                     
                     # Ensure it's 3D: [batch, time, channels]
                     if inputs.dim() != 3:

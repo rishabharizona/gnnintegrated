@@ -15,18 +15,6 @@ from loss.common_loss import Entropylogits
 from torch_geometric.data import Data
 from torch_geometric.utils import to_dense_batch
 
-# Focal Loss for handling class imbalance
-class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, alpha=0.25):
-        super().__init__()
-        self.gamma = gamma
-        self.alpha = alpha
-
-    def forward(self, inputs, targets):
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
-        pt = torch.exp(-ce_loss)
-        focal_loss = (self.alpha * (1-pt)**self.gamma * ce_loss).mean()
-        return focal_loss
         
 def transform_for_gnn(x):
     """Robust transformation for GNN input handling various formats"""
@@ -68,7 +56,19 @@ def transform_for_gnn(x):
         f"Expected formats: PyG Data object, [B, C, 1, T], [B, 1, C, T], [B, T, 1, C], [B, T, C, 1], "
         f"or 3D formats [B, C, T] or [B, T, C] where C is 8 or 200."
     )
+# Focal Loss for handling class imbalance
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2.0, alpha=0.25):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
 
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = (self.alpha * (1-pt)**self.gamma * ce_loss).mean()
+        return focal_loss
+        
 class GNNModel(nn.Module):
     """GNN model for activity recognition"""
     def __init__(self, input_dim, hidden_dim, num_classes, gnn_type='gcn'):

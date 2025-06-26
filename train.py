@@ -275,7 +275,6 @@ def get_optimizer_adamw(algorithm, args, nettype='Diversify'):
             lr=args.lr,
             weight_decay=args.weight_decay,
             betas=(0.9, 0.999)
-        )
     elif args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(
             params, 
@@ -533,7 +532,27 @@ def main(args):
     
     # Load datasets - IMPORTANT: This returns loader objects, not datasets
     loader_data = get_act_dataloader(args)
-    train_loader, train_loader_noshuffle, valid_loader, target_loader, tr, val, targetdata = loader_data[:7]
+    
+    # Extract datasets only (ignore initial loaders)
+    tr = loader_data[4]  # Training dataset
+    val = loader_data[5]  # Validation dataset
+    targetdata = loader_data[6]  # Target dataset
+    
+    # ====== CONDITIONAL LOADER SELECTION ======
+    # Determine loader class based on GNN availability and flag
+    if args.use_gnn and GNN_AVAILABLE:
+        LoaderClass = PyGDataLoader
+        print("Using PyGDataLoader for GNN data")
+    else:
+        LoaderClass = TorchDataLoader
+        print("Using TorchDataLoader for CNN data")
+    
+    # Create temporary loader for automated K estimation
+    temp_train_loader = LoaderClass(
+        dataset=tr,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=min(4, args.N_WORKERS))
     
     # Automated K estimation if enabled
     if getattr(args, 'automated_k', False):
@@ -567,7 +586,7 @@ def main(args):
         with torch.no_grad():
             first_batch = True
             
-            for batch in train_loader:
+            for batch in temp_train_loader:  # Use temp_train_loader here
                 # Handle GNN data differently
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
@@ -614,13 +633,7 @@ def main(args):
         args.batch_size = 16 * args.latent_domain_num
     print(f"Adjusted batch size: {args.batch_size}")
     
-    # Recreate data loaders with new batch size
-    # Determine which loader class to use
-    if args.use_gnn and GNN_AVAILABLE:
-        LoaderClass = PyGDataLoader
-    else:
-        LoaderClass = TorchDataLoader
-    
+    # ====== CREATE MAIN LOADERS WITH SELECTED LOADERCLASS ======
     train_loader = LoaderClass(
         dataset=tr,
         batch_size=args.batch_size,
@@ -815,11 +828,7 @@ def main(args):
                             'total_loss', 'train_acc', 'valid_acc', 'target_acc',
                             'total_cost_time', 'h_divergence', 'domain_acc']}
     best_valid_acc, target_acc = 0, 0
-    # Determine loader class for entire source loader
-if args.use_gnn and GNN_AVAILABLE:
-    LoaderClass = PyGDataLoader
-else:
-    LoaderClass = TorchDataLoader
+    
     # Create entire source loader for h-divergence calculation
     entire_source_loader = LoaderClass(
         tr,
@@ -904,31 +913,11 @@ else:
                 tr,
                 val,
                 stage=round_idx,
-                loader_class=PyGDataLoader  # Pass PyG loader class
+                loader_class=LoaderClass  # Use selected loader class
             )
-               # Determine loader class for entire source loader
-            if args.use_gnn and GNN_AVAILABLE:
-                LoaderClass = PyGDataLoader
-            else:
-                LoaderClass = TorchDataLoader
-
+            
             # Update the no-shuffle loader
             train_loader_noshuffle = LoaderClass(
-                train_loader.dataset,
-                batch_size=args.batch_size,
-                shuffle=False,
-                num_workers=min(2, args.N_WORKERS)
-            )
-        else:
-            train_loader = get_curriculum_loader(
-                args,
-                algorithm,
-                tr,
-                val,
-                stage=round_idx,
-                loader_class=TorchDataLoader  # Pass standard loader class
-            )
-            train_loader_noshuffle = TorchDataLoader(
                 train_loader.dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
@@ -946,13 +935,11 @@ else:
             for batch in train_loader:
                 # Handle GNN data differently
                 if args.use_gnn and GNN_AVAILABLE:
-                    # For GNN: batch[0] is a Batch object, batch[1] is labels, batch[2] is domains
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
                     domains = batch[2].to(args.device)
                     data = [inputs, labels, domains]
                 else:
-                    # For non-GNN data
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                     domains = batch[2].to(args.device).long()
@@ -987,13 +974,11 @@ else:
             for batch in train_loader:
                 # Handle GNN data differently
                 if args.use_gnn and GNN_AVAILABLE:
-                    # For GNN: batch[0] is a Batch object, batch[1] is labels, batch[2] is domains
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
                     domains = batch[2].to(args.device)
                     data = [inputs, labels, domains]
                 else:
-                    # For non-GNN data
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                     domains = batch[2].to(args.device).long()
@@ -1036,13 +1021,11 @@ else:
             for batch in train_loader:
                 # Handle GNN data differently
                 if args.use_gnn and GNN_AVAILABLE:
-                    # For GNN: batch[0] is a Batch object, batch[1] is labels, batch[2] is domains
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
                     domains = batch[2].to(args.device)
                     data = [inputs, labels, domains]
                 else:
-                    # For non-GNN data
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                     domains = batch[2].to(args.device).long()
@@ -1147,17 +1130,18 @@ else:
         print("\n📊 Running SHAP explainability...")
         try:
             # Prepare background and evaluation data
+            background = []
             if args.use_gnn and GNN_AVAILABLE:
                 # For GNN, we need to sample individual graphs
-                background = []
-                for data in valid_loader:
+                for data in entire_source_loader:
                     background.extend(data[0].to_data_list())
                     if len(background) >= 64:
                         break
                 background = background[:64]
                 X_eval = background[:10]
             else:
-                background = get_background_batch(valid_loader, size=64).cuda()
+                # For non-GNN, sample a batch
+                background = next(iter(entire_source_loader))[0][:64].cuda()
                 X_eval = background[:10]
             
             # Disable inplace operations in the model

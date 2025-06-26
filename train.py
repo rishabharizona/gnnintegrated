@@ -525,7 +525,9 @@ def main(args):
     set_random_seed(args.seed)
     print_environ()
     print(s)
-    
+    # Add device configuration (GPU/CPU)
+    args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # ADD THIS LINE
+    print(f"Using device: {args.device}")  # Optional: show which device is being used
     # Create output directory if it doesn't exist
     os.makedirs(args.output, exist_ok=True)
     

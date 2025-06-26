@@ -1,7 +1,7 @@
 from torchvision import transforms
 import numpy as np
 import torch
-from datautil.graph_utils import convert_to_graph
+from graph_buider import convert_to_graph
 
 class StandardScaler:
     """Normalize sensor data channel-wise"""

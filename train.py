@@ -223,7 +223,7 @@ class EMGDataAugmentation(nn.Module):
         self.scaling_std = args.scaling_std
         self.warp_ratio = args.warp_ratio
         self.dropout = nn.Dropout(p=args.channel_dropout)
-        self.aug_prob = getattr(args, 'aug_prob', 0.7)
+        self.aug_prob = getattr(args, 'aug_prob', 0.9)  # Increased from 0.7
 
     def forward(self, x):
         # Apply augmentations only during training
@@ -284,8 +284,8 @@ def get_optimizer_adamw(algorithm, args, nettype='Diversify'):
             params, 
             lr=args.lr,
             weight_decay=args.weight_decay,
-            betas=(0.9, 0.999)
-        )    
+            betas=(0.95, 0.99)  # Smoother momentum
+        )
     elif args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(
             params, 
@@ -453,6 +453,8 @@ class EnhancedTemporalGCN(TemporalGCN):
             # Convert to dense representation
             x, mask = to_dense_batch(x.x, x.batch)
             # x now has shape [batch_size, max_nodes, features]
+        
+        # Now handle tensor formats
         # Convert 4D input to 3D if necessary
         if x.dim() == 4:
             # Handle 4D input: [batch, channels, 1, time]
@@ -645,9 +647,9 @@ def main(args):
     
     # Batch size adjustment
     if args.latent_domain_num < 6:
-        args.batch_size = 32 * args.latent_domain_num
+        args.batch_size = 64 * args.latent_domain_num  # Increased from 32
     else:
-        args.batch_size = 16 * args.latent_domain_num
+        args.batch_size = 32 * args.latent_domain_num  # Increased from 16
     print(f"Adjusted batch size: {args.batch_size}")
     
     # ====== CREATE MAIN LOADERS WITH SELECTED LOADERCLASS ======
@@ -826,9 +828,15 @@ def main(args):
     opt = get_optimizer_adamw(algorithm, args, nettype='Diversify-cls')
     opta = get_optimizer_adamw(algorithm, args, nettype='Diversify-all')
     
-    # Add learning rate scheduler
-    from torch.optim.lr_scheduler import CosineAnnealingLR
-    scheduler = CosineAnnealingLR(opt, T_max=args.max_epoch)
+    # Add learning rate scheduler with warmup
+    from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
+    
+    # Warmup for the first 5 epochs
+    warmup_epochs = 5
+    warmup_scheduler = LambdaLR(
+        opta,
+        lr_lambda=lambda epoch: min(1.0, (epoch + 1) / warmup_epochs)
+    )
     
     # Add data augmentation module
     augmenter = EMGDataAugmentation(args).cuda()
@@ -859,23 +867,23 @@ def main(args):
     early_stopping_patience = getattr(args, 'early_stopping_patience', 3)
     
     # Set gradient clipping norm
-    MAX_GRAD_NORM = getattr(args, 'max_grad_norm', 5.0)
+    MAX_GRAD_NORM = 1.0  # Reduced from 5.0 for tighter control
     
     # Main training loop
     global_step = 0
     for round_idx in range(args.max_epoch):
-        # Dropout adjustment
+        # Dropout adjustment - extended gentle period
         if hasattr(algorithm.featurizer, 'dropout'):
-            if round_idx < 10:
+            if round_idx < 20:  # Longer gentle dropout period
                 algorithm.featurizer.dropout.p = 0.1
             else:
-                algorithm.featurizer.dropout.p = 0.5
+                algorithm.featurizer.dropout.p = 0.3  # Less dropout than before
         
         # Adaptive data augmentation
         if round_idx < 10:
-            augmenter.aug_prob = 0.3
+            augmenter.aug_prob = 0.5  # Increased from 0.3
         else:
-            augmenter.aug_prob = getattr(args, 'aug_prob', 0.7)
+            augmenter.aug_prob = getattr(args, 'aug_prob', 0.9)
         
         print(f'\n======== ROUND {round_idx} ========')
         
@@ -978,6 +986,9 @@ def main(args):
                 epoch_class_loss /= batch_count
                 print_row([step, epoch_class_loss], colwidth=15)
                 logs['class_loss'].append(epoch_class_loss)
+            
+            # Apply warmup scheduler
+            warmup_scheduler.step()
         
         # Phase 2: Latent domain characterization
         print('\n==== Latent domain characterization ====')
@@ -1067,10 +1078,6 @@ def main(args):
                 'total_cost_time': time.time() - step_start_time
             }
             
-            # Update scheduler
-            if scheduler:
-                scheduler.step()
-            
             # Log losses
             for key in loss_list:
                 results[f"{key}_loss"] = step_vals[key]
@@ -1147,18 +1154,17 @@ def main(args):
         print("\n📊 Running SHAP explainability...")
         try:
             # Prepare background and evaluation data
-            background = []
             if args.use_gnn and GNN_AVAILABLE:
                 # For GNN, we need to sample individual graphs
-                for data in entire_source_loader:
+                background = []
+                for data in valid_loader:
                     background.extend(data[0].to_data_list())
                     if len(background) >= 64:
                         break
                 background = background[:64]
                 X_eval = background[:10]
             else:
-                # For non-GNN, sample a batch
-                background = next(iter(entire_source_loader))[0][:64].cuda()
+                background = get_background_batch(valid_loader, size=64).cuda()
                 X_eval = background[:10]
             
             # Disable inplace operations in the model
@@ -1307,8 +1313,8 @@ if __name__ == '__main__':
     args = get_args()
     args.lambda_cls = getattr(args, 'lambda_cls', 1.0)
     args.lambda_dis = getattr(args, 'lambda_dis', 0.1)
-    args.label_smoothing = getattr(args, 'label_smoothing', 0.1)
-    args.max_grad_norm = getattr(args, 'max_grad_norm', 5.0)
+    args.label_smoothing = getattr(args, 'label_smoothing', 0.3)  # Increased from 0.1
+    args.max_grad_norm = getattr(args, 'max_grad_norm', 1.0)  # Reduced from 5.0
     args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 20)
 
     # Add GNN-specific parameters to args
@@ -1349,7 +1355,7 @@ if __name__ == '__main__':
     args.scaling_std = getattr(args, 'scaling_std', 0.1)
     args.warp_ratio = getattr(args, 'warp_ratio', 0.1)
     args.channel_dropout = getattr(args, 'channel_dropout', 0.1)
-    args.aug_prob = getattr(args, 'aug_prob', 0.7)
+    args.aug_prob = getattr(args, 'aug_prob', 0.9)  # Increased from 0.7
 
     # Training schedule
     args.max_epoch = getattr(args, 'max_epoch', 100)

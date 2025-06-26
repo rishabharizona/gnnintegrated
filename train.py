@@ -136,6 +136,13 @@ def transform_for_gnn(x):
     if not GNN_AVAILABLE:
         return x
     
+    # Handle PyG Data objects directly
+    if isinstance(x, Data):
+        # Convert to dense representation
+        from torch_geometric.utils import to_dense_batch
+        x_dense, mask = to_dense_batch(x.x, x.batch)
+        return x_dense
+    
     # Handle common 4D formats
     if x.dim() == 4:
         # Format 1: [batch, channels, 1, time] -> [batch, time, channels]
@@ -162,8 +169,8 @@ def transform_for_gnn(x):
     
     # Unsupported format
     raise ValueError(
-        f"Cannot transform input of shape {x.shape} for GNN. "
-        f"Expected formats: [B, C, 1, T], [B, 1, C, T], [B, T, 1, C], [B, T, C, 1], "
+        f"Cannot transform input of shape {x.shape if hasattr(x, 'shape') else type(x)} for GNN. "
+        f"Expected formats: PyG Data object, [B, C, 1, T], [B, 1, C, T], [B, T, 1, C], [B, T, C, 1], "
         f"or 3D formats [B, C, T] or [B, T, C] where C is 8 or 200."
     )
 

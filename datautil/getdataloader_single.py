@@ -455,9 +455,9 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage, lo
     num_domains = len(domain_scores)
     total_stages = len(args.CL_PHASE_EPOCHS)  # Get the number of stages
     progress = min(1.0, (stage + 1) / total_stages)  # Calculate progress correctly
-    progress = np.sqrt(progress)  # Slower initial progression
+    #progress = np.sqrt(progress)  # Slower initial progression
     
-    num_selected = max(2, min(num_domains, int(np.ceil(progress * num_domains * 0.8))))
+    num_selected = max(2, min(num_domains, int(np.ceil(progress * num_domains * 0.9))))
     selected_domains = [domain for domain, _ in domain_scores[:num_selected]]
     
     # Add random harder domain for diversity

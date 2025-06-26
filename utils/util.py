@@ -143,6 +143,13 @@ def get_args():
     parser.add_argument('--weight_decay', type=float, default=5e-4, 
                         help="Weight decay")
     
+    # ====== ADDED REGULARIZATION PARAMETERS ======
+    parser.add_argument('--dropout', type=float, default=0.0,
+                        help="Dropout probability for regularization")
+    parser.add_argument('--label_smoothing', type=float, default=0.0,
+                        help="Label smoothing epsilon for CrossEntropyLoss")
+    # ====== END ADDED REGULARIZATION PARAMETERS ======
+    
     # Model architecture
     parser.add_argument('--bottleneck', type=int, default=256, 
                         help="Bottleneck dimension")
@@ -192,6 +199,11 @@ def get_args():
     parser.add_argument('--resume', type=str, default=None, 
                         help='Checkpoint path for SHAP evaluation')
 
+    # ====== ADDED DEBUGGING PARAMETER ======
+    parser.add_argument('--debug_mode', action='store_true',
+                        help='Enable debugging mode with small dataset subset')
+    # ====== END ADDED DEBUGGING PARAMETER ======
+    
     # ======== GNN PARAMETERS ========
     parser.add_argument('--use_gnn', action='store_true', 
                         help='Use GNN instead of CNN')

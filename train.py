@@ -526,12 +526,12 @@ def main(args):
     print_environ()
     print(s)
     # Add device configuration (GPU/CPU)
-    args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # ADD THIS LINE
-    print(f"Using device: {args.device}")  # Optional: show which device is being used
-    # Create output directory if it doesn't exist
+    args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {args.device}")
+    # Create output directory if it exists
     os.makedirs(args.output, exist_ok=True)
     
-    # Load datasets
+    # Load datasets - IMPORTANT: This returns loader objects, not datasets
     loader_data = get_act_dataloader(args)
     train_loader, train_loader_noshuffle, valid_loader, target_loader, tr, val, targetdata = loader_data[:7]
     
@@ -556,10 +556,10 @@ def main(args):
                 graph_builder=graph_builder,
                 n_layers=getattr(args, 'gnn_layers', 3),
                 use_tcn=getattr(args, 'use_tcn', True)
-            ).cuda()
+            ).to(args.device)
         else:
             print("Using CNN for feature extraction")
-            temp_model = ActNetwork(args.dataset).cuda()
+            temp_model = ActNetwork(args.dataset).to(args.device)
         
         temp_model.eval()
         feature_list = []
@@ -569,7 +569,6 @@ def main(args):
             
             for batch in train_loader:
                 # Handle GNN data differently
-                
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
                     # Convert PyG Batch to dense tensor
@@ -616,7 +615,13 @@ def main(args):
     print(f"Adjusted batch size: {args.batch_size}")
     
     # Recreate data loaders with new batch size
-    train_loader = DataLoader(
+    # Determine which loader class to use
+    if args.use_gnn and GNN_AVAILABLE:
+        LoaderClass = PyGDataLoader
+    else:
+        LoaderClass = TorchDataLoader
+    
+    train_loader = LoaderClass(
         dataset=tr,
         batch_size=args.batch_size,
         num_workers=min(4, args.N_WORKERS),
@@ -624,7 +629,7 @@ def main(args):
         shuffle=True
     )
     
-    train_loader_noshuffle = DataLoader(
+    train_loader_noshuffle = LoaderClass(
         dataset=tr,
         batch_size=args.batch_size,
         num_workers=min(4, args.N_WORKERS),
@@ -632,7 +637,7 @@ def main(args):
         shuffle=False
     )
     
-    valid_loader = DataLoader(
+    valid_loader = LoaderClass(
         dataset=val,
         batch_size=args.batch_size,
         num_workers=min(4, args.N_WORKERS),
@@ -640,7 +645,7 @@ def main(args):
         shuffle=False
     )
     
-    target_loader = DataLoader(
+    target_loader = LoaderClass(
         dataset=targetdata,
         batch_size=args.batch_size,
         num_workers=min(4, args.N_WORKERS),
@@ -650,7 +655,7 @@ def main(args):
     
     # Initialize algorithm
     algorithm_class = alg.get_algorithm_class(args.algorithm)
-    algorithm = algorithm_class(args).cuda()
+    algorithm = algorithm_class(args).to(args.device)
     
     # ======================= GNN INITIALIZATION START =======================
     if args.use_gnn and GNN_AVAILABLE:
@@ -681,7 +686,7 @@ def main(args):
             lstm_dropout=args.lstm_dropout,
             n_layers=args.gnn_layers,
             use_tcn=args.use_tcn
-        ).cuda()
+        ).to(args.device)
         
         # Replace CNN feature extractor with GNN
         algorithm.featurizer = gnn_model

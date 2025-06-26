@@ -306,7 +306,7 @@ class Diversify(Algorithm):
         return x
 
     def set_dlabel(self, loader):
-        """Set pseudo-domain labels using clustering"""
+        """Set pseudo-domain labels using clustering with proper PyG Data handling"""
         self.dbottleneck.eval()
         self.dclassifier.eval()
         self.featurizer.eval()
@@ -318,17 +318,27 @@ class Diversify(Algorithm):
             # Manually track the index counter
             index_counter = 0
             for batch in loader:
-                inputs = batch[0].cuda().float()
+                # Handle PyG Data objects differently
+                if isinstance(batch[0], (Data, Batch)):
+                    data = batch[0].to('cuda')
+                    inputs = data
+                else:
+                    inputs = batch[0].cuda().float()
+                
+                # Apply GNN transformation if needed
                 if self.args.use_gnn:
                     inputs = transform_for_gnn(inputs)
-                # Apply temporary dimension fix if needed
-                inputs = self.ensure_correct_dimensions(inputs)
+                
+                # Apply dimension correction for non-PyG inputs
+                if not isinstance(inputs, (Data, Batch)):
+                    inputs = self.ensure_correct_dimensions(inputs)
+                
                 feas = self.dbottleneck(self.featurizer(inputs))
                 
                 all_fea.append(feas.float().cpu())
                 
                 # Store batch indices
-                batch_size = inputs.size(0)
+                batch_size = inputs.size(0) if not isinstance(inputs, (Data, Batch)) else inputs.num_graphs
                 batch_indices = np.arange(index_counter, index_counter + batch_size)
                 all_index.append(batch_indices)
                 index_counter += batch_size
@@ -468,7 +478,7 @@ class Diversify(Algorithm):
         return {'total': loss.item(), 'class': classifier_loss.item(), 'dis': disc_loss.item()}
 
     def update_a(self, minibatches, opt):
-        """Update auxiliary classifier"""
+        """Update auxiliary classifier with robust label handling"""
         # Extract inputs, class labels, and domain labels
         inputs = minibatches[0]
         
@@ -480,22 +490,34 @@ class Diversify(Algorithm):
             if hasattr(inputs, 'y') and inputs.y is not None:
                 all_c = inputs.y
             else:
-                all_c = minibatches[1].cuda().long()  # Fallback to batch[1]
+                # Fallback to minibatch[1] if available
+                if len(minibatches) > 1:
+                    all_c = minibatches[1]
+                else:
+                    raise RuntimeError("Class labels not found in Data object and minibatch[1] is missing")
             
             # Safely get domain labels from Data object or fallback
             if hasattr(inputs, 'domain') and inputs.domain is not None:
                 all_d = inputs.domain
             else:
-                all_d = minibatches[2].cuda().long()  # Fallback to batch[2]
+                if len(minibatches) > 2:
+                    all_d = minibatches[2]
+                else:
+                    raise RuntimeError("Domain labels not found in Data object and minibatch[2] is missing")
         else:
             inputs = inputs.cuda().float()
             inputs = self.ensure_correct_dimensions(inputs)
-            all_c = minibatches[1].cuda().long()
-            all_d = minibatches[2].cuda().long()
+            all_c = minibatches[1]
+            all_d = minibatches[2]
         
-        # Convert to proper tensor types
-        all_c = all_c.long() if not isinstance(all_c, torch.Tensor) else all_c.long()
-        all_d = all_d.long() if not isinstance(all_d, torch.Tensor) else all_d.long()
+        # Convert to tensors and ensure proper types
+        if not isinstance(all_c, torch.Tensor):
+            all_c = torch.tensor(all_c, device='cuda')
+        all_c = all_c.long()
+        
+        if not isinstance(all_d, torch.Tensor):
+            all_d = torch.tensor(all_d, device='cuda')
+        all_d = all_d.long()
         
         # Validate domain labels and clamp to valid range
         n_domains = self.args.latent_domain_num
@@ -524,13 +546,6 @@ class Diversify(Algorithm):
         opt.zero_grad()
         classifier_loss.backward()
         opt.step()
-        
-        # Debug information
-        if self.global_step % 100 == 0:
-            with torch.no_grad():
-                preds = all_preds.argmax(dim=1)
-                acc = (preds == all_y).float().mean().item()
-                print(f"[Aux-Step {self.global_step}] AuxLoss={classifier_loss.item():.4f} | AuxAcc: {acc:.4f}")
         
         return {'class': classifier_loss.item()}
 

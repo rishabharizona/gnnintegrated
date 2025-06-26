@@ -12,15 +12,12 @@ from alg.modelopera import get_fea
 from network import Adver_network, common_network
 from alg.algs.base import Algorithm
 from loss.common_loss import Entropylogits
-
+from torch_geometric.data import Data
+from torch_geometric.utils import to_dense_batch
 def transform_for_gnn(x):
     """Robust transformation for GNN input handling various formats"""
     if not GNN_AVAILABLE:
-        return x
-    # Import PyG modules only when needed
-    from torch_geometric.data import Data
-    from torch_geometric.utils import to_dense_batch
-    
+        return x  
     # Handle PyG Data objects directly
     if isinstance(x, Data):
         # Convert to dense representation

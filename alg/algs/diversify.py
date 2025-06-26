@@ -341,6 +341,9 @@ class Diversify(Algorithm):
         class_labels = minibatches[1]
         domain_labels = minibatches[2]  # Domain labels are at index 2
         
+        # Import PyG modules only when needed
+        from torch_geometric.data import Data, Batch
+        
         # Handle PyG Data objects differently
         if isinstance(inputs, (Data, Batch)):  # Handle both single graphs and batches
             # Move graph data to GPU

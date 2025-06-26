@@ -6,6 +6,7 @@ import numpy as np
 from scipy.spatial.distance import cdist
 from torch.utils.data import ConcatDataset, Subset
 from torch_geometric.nn import GCNConv, GATConv
+from torch_geometric.data import Data, Batch
 from sklearn.cluster import KMeans
 
 from alg.modelopera import get_fea
@@ -13,14 +14,15 @@ from network import Adver_network, common_network
 from alg.algs.base import Algorithm
 from loss.common_loss import Entropylogits
 from torch_geometric.utils import to_dense_batch
-from torch_geometric.data import Data, Batch
+
+GNN_AVAILABLE = True  # Flag indicating GNN availability
         
 def transform_for_gnn(x):
     """Robust transformation for GNN input handling various formats"""
     if not GNN_AVAILABLE:
         return x  
     # Handle PyG Data objects directly
-    if isinstance(x, Data):
+    if isinstance(x, (Data, Batch)):
         # Convert to dense representation
         x_dense, mask = to_dense_batch(x.x, x.batch)
         return x_dense
@@ -55,18 +57,24 @@ def transform_for_gnn(x):
         f"Expected formats: PyG Data object, [B, C, 1, T], [B, 1, C, T], [B, T, 1, C], [B, T, C, 1], "
         f"or 3D formats [B, C, T] or [B, T, C] where C is 8 or 200."
     )
-# Focal Loss for handling class imbalance
-class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, alpha=0.25):
+
+# Focal Loss with class balancing
+class BalancedFocalLoss(nn.Module):
+    def __init__(self, gamma=2.0, class_weights=None):
         super().__init__()
         self.gamma = gamma
-        self.alpha = alpha
+        self.class_weights = class_weights  # Should be [n_classes] tensor
 
     def forward(self, inputs, targets):
         ce_loss = F.cross_entropy(inputs, targets, reduction='none')
         pt = torch.exp(-ce_loss)
-        focal_loss = (self.alpha * (1-pt)**self.gamma * ce_loss).mean()
-        return focal_loss
+        focal_loss = (1-pt)**self.gamma * ce_loss
+        
+        if self.class_weights is not None:
+            weights = self.class_weights[targets]
+            focal_loss = weights * focal_loss
+            
+        return focal_loss.mean()
         
 class GNNModel(nn.Module):
     """GNN model for activity recognition"""
@@ -86,6 +94,7 @@ class GNNModel(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(0.5),
             nn.Linear(hidden_dim, num_classes)
         )
     
@@ -95,7 +104,7 @@ class GNNModel(nn.Module):
         # First GNN layer
         x = self.conv1(x, edge_index)
         x = F.relu(x)
-        x = F.dropout(x, p=0.1, training=self.training)
+        x = F.dropout(x, p=0.5, training=self.training)
         
         # Second GNN layer
         x = self.conv2(x, edge_index)
@@ -128,12 +137,30 @@ class Diversify(Algorithm):
         self.aclassifier = common_network.feat_classifier(int(args.num_classes * args.latent_domain_num), args.bottleneck, args.classifier)
         self.discriminator = Adver_network.Discriminator(args.bottleneck, args.dis_hidden, args.latent_domain_num)
         self.args = args
-        self.criterion = FocalLoss(gamma=0.5, alpha=0.05)
+        
+        # Initialize with class-balanced focal loss if weights available
+        if hasattr(args, 'class_weights'):
+            self.criterion = BalancedFocalLoss(gamma=2.0, class_weights=args.class_weights)
+        else:
+            self.criterion = BalancedFocalLoss(gamma=2.0)
+            
         self.lambda_cls = getattr(args, "lambda_cls", 1.0)
         self.lambda_dis = getattr(args, "lambda_dis", 0.1)
         self.explain_mode = False
         self.global_step = 0
         self.patch_skip_connection()
+        
+        # Initialize learning rate warmup scheduler
+        self.warmup_steps = getattr(args, "warmup_steps", 1000)
+        self.warmup_scheduler = None
+        
+    def init_optimizers(self, optimizer):
+        """Initialize warmup scheduler after optimizer is created"""
+        if self.warmup_steps > 0:
+            self.warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(
+                optimizer, 
+                lr_lambda=lambda step: min(1.0, (step + 1) / self.warmup_steps)
+            )
         
     def patch_skip_connection(self):
         """Dynamically adjust skip connection based on actual input shape"""
@@ -155,19 +182,24 @@ class Diversify(Algorithm):
                     print(f"Patching skip connection: {actual_features} features")
                     
                     # Create new layer with correct dimensions
-                    new_layer = nn.Linear(actual_features, module.out_features).to(device)
+                    new_layer = nn.Sequential(
+                        nn.BatchNorm1d(actual_features),
+                        nn.Linear(actual_features, module.out_features)
+                    ).to(device)
                     
                     # Try to partially initialize with existing weights
-                    if module.in_features > actual_features:
-                        # Use first 'actual_features' channels from existing weights
-                        new_layer.weight.data = module.weight.data[:, :actual_features].clone()
-                        new_layer.bias.data = module.bias.data.clone()
-                    elif actual_features > module.in_features:
-                        # Initialize new channels with small random values
-                        new_weights = torch.randn(module.out_features, actual_features).to(device) * 0.0001
-                        new_weights[:, :module.in_features] = module.weight.data.clone()
-                        new_layer.weight.data = new_weights
-                        new_layer.bias.data = module.bias.data.clone()
+                    if hasattr(module, 'weight'):
+                        # Only try if it's a standard Linear layer
+                        if module.in_features > actual_features:
+                            # Use first 'actual_features' channels from existing weights
+                            new_layer[1].weight.data = module.weight.data[:, :actual_features].clone()
+                            new_layer[1].bias.data = module.bias.data.clone()
+                        elif actual_features > module.in_features:
+                            # Initialize new channels with small random values
+                            new_weights = torch.randn(module.out_features, actual_features).to(device) * 0.01
+                            new_weights[:, :module.in_features] = module.weight.data.clone()
+                            new_layer[1].weight.data = new_weights
+                            new_layer[1].bias.data = module.bias.data.clone()
                     
                     # Replace the module
                     if '.' in name:
@@ -189,38 +221,79 @@ class Diversify(Algorithm):
         self.actual_features = actual_features  # Store for later use
 
     def update_d(self, minibatch, opt):
-        if isinstance(minibatch[0], (Data, Batch)):  # Handle both single graphs and batches
-            data = minibatch[0]
+        """Update domain discriminator and classifier"""
+        # Handle PyG Data objects
+        if isinstance(minibatch[0], (Data, Batch)):
             data = minibatch[0]
             data = data.to('cuda')
             all_x1 = data
-            all_c1 = data.y
-            all_d1 = data.domain if hasattr(data, 'domain') else minibatch[2].cuda().long()
+            all_c1 = data.y.long()  # Ensure integer type
+            all_d1 = data.domain.long() if hasattr(data, 'domain') else minibatch[2].cuda().long()
         else:
             all_x1 = minibatch[0].cuda().float()
             all_c1 = minibatch[1].cuda().long()
             all_d1 = minibatch[2].cuda().long()
-    
+        
+        # Ensure domain labels are integers
+        if all_d1.dtype != torch.long:
+            all_d1 = all_d1.long()
+        
         n_domains = self.args.domain_num
-        all_d1 = torch.clamp(all_d1, 0, n_domains - 0.5)
-    
-    # Ensure correct dimensions for non-PyG inputs
+        all_d1 = torch.clamp(all_d1, 0, n_domains - 1)
+        
+        # Apply data augmentation during training
+        if self.training and getattr(self.args, 'use_augmentation', False):
+            all_x1 = self.spectral_augmentation(all_x1)
+        
+        # Ensure correct dimensions for non-PyG inputs
         if not isinstance(all_x1, (Data, Batch)):
             all_x1 = self.ensure_correct_dimensions(all_x1)
-    
+        
         z1 = self.dbottleneck(self.featurizer(all_x1))
         if self.explain_mode:
             z1 = z1.clone()
+            
+        # Domain discrimination
         disc_in1 = Adver_network.ReverseLayerF.apply(z1, self.args.alpha1)
         disc_out1 = self.ddiscriminator(disc_in1)
+        
+        # Classification
         cd1 = self.dclassifier(z1)
-        disc_loss = F.cross_entropy(disc_out1, all_d1, reduction='mean')
+        
+        # Loss calculations
+        disc_loss = F.cross_entropy(disc_out1, all_d1)
         ent_loss = Entropylogits(cd1) * self.args.lam + self.criterion(cd1, all_c1)
         loss = ent_loss + self.lambda_dis * disc_loss
+        
+        # Optimization
         opt.zero_grad()
         loss.backward()
+        
+        # Gradient clipping
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         opt.step()
+        
+        # Debugging information
+        if self.global_step % 50 == 0:
+            with torch.no_grad():
+                preds = cd1.argmax(dim=1)
+                acc = (preds == all_c1).float().mean().item()
+                domain_acc = (disc_out1.argmax(dim=1) == all_d1).float().mean().item()
+                print(f"[D-Step {self.global_step}] Loss: {loss.item():.4f} | "
+                      f"ClassAcc: {acc:.4f} | DomainAcc: {domain_acc:.4f}")
+        
         return {'total': loss.item(), 'dis': disc_loss.item(), 'ent': ent_loss.item()}
+
+    def spectral_augmentation(self, x):
+        """Apply spectral augmentation to sensor data"""
+        # Random frequency masking
+        if np.random.rand() > 0.5 and x.dim() >= 3:
+            freq_mask = torch.ones_like(x)
+            f_start = np.random.randint(0, x.shape[1]//2)
+            f_length = np.random.randint(1, max(1, x.shape[1]//4))
+            freq_mask[:, f_start:f_start+f_length] = 0
+            x = x * freq_mask.to(x.device)
+        return x
 
     def set_dlabel(self, loader):
         """Set pseudo-domain labels using clustering"""
@@ -322,43 +395,66 @@ class Diversify(Algorithm):
             self.actual_features = actual_features
         
         # Reshape if needed
-        if inputs.shape[-1] != actual_features:
-            if inputs.dim() == 2:
-                # [batch_size, features] -> [batch_size, time, features]
-                inputs = inputs.view(inputs.size(0), 1, inputs.size(1))
-            elif inputs.dim() == 3 and inputs.size(1) == 1:
-                # [batch_size, 1, features] - expand time dimension
-                inputs = inputs.expand(-1, actual_features, -1)
-            elif inputs.dim() == 3:
-                # [batch_size, time, features] - transpose to match expected
-                inputs = inputs.transpose(1, 2)
+        if inputs.dim() == 2:
+            # [batch_size, features] -> [batch_size, time, features]
+            inputs = inputs.view(inputs.size(0), 1, inputs.size(1))
+        elif inputs.dim() == 3 and inputs.size(1) == 1:
+            # [batch_size, 1, features] - expand time dimension
+            inputs = inputs.expand(-1, actual_features, -1)
+        elif inputs.dim() == 3 and inputs.size(2) == actual_features:
+            # [batch_size, time, features] - transpose to match expected
+            inputs = inputs.permute(0, 2, 1)
         return inputs
 
     def update(self, data, opt):
         all_x = data[0].cuda().float()
         all_x = self.ensure_correct_dimensions(all_x)
         all_y = data[1].cuda().long()
+        
+        # Apply augmentation during training
+        if self.training and getattr(self.args, 'use_augmentation', False):
+            all_x = self.spectral_augmentation(all_x)
+            
         all_z = self.bottleneck(self.featurizer(all_x))
         if self.explain_mode:
             all_z = all_z.clone()
         self.global_step += 1
-        alpha = getattr(self.args, "alpha", 0.5)
-        if hasattr(self.args, "alpha_warmup") and self.args.alpha_warmup:
-            total_steps = getattr(self.args, "warmup_steps", 1000)
-            alpha = min(1.0, self.global_step / total_steps)
+        
+        # Learning rate warmup
+        alpha = min(1.0, self.global_step / self.warmup_steps) if self.warmup_steps > 0 else 1.0
         disc_input = Adver_network.ReverseLayerF.apply(all_z, alpha)
         disc_out = self.discriminator(disc_input)
+        
+        # Domain labels
         disc_labels = data[4].cuda().long()
         disc_labels = torch.clamp(disc_labels, 0, self.args.latent_domain_num - 1)
+        
+        # Loss calculations
         disc_loss = F.cross_entropy(disc_out, disc_labels)
         all_preds = self.classifier(all_z)
         classifier_loss = self.criterion(all_preds, all_y)
         loss = self.lambda_cls * classifier_loss + self.lambda_dis * disc_loss
+        
+        # Optimization
         opt.zero_grad()
         loss.backward()
+        
+        # Gradient clipping
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         opt.step()
+        
+        # Update learning rate with warmup scheduler
+        if self.warmup_scheduler:
+            self.warmup_scheduler.step()
+        
+        # Debug information
         if self.global_step % 100 == 0:
-            print(f"[Step {self.global_step}] ClassLoss={classifier_loss.item():.4f} | DiscLoss={disc_loss.item():.4f}")
+            with torch.no_grad():
+                preds = all_preds.argmax(dim=1)
+                acc = (preds == all_y).float().mean().item()
+                domain_acc = (disc_out.argmax(dim=1) == disc_labels).float().mean().item()
+                print(f"[Step {self.global_step}] ClassLoss={classifier_loss.item():.4f} | "
+                      f"DiscLoss={disc_loss.item():.4f} | ClassAcc: {acc:.4f} | DomainAcc: {domain_acc:.4f}")
         return {'total': loss.item(), 'class': classifier_loss.item(), 'dis': disc_loss.item()}
 
     def update_a(self, minibatches, opt):
@@ -366,49 +462,22 @@ class Diversify(Algorithm):
         # Extract inputs, class labels, and domain labels
         inputs = minibatches[0]
         
-        # Import PyG modules only when needed
-        from torch_geometric.data import Data, Batch
-        
-        # Handle PyG Data objects differently
-        if isinstance(inputs, (Data, Batch)):  # Handle both single graphs and batches
-            # Move graph data to GPU
+        # Handle PyG Data objects
+        if isinstance(inputs, (Data, Batch)):
             inputs = inputs.to('cuda')
-            
-            # Extract class labels from the Data object
-            if hasattr(inputs, 'y') and inputs.y is not None:
-                class_labels = inputs.y
-            else:
-                # Fallback to batch[1] if y attribute is missing
-                class_labels = minibatches[1]
-            
-            # Extract domain labels from the Data object
-            if hasattr(inputs, 'domain') and inputs.domain is not None:
-                domain_labels = inputs.domain
-            else:
-                # Fallback to batch[2] if domain attribute is missing
-                domain_labels = minibatches[2]
+            all_c = inputs.y.long()
+            all_d = inputs.domain.long() if hasattr(inputs, 'domain') else minibatches[2].cuda().long()
         else:
-            # Handle tensor inputs
             inputs = inputs.cuda().float()
             inputs = self.ensure_correct_dimensions(inputs)
-            class_labels = minibatches[1]
-            domain_labels = minibatches[2]
+            all_c = minibatches[1].cuda().long()
+            all_d = minibatches[2].cuda().long()
         
         # Ensure labels are not None
-        if class_labels is None:
+        if all_c is None:
             raise RuntimeError("Class labels are None in update_a")
-        if domain_labels is None:
+        if all_d is None:
             raise RuntimeError("Domain labels are None in update_a")
-        
-        # Convert labels to tensors if needed
-        if not isinstance(class_labels, torch.Tensor):
-            class_labels = torch.tensor(class_labels)
-        if not isinstance(domain_labels, torch.Tensor):
-            domain_labels = torch.tensor(domain_labels)
-        
-        # Move labels to GPU
-        all_c = class_labels.cuda().long()
-        all_d = domain_labels.cuda().long()
         
         # Validate domain labels and clamp to valid range
         n_domains = self.args.latent_domain_num
@@ -434,6 +503,13 @@ class Diversify(Algorithm):
         opt.zero_grad()
         classifier_loss.backward()
         opt.step()
+        
+        # Debug information
+        if self.global_step % 100 == 0:
+            with torch.no_grad():
+                preds = all_preds.argmax(dim=1)
+                acc = (preds == all_y).float().mean().item()
+                print(f"[Aux-Step {self.global_step}] AuxLoss={classifier_loss.item():.4f} | AuxAcc: {acc:.4f}")
         
         return {'class': classifier_loss.item()}
 

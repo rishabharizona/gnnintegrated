@@ -306,7 +306,7 @@ def get_act_dataloader(args):
     loaders = get_dataloader(args, tr, val, targetdata)
     return (*loaders, tr, val, targetdata)
 
-def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
+def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage, loader_class=None):
     """
     Create a curriculum data loader based on domain difficulty
     Args:
@@ -315,6 +315,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         train_dataset: Full training dataset
         val_dataset: Validation dataset
         stage: Current training stage/phase
+        loader_class: DataLoader class to use (PyGDataLoader or TorchDataLoader)
     Returns:
         Curriculum DataLoader with selected samples
     """
@@ -332,17 +333,20 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     
     domain_metrics = []
 
+    # Use min workers for validation to avoid overloading
+    num_workers_val = min(4, args.N_WORKERS)
+    
     # Compute loss and accuracy for each domain
     with torch.no_grad():
         for domain, indices in domain_indices.items():
             subset = Subset(val_dataset, indices)
             
-            # FIX: Use proper GNN loader if needed
+            # Handle GNN vs standard model inputs
             if hasattr(args, 'model_type') and args.model_type == 'gnn':
-                loader = get_gnn_dataloader(subset, args.batch_size, args.N_WORKERS, shuffle=False)
+                loader = get_gnn_dataloader(subset, args.batch_size, num_workers_val, shuffle=False)
             else:
                 loader = DataLoader(subset, batch_size=args.batch_size, 
-                                   shuffle=False, num_workers=args.N_WORKERS)
+                                   shuffle=False, num_workers=num_workers_val)
 
             total_loss = 0.0
             correct = 0
@@ -350,7 +354,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             num_batches = 0
 
             for batch in loader:
-                # FIX: Handle GNN vs standard model inputs
+                # Handle GNN vs standard model inputs
                 if hasattr(args, 'model_type') and args.model_type == 'gnn':
                     batched_graph, labels, domains = batch
                     inputs = batched_graph.to(args.device)
@@ -465,20 +469,34 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # Create curriculum subset
     curriculum_subset = SafeSubset(train_dataset, selected_indices)
     
-    # FIX: Use proper GNN loader if needed
-    if hasattr(args, 'model_type') and args.model_type == 'gnn':
-        return get_gnn_dataloader(
-            curriculum_subset,
-            args.batch_size,
-            args.N_WORKERS,
-            shuffle=True
-        )
+    # Use min workers to avoid overloading
+    num_workers_train = min(4, args.N_WORKERS)
+    
+    # Handle loader creation based on provided loader class
+    if loader_class is None:
+        # Backward compatibility
+        if hasattr(args, 'model_type') and args.model_type == 'gnn':
+            return get_gnn_dataloader(
+                curriculum_subset,
+                args.batch_size,
+                num_workers_train,
+                shuffle=True
+            )
+        else:
+            return DataLoader(
+                curriculum_subset,
+                batch_size=args.batch_size,
+                shuffle=True,
+                num_workers=num_workers_train,
+                drop_last=True
+            )
     else:
-        return DataLoader(
-            curriculum_subset,
+        # Use provided loader class (PyG or standard)
+        return loader_class(
+            dataset=curriculum_subset,
             batch_size=args.batch_size,
             shuffle=True,
-            num_workers=args.N_WORKERS,
+            num_workers=num_workers_train,
             drop_last=True
         )
 

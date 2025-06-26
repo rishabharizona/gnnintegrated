@@ -7,8 +7,8 @@ def get_fea(args):
     if hasattr(args, 'model_type') and args.model_type == 'gnn':
         # Default values if not present
         input_dim = 8  # EMG channels
-        hidden_dim = getattr(args, 'gnn_hidden_dim', 32)
-        output_dim = getattr(args, 'gnn_output_dim', 128)
+        hidden_dim = getattr(args, 'gnn_hidden_dim', 64)
+        output_dim = getattr(args, 'gnn_output_dim', 256)
         
         net = TemporalGCN(input_dim, hidden_dim, output_dim)
         net.in_features = output_dim  # Needed for downstream bottleneck

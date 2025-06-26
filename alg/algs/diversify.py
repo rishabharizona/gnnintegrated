@@ -188,39 +188,39 @@ class Diversify(Algorithm):
         print("Warning: No skip connection layer found in featurizer")
         self.actual_features = actual_features  # Store for later use
 
-    def update_d(self, minibatch, opt):
-        # Handle PyG Data objects
-        if isinstance(minibatch[0], (Data, Batch)):  # Handle both single graphs and batches
-        data = minibatch[0]
-        data = data.to('cuda')
-        all_x1 = data
-        all_c1 = data.y
-        all_d1 = data.domain if hasattr(data, 'domain') else minibatch[2].cuda().long()
-        else:
-        all_x1 = minibatch[0].cuda().float()
-        all_c1 = minibatch[1].cuda().long()
-        all_d1 = minibatch[2].cuda().long()
-        
-        n_domains = self.args.domain_num
-        all_d1 = torch.clamp(all_d1, 0, n_domains - 1)
-        
-        # Ensure correct dimensions for non-PyG inputs
-        if not isinstance(all_x1, (Data, Batch)):
-        all_x1 = self.ensure_correct_dimensions(all_x1)
-        
-        z1 = self.dbottleneck(self.featurizer(all_x1))
-        if self.explain_mode:
-        z1 = z1.clone()
-        disc_in1 = Adver_network.ReverseLayerF.apply(z1, self.args.alpha1)
-        disc_out1 = self.ddiscriminator(disc_in1)
-        cd1 = self.dclassifier(z1)
-        disc_loss = F.cross_entropy(disc_out1, all_d1, reduction='mean')
-        ent_loss = Entropylogits(cd1) * self.args.lam + self.criterion(cd1, all_c1)
-        loss = ent_loss + self.lambda_dis * disc_loss
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
-        return {'total': loss.item(), 'dis': disc_loss.item(), 'ent': ent_loss.item()}
+   def update_d(self, minibatch, opt):
+       if isinstance(minibatch[0], (Data, Batch)):  # Handle both single graphs and batches
+           data = minibatch[0]
+           data = minibatch[0]
+           data = data.to('cuda')
+           all_x1 = data
+           all_c1 = data.y
+           all_d1 = data.domain if hasattr(data, 'domain') else minibatch[2].cuda().long()
+       else:
+           all_x1 = minibatch[0].cuda().float()
+           all_c1 = minibatch[1].cuda().long()
+           all_d1 = minibatch[2].cuda().long()
+    
+       n_domains = self.args.domain_num
+       all_d1 = torch.clamp(all_d1, 0, n_domains - 1)
+    
+    # Ensure correct dimensions for non-PyG inputs
+       if not isinstance(all_x1, (Data, Batch)):
+           all_x1 = self.ensure_correct_dimensions(all_x1)
+    
+       z1 = self.dbottleneck(self.featurizer(all_x1))
+       if self.explain_mode:
+           z1 = z1.clone()
+       disc_in1 = Adver_network.ReverseLayerF.apply(z1, self.args.alpha1)
+       disc_out1 = self.ddiscriminator(disc_in1)
+       cd1 = self.dclassifier(z1)
+       disc_loss = F.cross_entropy(disc_out1, all_d1, reduction='mean')
+       ent_loss = Entropylogits(cd1) * self.args.lam + self.criterion(cd1, all_c1)
+       loss = ent_loss + self.lambda_dis * disc_loss
+       opt.zero_grad()
+       loss.backward()
+       opt.step()
+       return {'total': loss.item(), 'dis': disc_loss.item(), 'ent': ent_loss.item()}
 
     def set_dlabel(self, loader):
         """Set pseudo-domain labels using clustering"""

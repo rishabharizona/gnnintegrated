@@ -25,14 +25,32 @@ class ConsistentFormatWrapper(torch.utils.data.Dataset):
         
     def __getitem__(self, idx):
         sample = self.dataset[idx]
-        # If sample is a tuple with 3+ elements, return first three
+        
+        # Convert to consistent (graph, label, domain) format
         if isinstance(sample, tuple) and len(sample) >= 3:
             return sample[0], sample[1], sample[2]
-        # If it's a Data object, try to extract label and domain
         elif isinstance(sample, Data):
-            return sample, sample.y, sample.domain
+            return (
+                sample, 
+                sample.y if hasattr(sample, 'y') else 0,
+                sample.domain if hasattr(sample, 'domain') else 0
+            )
+        elif isinstance(sample, dict) and 'graph' in sample:
+            return (
+                sample['graph'],
+                sample.get('label', 0),
+                sample.get('domain', 0)
+            )
+        elif isinstance(sample, (tuple, list)):
+            # Pad with zeros if needed
+            return (
+                sample[0],
+                sample[1] if len(sample) > 1 else 0,
+                sample[2] if len(sample) > 2 else 0
+            )
         else:
-            return sample  # fallback
+            # Fallback: return sample as graph
+            return sample, 0, 0
 
 class SafeSubset(Subset):
     """Safe subset that eliminates all numpy types"""
@@ -80,23 +98,52 @@ class SafeSubset(Subset):
                 return data
 
 def collate_gnn(batch):
-    """Custom collate function for GNN data that handles variable sample sizes"""
-    # Handle samples with more than 3 elements by taking only the first three
-    filtered_batch = []
-    for sample in batch:
-        if len(sample) >= 3:
-            # Take only (graph, label, domain)
-            filtered_batch.append((sample[0], sample[1], sample[2]))
-        else:
-            # Log unexpected sample format but still try to process
-            print(f"Warning: Unexpected sample length {len(sample)} in batch")
-            filtered_batch.append(sample)  # Process as-is
+    """Robust collate function for GNN data that handles variable sample formats"""
+    graphs, labels, domains = [], [], []
     
-    # Unpack the list of tuples
-    graphs, labels, domains = zip(*filtered_batch)
+    for sample in batch:
+        # Handle different sample formats
+        if isinstance(sample, tuple) and len(sample) >= 3:
+            # Tuple format: (graph, label, domain)
+            graphs.append(sample[0])
+            labels.append(sample[1])
+            domains.append(sample[2])
+        elif isinstance(sample, Data):
+            # Direct Data object - try to extract label and domain
+            graphs.append(sample)
+            labels.append(sample.y if hasattr(sample, 'y') else 0)
+            domains.append(sample.domain if hasattr(sample, 'domain') else 0)
+        elif isinstance(sample, dict) and 'graph' in sample:
+            # Dictionary format
+            graphs.append(sample['graph'])
+            labels.append(sample.get('label', 0))
+            domains.append(sample.get('domain', 0))
+        else:
+            # Fallback: use first element as graph, others as label/domain
+            if isinstance(sample, (tuple, list)):
+                graphs.append(sample[0])
+                if len(sample) > 1:
+                    labels.append(sample[1])
+                else:
+                    labels.append(0)
+                if len(sample) > 2:
+                    domains.append(sample[2])
+                else:
+                    domains.append(0)
+            else:
+                # Unsupported format - log warning and use as graph
+                print(f"Warning: Unsupported sample format: {type(sample)}")
+                graphs.append(sample)
+                labels.append(0)
+                domains.append(0)
+    
+    # Batch the graphs
     batched_graph = Batch.from_data_list(graphs)
+    
+    # Convert labels and domains to tensors
     labels = torch.tensor(labels, dtype=torch.long)
     domains = torch.tensor(domains, dtype=torch.long)
+    
     return batched_graph, labels, domains
 
 def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
@@ -189,13 +236,6 @@ def get_dataloader(args, tr, val, tar):
     return train_loader, train_loader_noshuffle, valid_loader, target_loader
 
 def get_act_dataloader(args):
-    """
-    Prepare activity recognition datasets and data loaders
-    Args:
-        args: Configuration arguments
-    Returns:
-        Tuple of DataLoader objects and datasets
-    """
     source_datasetlist = []
     target_datalist = []
     pcross_act = task_act[args.task]
@@ -206,9 +246,9 @@ def get_act_dataloader(args):
     
     # Create datasets for each person group
     for i, item in enumerate(tmpp):
-        # ===== GNN TRANSFORM SELECTION =====
+        # Use graph transform for GNN models
         if hasattr(args, 'model_type') and args.model_type == 'gnn':
-            transform = actutil.act_to_graph_transform(args)  # Use graph transform
+            transform = actutil.act_to_graph_transform(args)
         else:
             transform = actutil.act_train()
         
@@ -218,22 +258,21 @@ def get_act_dataloader(args):
             args.data_dir, 
             item, 
             i, 
-            transform=transform,
-            return_format='tuple'  # Add this parameter if supported
+            transform=transform
         )
-
+        
+        # Wrap in consistent format adapter
         tdata = ConsistentFormatWrapper(tdata)
         
         if i in args.test_envs:
             target_datalist.append(tdata)
         else:
             source_datasetlist.append(tdata)
-            # Adjust steps per epoch if needed
             if len(tdata) / args.batch_size < args.steps_per_epoch:
                 args.steps_per_epoch = len(tdata) / args.batch_size
     
     # Split source data into train/validation
-    rate = 0.2  # Validation split ratio
+    rate = 0.2
     args.steps_per_epoch = int(args.steps_per_epoch * (1 - rate))
     
     # Combine source datasets

@@ -15,6 +15,25 @@ import collections
 # Task mapping for activity recognition
 task_act = {'cross_people': cross_people}
 
+class ConsistentFormatWrapper(torch.utils.data.Dataset):
+    """Ensures samples always return (graph, label, domain) format"""
+    def __init__(self, dataset):
+        self.dataset = dataset
+        
+    def __len__(self):
+        return len(self.dataset)
+        
+    def __getitem__(self, idx):
+        sample = self.dataset[idx]
+        # If sample is a tuple with 3+ elements, return first three
+        if isinstance(sample, tuple) and len(sample) >= 3:
+            return sample[0], sample[1], sample[2]
+        # If it's a Data object, try to extract label and domain
+        elif isinstance(sample, Data):
+            return sample, sample.y, sample.domain
+        else:
+            return sample  # fallback
+
 class SafeSubset(Subset):
     """Safe subset that eliminates all numpy types"""
     def __init__(self, dataset, indices):
@@ -61,9 +80,20 @@ class SafeSubset(Subset):
                 return data
 
 def collate_gnn(batch):
-    """Custom collate function for GNN data"""
+    """Custom collate function for GNN data that handles variable sample sizes"""
+    # Handle samples with more than 3 elements by taking only the first three
+    filtered_batch = []
+    for sample in batch:
+        if len(sample) >= 3:
+            # Take only (graph, label, domain)
+            filtered_batch.append((sample[0], sample[1], sample[2]))
+        else:
+            # Log unexpected sample format but still try to process
+            print(f"Warning: Unexpected sample length {len(sample)} in batch")
+            filtered_batch.append(sample)  # Process as-is
+    
     # Unpack the list of tuples
-    graphs, labels, domains = zip(*batch)
+    graphs, labels, domains = zip(*filtered_batch)
     batched_graph = Batch.from_data_list(graphs)
     labels = torch.tensor(labels, dtype=torch.long)
     domains = torch.tensor(domains, dtype=torch.long)
@@ -188,8 +218,11 @@ def get_act_dataloader(args):
             args.data_dir, 
             item, 
             i, 
-            transform=transform
+            transform=transform,
+            return_format='tuple'  # Add this parameter if supported
         )
+
+        tdata = ConsistentFormatWrapper(tdata)
         
         if i in args.test_envs:
             target_datalist.append(tdata)

@@ -458,60 +458,132 @@ class Diversify(Algorithm):
         return {'total': loss.item(), 'class': classifier_loss.item(), 'dis': disc_loss.item()}
 
     def update_a(self, minibatches, opt):
-        """Update auxiliary classifier"""
-        # Extract inputs, class labels, and domain labels
+    """Update auxiliary classifier"""
+    # Extract inputs, class labels, and domain labels
         inputs = minibatches[0]
-        
-        # Handle PyG Data objects
+    
+    # Handle PyG Data 
         if isinstance(inputs, (Data, Batch)):
             inputs = inputs.to('cuda')
-            all_c = inputs.y.long()
-            all_d = inputs.domain.long() if hasattr(inputs, 'domain') else minibatches[2].cuda().long()
+        # Safely get class labels from Data object or fallback
+            if hasattr(inputs, 'y') and inputs.y is not None:
+                all_c = inputs.y
+            else:
+                all_c = minibatches[1].cuda().long()  # Fallback to batch[1]
+        
+        # Safely get domain labels from Data object or fallback
+            if hasattr(inputs, 'domain') and inputs.domain is not None:
+                all_d = inputs.domain
+            else:
+                all_d = minibatches[2].cuda().long()  # Fallback to batch[2]
         else:
             inputs = inputs.cuda().float()
             inputs = self.ensure_correct_dimensions(inputs)
             all_c = minibatches[1].cuda().long()
             all_d = minibatches[2].cuda().long()
-        
-        # Ensure labels are not None
-        if all_c is None:
-            raise RuntimeError("Class labels are None in update_a")
-        if all_d is None:
-            raise RuntimeError("Domain labels are None in update_a")
-        
-        # Validate domain labels and clamp to valid range
+    
+    # Convert to proper tensor types
+        all_c = all_c.long() if not isinstance(all_c, torch.Tensor) else all_c.long()
+        all_d = all_d.long() if not isinstance(all_d, torch.Tensor) else all_d.long()
+    
+    # Validate domain labels and clamp to valid range
         n_domains = self.args.latent_domain_num
         all_d = torch.clamp(all_d, 0, n_domains-1)
-        
-        # Create combined labels
+    
+    # Create combined labels
         all_y = all_d * self.args.num_classes + all_c
-        
-        # Ensure combined labels are within valid range
+    
+    # Ensure combined labels are within valid range
         max_class = self.aclassifier.fc.out_features
-        all_y = torch.clamp(all_y, 0, max_class-1)
-        
-        # Forward pass
+        if all_y.max() >= max_class:
+            print(f"Warning: Combined labels exceed classifier capacity! "
+                  f"Max label: {all_y.max().item()} vs max classes: {max_class}")
+            all_y = torch.clamp(all_y, 0, max_class-1)
+    
+    # Forward pass
         all_z = self.abottleneck(self.featurizer(inputs))
-        
+    
         if self.explain_mode:
             all_z = all_z.clone()
-        
+    
         all_preds = self.aclassifier(all_z)
-        
-        # Loss calculation and optimization
+    
+    # Loss calculation and optimization
         classifier_loss = F.cross_entropy(all_preds, all_y)
         opt.zero_grad()
         classifier_loss.backward()
         opt.step()
-        
-        # Debug information
+    
+    # Debug information
         if self.global_step % 100 == 0:
             with torch.no_grad():
                 preds = all_preds.argmax(dim=1)
                 acc = (preds == all_y).float().mean().item()
                 print(f"[Aux-Step {self.global_step}] AuxLoss={classifier_loss.item():.4f} | AuxAcc: {acc:.4f}")
-        
+    
         return {'class': classifier_loss.item()}
+    
+    # Handle PyG Data objects
+    if isinstance(inputs, (Data, Batch)):
+        inputs = inputs.to('cuda')
+        # Safely get class labels from Data object or fallback
+        if hasattr(inputs, 'y') and inputs.y is not None:
+            all_c = inputs.y
+        else:
+            all_c = minibatches[1].cuda().long()  # Fallback to batch[1]
+        
+        # Safely get domain labels from Data object or fallback
+        if hasattr(inputs, 'domain') and inputs.domain is not None:
+            all_d = inputs.domain
+        else:
+            all_d = minibatches[2].cuda().long()  # Fallback to batch[2]
+    else:
+        inputs = inputs.cuda().float()
+        inputs = self.ensure_correct_dimensions(inputs)
+        all_c = minibatches[1].cuda().long()
+        all_d = minibatches[2].cuda().long()
+    
+    # Convert to proper tensor types
+    all_c = all_c.long() if not isinstance(all_c, torch.Tensor) else all_c.long()
+    all_d = all_d.long() if not isinstance(all_d, torch.Tensor) else all_d.long()
+    
+    # Validate domain labels and clamp to valid range
+    n_domains = self.args.latent_domain_num
+    all_d = torch.clamp(all_d, 0, n_domains-1)
+    
+    # Create combined labels
+    all_y = all_d * self.args.num_classes + all_c
+    
+    # Ensure combined labels are within valid range
+    max_class = self.aclassifier.fc.out_features
+    if all_y.max() >= max_class:
+        print(f"Warning: Combined labels exceed classifier capacity! "
+              f"Max label: {all_y.max().item()} vs max classes: {max_class}")
+        all_y = torch.clamp(all_y, 0, max_class-1)
+    
+    # Forward pass
+    all_z = self.abottleneck(self.featurizer(inputs))
+    
+    if self.explain_mode:
+        all_z = all_z.clone()
+    
+    all_preds = self.aclassifier(all_z)
+    
+    # Loss calculation and optimization
+    classifier_loss = F.cross_entropy(all_preds, all_y)
+    opt.zero_grad()
+    classifier_loss.backward()
+    opt.step()
+    
+    # Debug information
+    if self.global_step % 100 == 0:
+        with torch.no_grad():
+            preds = all_preds.argmax(dim=1)
+            acc = (preds == all_y).float().mean().item()
+            print(f"[Aux-Step {self.global_step}] AuxLoss={classifier_loss.item():.4f} | AuxAcc: {acc:.4f}")
+    
+    return {'class': classifier_loss.item()}
+        
 
     def predict(self, x):
         """Main prediction method"""

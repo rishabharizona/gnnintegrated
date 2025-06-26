@@ -15,8 +15,8 @@ from alg.opt import *
 from alg import alg, modelopera
 from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ, disable_inplace_relu
 from datautil.getdataloader_single import get_act_dataloader, get_curriculum_loader
-from torch_geometric.loader import DataLoader
-from torch.utils.data import ConcatDataset
+from torch_geometric.loader import DataLoader as PyGDataLoader 
+from torch.utils.data import ConcatDataset, DataLoader as TorchDataLoader
 from network.act_network import ActNetwork
 
 # Suppress TensorFlow and SHAP warnings
@@ -894,7 +894,8 @@ def main(args):
                 evaluator,  # Pass evaluator instead of algorithm
                 tr,
                 val,
-                stage=round_idx
+                stage=round_idx,
+                loader_class=PyGDataLoader  # Pass PyG loader class
             )
             
             # Update the no-shuffle loader
@@ -902,9 +903,23 @@ def main(args):
                 train_loader.dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
-                num_workers=min(4, args.N_WORKERS)
+                num_workers=min(2, args.N_WORKERS)
             )
-            
+        else:
+        train_loader = get_curriculum_loader(
+            args,
+            algorithm,
+            tr,
+            val,
+            stage=round_idx,
+            loader_class=TorchDataLoader  # Pass standard loader class
+        )
+        train_loader_noshuffle = TorchDataLoader(
+            train_loader.dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=min(2, args.N_WORKERS)
+        )
             # Set algorithm back to training mode
             algorithm.train()
         

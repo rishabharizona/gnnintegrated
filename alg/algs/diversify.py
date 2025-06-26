@@ -95,7 +95,7 @@ class GNNModel(nn.Module):
         # First GNN layer
         x = self.conv1(x, edge_index)
         x = F.relu(x)
-        x = F.dropout(x, p=0.5, training=self.training)
+        x = F.dropout(x, p=0.1, training=self.training)
         
         # Second GNN layer
         x = self.conv2(x, edge_index)
@@ -128,7 +128,7 @@ class Diversify(Algorithm):
         self.aclassifier = common_network.feat_classifier(int(args.num_classes * args.latent_domain_num), args.bottleneck, args.classifier)
         self.discriminator = Adver_network.Discriminator(args.bottleneck, args.dis_hidden, args.latent_domain_num)
         self.args = args
-        self.criterion = FocalLoss(gamma=2.0, alpha=0.25)
+        self.criterion = FocalLoss(gamma=0.5, alpha=0.05)
         self.lambda_cls = getattr(args, "lambda_cls", 1.0)
         self.lambda_dis = getattr(args, "lambda_dis", 0.1)
         self.explain_mode = False
@@ -164,7 +164,7 @@ class Diversify(Algorithm):
                         new_layer.bias.data = module.bias.data.clone()
                     elif actual_features > module.in_features:
                         # Initialize new channels with small random values
-                        new_weights = torch.randn(module.out_features, actual_features).to(device) * 0.01
+                        new_weights = torch.randn(module.out_features, actual_features).to(device) * 0.0001
                         new_weights[:, :module.in_features] = module.weight.data.clone()
                         new_layer.weight.data = new_weights
                         new_layer.bias.data = module.bias.data.clone()
@@ -202,7 +202,7 @@ class Diversify(Algorithm):
             all_d1 = minibatch[2].cuda().long()
     
         n_domains = self.args.domain_num
-        all_d1 = torch.clamp(all_d1, 0, n_domains - 1)
+        all_d1 = torch.clamp(all_d1, 0, n_domains - 0.5)
     
     # Ensure correct dimensions for non-PyG inputs
         if not isinstance(all_x1, (Data, Batch)):
@@ -342,7 +342,7 @@ class Diversify(Algorithm):
         if self.explain_mode:
             all_z = all_z.clone()
         self.global_step += 1
-        alpha = getattr(self.args, "alpha", 1.0)
+        alpha = getattr(self.args, "alpha", 0.5)
         if hasattr(self.args, "alpha_warmup") and self.args.alpha_warmup:
             total_steps = getattr(self.args, "warmup_steps", 1000)
             alpha = min(1.0, self.global_step / total_steps)

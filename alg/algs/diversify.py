@@ -12,9 +12,8 @@ from alg.modelopera import get_fea
 from network import Adver_network, common_network
 from alg.algs.base import Algorithm
 from loss.common_loss import Entropylogits
-from torch_geometric.data import Data
 from torch_geometric.utils import to_dense_batch
-
+from torch_geometric.data import Data, Batch
         
 def transform_for_gnn(x):
     """Robust transformation for GNN input handling various formats"""
@@ -190,14 +189,28 @@ class Diversify(Algorithm):
         self.actual_features = actual_features  # Store for later use
 
     def update_d(self, minibatch, opt):
+        # Handle PyG Data objects
+        if isinstance(minibatch[0], (Data, Batch)):  # Handle both single graphs and batches
+        data = minibatch[0]
+        data = data.to('cuda')
+        all_x1 = data
+        all_c1 = data.y
+        all_d1 = data.domain if hasattr(data, 'domain') else minibatch[2].cuda().long()
+        else:
         all_x1 = minibatch[0].cuda().float()
-        all_d1 = minibatch[2].cuda().long()
         all_c1 = minibatch[1].cuda().long()
+        all_d1 = minibatch[2].cuda().long()
+        
         n_domains = self.args.domain_num
         all_d1 = torch.clamp(all_d1, 0, n_domains - 1)
+        
+        # Ensure correct dimensions for non-PyG inputs
+        if not isinstance(all_x1, (Data, Batch)):
+        all_x1 = self.ensure_correct_dimensions(all_x1)
+        
         z1 = self.dbottleneck(self.featurizer(all_x1))
         if self.explain_mode:
-            z1 = z1.clone()
+        z1 = z1.clone()
         disc_in1 = Adver_network.ReverseLayerF.apply(z1, self.args.alpha1)
         disc_out1 = self.ddiscriminator(disc_in1)
         cd1 = self.dclassifier(z1)

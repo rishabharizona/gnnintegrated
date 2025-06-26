@@ -906,20 +906,20 @@ def main(args):
                 num_workers=min(2, args.N_WORKERS)
             )
         else:
-        train_loader = get_curriculum_loader(
-            args,
-            algorithm,
-            tr,
-            val,
-            stage=round_idx,
-            loader_class=TorchDataLoader  # Pass standard loader class
-        )
-        train_loader_noshuffle = TorchDataLoader(
-            train_loader.dataset,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=min(2, args.N_WORKERS)
-        )
+            train_loader = get_curriculum_loader(
+                args,
+                algorithm,
+                tr,
+                val,
+                stage=round_idx,
+                loader_class=TorchDataLoader  # Pass standard loader class
+            )
+            train_loader_noshuffle = TorchDataLoader(
+                train_loader.dataset,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=min(2, args.N_WORKERS)
+            )
             # Set algorithm back to training mode
             algorithm.train()
         

@@ -70,13 +70,15 @@ def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
     )
 
 def get_dataloader(args, tr, val, tar):
-    # Detect if we have graph data by checking the first sample
+    """Detect graph data more reliably"""
     is_graph_data = False
     if len(tr) > 0:
         sample = tr[0]
-        # Check for (graph, label, domain) tuple format
+        # Check for different graph data formats
         if (isinstance(sample, tuple) and len(sample) >= 3 and 
             isinstance(sample[0], Data)):
+            is_graph_data = True
+        elif isinstance(sample, Data):
             is_graph_data = True
     """
     Create data loaders for training, validation, and target datasets

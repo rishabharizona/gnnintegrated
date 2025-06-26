@@ -8,7 +8,7 @@ from datautil.util import combindataset, subdataset
 import datautil.actdata.cross_people as cross_people
 from torch_geometric.data import Batch, Data
 from torch_geometric.utils import to_dense_batch
-import datautil.graph_utils as graph_utils  # Added for graph conversion
+import datautil.graph_utils as graph_utils
 from typing import List, Tuple, Dict, Any, Optional
 
 # Task mapping for activity recognition
@@ -229,11 +229,12 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         for domain, indices in domain_indices.items():
             subset = Subset(val_dataset, indices)
             
-            # Use appropriate collate function
-            collate_fn = collate_gnn if hasattr(args, 'model_type') and args.model_type == 'gnn' else None
-            loader = DataLoader(subset, batch_size=args.batch_size, 
-                               shuffle=False, num_workers=args.N_WORKERS,
-                               collate_fn=collate_fn)
+            # FIX: Use proper GNN loader if needed
+            if hasattr(args, 'model_type') and args.model_type == 'gnn':
+                loader = get_gnn_dataloader(subset, args.batch_size, args.N_WORKERS, shuffle=False)
+            else:
+                loader = DataLoader(subset, batch_size=args.batch_size, 
+                                   shuffle=False, num_workers=args.N_WORKERS)
 
             total_loss = 0.0
             correct = 0
@@ -241,19 +242,14 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             num_batches = 0
 
             for batch in loader:
-                # Handle GNN vs standard model inputs
+                # FIX: Handle GNN vs standard model inputs
                 if hasattr(args, 'model_type') and args.model_type == 'gnn':
-                    inputs = batch[0].to(args.device)
-                    labels = batch[1].to(args.device)
-                    
-                    # Handle PyG Batch object - convert to dense representation if needed
-                    if isinstance(inputs, Batch) and inputs.num_node_features > 0:
-                        # Convert to dense batch format for compatibility
-                        x_dense, mask = to_dense_batch(inputs.x, inputs.batch)
-                        inputs = (x_dense, mask)
+                    batched_graph, labels, domains = batch
+                    inputs = batched_graph.to(args.device)
+                    labels = labels.to(args.device)
                 else:
-                    inputs = batch[0].cuda().float()
-                    labels = batch[1].cuda().long()
+                    inputs = batch[0].to(args.device).float()
+                    labels = batch[1].to(args.device).long()
                 
                 output = algorithm.predict(inputs)
                 loss = torch.nn.functional.cross_entropy(output, labels)
@@ -361,19 +357,22 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # Create curriculum subset
     curriculum_subset = SafeSubset(train_dataset, selected_indices)
     
-    # For GNN, use specialized collate_fn
-    collate_fn = collate_gnn if hasattr(args, 'model_type') and args.model_type == 'gnn' else None
-    
-    curriculum_loader = DataLoader(
-        curriculum_subset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.N_WORKERS,
-        drop_last=True,
-        collate_fn=collate_fn  # Add PyG collate function
-    )
-
-    return curriculum_loader
+    # FIX: Use proper GNN loader if needed
+    if hasattr(args, 'model_type') and args.model_type == 'gnn':
+        return get_gnn_dataloader(
+            curriculum_subset,
+            args.batch_size,
+            args.N_WORKERS,
+            shuffle=True
+        )
+    else:
+        return DataLoader(
+            curriculum_subset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=args.N_WORKERS,
+            drop_last=True
+        )
 
 def split_dataset_by_domain(dataset, val_ratio=0.2, seed=42):
     """

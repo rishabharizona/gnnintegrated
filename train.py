@@ -815,7 +815,9 @@ def main(args):
                             'total_loss', 'train_acc', 'valid_acc', 'target_acc',
                             'total_cost_time', 'h_divergence', 'domain_acc']}
     best_valid_acc, target_acc = 0, 0
-    
+        LoaderClass = PyGDataLoader
+    else:
+        LoaderClass = TorchDataLoader
     # Create entire source loader for h-divergence calculation
     entire_source_loader = DataLoader(
         tr,
@@ -902,7 +904,9 @@ def main(args):
                 stage=round_idx,
                 loader_class=PyGDataLoader  # Pass PyG loader class
             )
-            
+                LoaderClass = PyGDataLoader
+            else:
+                LoaderClass = TorchDataLoader
             # Update the no-shuffle loader
             train_loader_noshuffle = DataLoader(
                 train_loader.dataset,

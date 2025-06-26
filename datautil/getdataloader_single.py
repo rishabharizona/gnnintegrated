@@ -51,6 +51,12 @@ class ConsistentFormatWrapper(torch.utils.data.Dataset):
         else:
             # Fallback: return sample as graph
             return sample, 0, 0
+    
+    # Forward attribute access to underlying dataset
+    def __getattr__(self, name):
+        if 'dataset' in self.__dict__:
+            return getattr(self.dataset, name)
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
 class SafeSubset(Subset):
     """Safe subset that eliminates all numpy types"""
@@ -246,7 +252,6 @@ def get_act_dataloader(args):
     
     # Create datasets for each person group
     for i, item in enumerate(tmpp):
-        # Use graph transform for GNN models
         if hasattr(args, 'model_type') and args.model_type == 'gnn':
             transform = actutil.act_to_graph_transform(args)
         else:
@@ -261,9 +266,6 @@ def get_act_dataloader(args):
             transform=transform
         )
         
-        # Wrap in consistent format adapter
-        tdata = ConsistentFormatWrapper(tdata)
-        
         if i in args.test_envs:
             target_datalist.append(tdata)
         else:
@@ -271,12 +273,16 @@ def get_act_dataloader(args):
             if len(tdata) / args.batch_size < args.steps_per_epoch:
                 args.steps_per_epoch = len(tdata) / args.batch_size
     
+    # Combine source datasets
+    tdata = combindataset(args, source_datasetlist)
+    
+    # Wrap in consistent format adapter AFTER combining
+    tdata = ConsistentFormatWrapper(tdata)
+    
     # Split source data into train/validation
     rate = 0.2
     args.steps_per_epoch = int(args.steps_per_epoch * (1 - rate))
     
-    # Combine source datasets
-    tdata = combindataset(args, source_datasetlist)
     l = len(tdata.labels)
     indexall = np.arange(l)
     
@@ -292,6 +298,9 @@ def get_act_dataloader(args):
     
     # Combine target datasets
     targetdata = combindataset(args, target_datalist)
+    
+    # Wrap target data as well
+    targetdata = ConsistentFormatWrapper(targetdata)
     
     # Create data loaders
     loaders = get_dataloader(args, tr, val, targetdata)

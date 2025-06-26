@@ -339,38 +339,66 @@ class Diversify(Algorithm):
         return {'total': loss.item(), 'class': classifier_loss.item(), 'dis': disc_loss.item()}
 
     def update_a(self, minibatches, opt):
-        """Update auxiliary classifier"""
-        all_x = minibatches[0].cuda().float()
-        all_x = self.ensure_correct_dimensions(all_x)
-        all_c = minibatches[1].cuda().long()
-        
-        # Get pseudo-domain labels directly from batch
-        all_d = minibatches[4].cuda().long()
-            
-        # Validate domain labels and clamp to valid range
-        n_domains = self.args.latent_domain_num
-        all_d = torch.clamp(all_d, 0, n_domains-1)
-            
-        # Create combined labels
-        all_y = all_d * self.args.num_classes + all_c
-        
-        # Ensure combined labels are within valid range
-        max_class = self.aclassifier.fc.out_features
-        all_y = torch.clamp(all_y, 0, max_class-1)
-        
-        # Forward pass
-        all_z = self.abottleneck(self.featurizer(all_x))
-        if self.explain_mode:
-            all_z = all_z.clone()
-        all_preds = self.aclassifier(all_z)
-        
-        # Loss calculation and optimization
-        classifier_loss = F.cross_entropy(all_preds, all_y)
-        opt.zero_grad()
-        classifier_loss.backward()
-        opt.step()
-        
-        return {'class': classifier_loss.item()}
+    """Update auxiliary classifier"""
+    # Extract inputs, class labels, and domain labels
+    inputs = minibatches[0]
+    class_labels = minibatches[1]
+    domain_labels = minibatches[2]  # Domain labels are at index 2
+    
+    # Handle PyG Data objects differently
+    if isinstance(inputs, (Data, Batch)):  # Handle both single graphs and batches
+        # Move graph data to GPU
+        inputs = inputs.to('cuda')
+        # Extract class labels from the Data object if available
+        if hasattr(inputs, 'y'):
+            class_labels = inputs.y
+        # Extract domain labels from the Data object if available
+        if hasattr(inputs, 'domain'):
+            domain_labels = inputs.domain
+    else:
+        # Handle tensor inputs
+        inputs = inputs.cuda().float()
+        inputs = self.ensure_correct_dimensions(inputs)
+    
+    # Convert labels to tensors if needed
+    if not isinstance(class_labels, torch.Tensor):
+        class_labels = torch.tensor(class_labels)
+    if not isinstance(domain_labels, torch.Tensor):
+        domain_labels = torch.tensor(domain_labels)
+    
+    # Move labels to GPU
+    all_c = class_labels.cuda().long()
+    all_d = domain_labels.cuda().long()
+    
+    # Validate domain labels and clamp to valid range
+    n_domains = self.args.latent_domain_num
+    all_d = torch.clamp(all_d, 0, n_domains-1)
+    
+    # Create combined labels
+    all_y = all_d * self.args.num_classes + all_c
+    
+    # Ensure combined labels are within valid range
+    max_class = self.aclassifier.fc.out_features
+    all_y = torch.clamp(all_y, 0, max_class-1)
+    
+    # Forward pass
+    if isinstance(inputs, (Data, Batch)):
+        # For PyG Data objects, pass directly to featurizer
+        all_z = self.abottleneck(self.featurizer(inputs))
+    else:
+        all_z = self.abottleneck(self.featurizer(inputs))
+    
+    if self.explain_mode:
+        all_z = all_z.clone()
+    all_preds = self.aclassifier(all_z)
+    
+    # Loss calculation and optimization
+    classifier_loss = F.cross_entropy(all_preds, all_y)
+    opt.zero_grad()
+    classifier_loss.backward()
+    opt.step()
+    
+    return {'class': classifier_loss.item()}
 
     def predict(self, x):
         """Main prediction method"""

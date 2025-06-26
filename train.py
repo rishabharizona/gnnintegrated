@@ -275,6 +275,7 @@ def get_optimizer_adamw(algorithm, args, nettype='Diversify'):
             lr=args.lr,
             weight_decay=args.weight_decay,
             betas=(0.9, 0.999)
+        )    
     elif args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(
             params, 
@@ -282,7 +283,6 @@ def get_optimizer_adamw(algorithm, args, nettype='Diversify'):
             momentum=0.9,
             weight_decay=args.weight_decay,
             nesterov=True)
-    )
     else:  # Default to Adam
         optimizer = torch.optim.Adam(
             params, 

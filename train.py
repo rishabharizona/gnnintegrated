@@ -907,22 +907,20 @@ def main(args):
         print("\n📊 Running SHAP explainability...")
         try:
             if args.use_gnn and GNN_AVAILABLE:
-                background = []
-                for data in valid_loader:
-                    background.extend(data[0].to_data_list())
-                    if len(background) >= 32:  # REDUCED
-                        break
-                background = background[:32]
-                X_eval = background[:5]  # REDUCED
+                background = next(iter(valid_loader))[0].to(args.device)
+                X_eval = background[:5]
+                transform_fn = transform_for_gnn
             else:
-                background = get_background_batch(valid_loader, size=32).cuda()  # REDUCED
-                X_eval = background[:5]  # REDUCED
+                background = get_background_batch(valid_loader, size=32).cuda()
+                X_eval = background[:5]
+                transform_fn = None
             
             disable_inplace_relu(algorithm)
             
             transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
             
-            if transform_fn is not None and not args.use_gnn:
+            # Apply transformation if needed
+            if transform_fn:
                 background = transform_fn(background)
                 X_eval = transform_fn(X_eval)
             

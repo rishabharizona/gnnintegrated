@@ -61,6 +61,10 @@ class SafeSubset(Subset):
     
     def convert_data(self, data):
         """Recursively convert numpy types to PyTorch-compatible formats"""
+        # Handle DataLoader objects by returning them as-is
+        if isinstance(data, DataLoader):
+            return data
+            
         if isinstance(data, tuple):
             return tuple(self.convert_data(x) for x in data)
         elif isinstance(data, list):
@@ -74,9 +78,9 @@ class SafeSubset(Subset):
         elif isinstance(data, torch.Tensor):
             return data
         elif isinstance(data, Data):
-            # CORRECTED: Use keys() method for PyG Data objects
-            for key in data.keys():  # Call the method to get keys
-                if hasattr(data, key):  # Only process existing attributes
+            # Correctly handle PyG Data objects
+            for key in data.keys():
+                if hasattr(data, key):
                     setattr(data, key, self.convert_data(getattr(data, key)))
             return data
         else:
@@ -230,7 +234,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # If no domains found, return full dataset
     if not domain_indices:
         print("Warning: No domains found for curriculum learning, using full dataset")
-        if train_dataset and isinstance(train_dataset[0], (tuple, list)) and isinstance(train_dataset[0][0], Data):
+        if hasattr(args, 'model_type') and args.model_type == 'gnn':
             return get_gnn_dataloader(train_dataset, args.batch_size, 0, True)
         else:
             return DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
@@ -240,10 +244,12 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     with torch.no_grad():
         for domain, indices in domain_indices.items():
             subset = Subset(val_dataset, indices)
-            is_graph_data = isinstance(subset[0][0], Data) if subset else False
+            is_graph_data = hasattr(args, 'model_type') and args.model_type == 'gnn'
             
-            loader = get_gnn_dataloader(subset, args.batch_size, 0, False) if is_graph_data else \
-                     DataLoader(subset, batch_size=args.batch_size, shuffle=False)
+            if is_graph_data:
+                loader = get_gnn_dataloader(subset, args.batch_size, 0, False)
+            else:
+                loader = DataLoader(subset, batch_size=args.batch_size, shuffle=False)
             
             total_loss = 0.0
             for batch in loader:
@@ -308,7 +314,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     curriculum_subset = SafeSubset(train_dataset, selected_indices)
     
     # Create appropriate loader
-    if curriculum_subset and isinstance(curriculum_subset[0], (tuple, list)) and isinstance(curriculum_subset[0][0], Data):
+    if hasattr(args, 'model_type') and args.model_type == 'gnn':
         return get_gnn_dataloader(curriculum_subset, args.batch_size, 0, True)
     else:
         return DataLoader(curriculum_subset, batch_size=args.batch_size, shuffle=True)

@@ -235,25 +235,27 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         else:
             return DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     
-    # Compute loss per domain
+    # Compute loss per domain - CRITICAL FIX: Use GNN collate for all graph data
     domain_metrics = []
     with torch.no_grad():
         for domain, indices in domain_indices.items():
             subset = Subset(val_dataset, indices)
-            is_graph_data = hasattr(args, 'model_type') and args.model_type == 'gnn'
             
-            if is_graph_data:
+            # Always use GNN collate for graph data
+            if hasattr(args, 'model_type') and args.model_type == 'gnn':
                 loader = get_gnn_dataloader(subset, args.batch_size, 0, False)
             else:
                 loader = DataLoader(subset, batch_size=args.batch_size, shuffle=False)
             
             total_loss = 0.0
             for batch in loader:
-                if is_graph_data:
+                if hasattr(args, 'model_type') and args.model_type == 'gnn':
+                    # For GNN data, batch is (batched_graph, labels, domains)
                     inputs, labels, _ = batch
                     inputs = inputs.to(args.device)
                     labels = labels.to(args.device)
                 else:
+                    # For standard data, batch is (inputs, labels)
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                 
@@ -309,17 +311,11 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # Create curriculum subset
     curriculum_subset = SafeSubset(train_dataset, selected_indices)
     
-    # CRITICAL FIX: Use GNN collate function for graph data
+    # Use GNN collate function for graph data
     if hasattr(args, 'model_type') and args.model_type == 'gnn':
         return get_gnn_dataloader(curriculum_subset, args.batch_size, 0, True)
     else:
-        # For non-graph data, use standard DataLoader
-        return DataLoader(
-            curriculum_subset, 
-            batch_size=args.batch_size, 
-            shuffle=True,
-            collate_fn=None  # Use default collate
-        )
+        return DataLoader(curriculum_subset, batch_size=args.batch_size, shuffle=True)
 
 def get_shap_batch(loader, size=100):
     """Extract a batch of data for SHAP analysis"""

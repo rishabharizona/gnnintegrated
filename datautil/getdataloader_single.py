@@ -208,6 +208,17 @@ def get_act_dataloader(args):
 
 def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     """Create curriculum data loader based on domain difficulty"""
+    # Helper function to detect graph data format
+    def is_graph_data(dataset):
+        if len(dataset) == 0:
+            return False
+        sample = dataset[0]
+        return (
+            (isinstance(sample, tuple) and len(sample) >= 3 and isinstance(sample[0], Data)) or
+            isinstance(sample, Data) or
+            (isinstance(sample, dict) and 'graph' in sample)
+        )
+
     # Collect domain indices from validation set
     domain_indices = {}
     for idx in range(len(val_dataset)):
@@ -227,29 +238,29 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             
         domain_indices.setdefault(domain, []).append(idx)
     
-    # If no domains found, return full dataset
+    # If no domains found, return full dataset with proper collate
     if not domain_indices:
         print("Warning: No domains found for curriculum learning, using full dataset")
-        if hasattr(args, 'model_type') and args.model_type == 'gnn':
+        if is_graph_data(train_dataset):
             return get_gnn_dataloader(train_dataset, args.batch_size, 0, True)
         else:
             return DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     
-    # Compute loss per domain - CRITICAL FIX: Use GNN collate for all graph data
+    # Compute loss per domain - Use proper collate based on data type
     domain_metrics = []
     with torch.no_grad():
         for domain, indices in domain_indices.items():
             subset = Subset(val_dataset, indices)
             
-            # Always use GNN collate for graph data
-            if hasattr(args, 'model_type') and args.model_type == 'gnn':
+            # Determine data type for this domain subset
+            if is_graph_data(subset):
                 loader = get_gnn_dataloader(subset, args.batch_size, 0, False)
             else:
-                loader = DataLoader(subset, batch_size=args.batch_size, shuffle=False)
+                loader = DataLoader(subset, args.batch_size, shuffle=False)
             
             total_loss = 0.0
             for batch in loader:
-                if hasattr(args, 'model_type') and args.model_type == 'gnn':
+                if is_graph_data(subset):
                     # For GNN data, batch is (batched_graph, labels, domains)
                     inputs, labels, _ = batch
                     inputs = inputs.to(args.device)
@@ -311,12 +322,11 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # Create curriculum subset
     curriculum_subset = SafeSubset(train_dataset, selected_indices)
     
-    # Use GNN collate function for graph data
-    if hasattr(args, 'model_type') and args.model_type == 'gnn':
+    # Use proper loader based on data type
+    if is_graph_data(curriculum_subset):
         return get_gnn_dataloader(curriculum_subset, args.batch_size, 0, True)
     else:
         return DataLoader(curriculum_subset, batch_size=args.batch_size, shuffle=True)
-
 def get_shap_batch(loader, size=100):
     """Extract a batch of data for SHAP analysis"""
     samples = []

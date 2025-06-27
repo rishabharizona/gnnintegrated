@@ -58,17 +58,13 @@ def transform_for_gnn(x):
         f"or 3D formats [B, C, T] or [B, T, C] where C is 8 or 200."
     )
 
-# Focal Loss with class balancing
-class BalancedFocalLoss(nn.Module):
-    def __init__(self, gamma=1.0):  # Reduced gamma to 1.0
+# Standard CrossEntropyLoss without focal weighting
+class StandardLoss(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.gamma = gamma
 
     def forward(self, inputs, targets):
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
-        pt = torch.exp(-ce_loss)
-        focal_loss = (1-pt)**self.gamma * ce_loss
-        return focal_loss.mean()
+        return F.cross_entropy(inputs, targets)
         
 class GNNModel(nn.Module):
     """GNN model for activity recognition"""
@@ -132,8 +128,8 @@ class Diversify(Algorithm):
         self.discriminator = Adver_network.Discriminator(args.bottleneck, args.dis_hidden, args.latent_domain_num)
         self.args = args
         
-        # Simplified loss without class weights
-        self.criterion = BalancedFocalLoss(gamma=1.0)  # Reduced gamma
+        # Standard cross-entropy loss without focal weighting
+        self.criterion = StandardLoss()
         self.explain_mode = False
         self.patch_skip_connection()
         
@@ -230,17 +226,17 @@ class Diversify(Algorithm):
         # Classification
         cd1 = self.dclassifier(z1)
         
-        # Loss calculations
+        # Loss calculations - reduced domain loss weight
         disc_loss = F.cross_entropy(disc_out1, all_d1)
         ent_loss = Entropylogits(cd1) * self.args.lam + self.criterion(cd1, all_c1)
-        loss = ent_loss + 0.05 * disc_loss  # Fixed lambda_dis
+        loss = ent_loss + 0.01 * disc_loss  # Reduced domain loss weight
         
         # Optimization
         opt.zero_grad()
         loss.backward()
         
         # Gradient clipping with increased max_norm
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=3.0)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)  # Reduced max norm
         opt.step()
         
         return {'total': loss.item(), 'dis': disc_loss.item(), 'ent': ent_loss.item()}
@@ -391,18 +387,18 @@ class Diversify(Algorithm):
         # Domain labels
         disc_labels = torch.clamp(disc_labels, 0, self.args.latent_domain_num - 1)
         
-        # Loss calculations
+        # Loss calculations - reduced domain loss weight
         disc_loss = F.cross_entropy(disc_out, disc_labels)
         all_preds = self.classifier(all_z)
         classifier_loss = self.criterion(all_preds, all_y)
-        loss = 0.8 * classifier_loss + 0.05 * disc_loss  # Fixed lambdas
+        loss = classifier_loss + 0.01 * disc_loss  # Reduced domain loss weight
         
         # Optimization
         opt.zero_grad()
         loss.backward()
         
-        # Gradient clipping with increased max_norm
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=3.0)
+        # Gradient clipping with reduced max_norm
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         opt.step()
         
         return {'total': loss.item(), 'class': classifier_loss.item(), 'dis': disc_loss.item()}

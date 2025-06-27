@@ -61,10 +61,6 @@ class SafeSubset(Subset):
     
     def convert_data(self, data):
         """Recursively convert numpy types to PyTorch-compatible formats"""
-        # Handle DataLoader objects by returning them as-is
-        if isinstance(data, DataLoader):
-            return data
-            
         if isinstance(data, tuple):
             return tuple(self.convert_data(x) for x in data)
         elif isinstance(data, list):
@@ -313,11 +309,17 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # Create curriculum subset
     curriculum_subset = SafeSubset(train_dataset, selected_indices)
     
-    # Create appropriate loader
+    # CRITICAL FIX: Use GNN collate function for graph data
     if hasattr(args, 'model_type') and args.model_type == 'gnn':
         return get_gnn_dataloader(curriculum_subset, args.batch_size, 0, True)
     else:
-        return DataLoader(curriculum_subset, batch_size=args.batch_size, shuffle=True)
+        # For non-graph data, use standard DataLoader
+        return DataLoader(
+            curriculum_subset, 
+            batch_size=args.batch_size, 
+            shuffle=True,
+            collate_fn=None  # Use default collate
+        )
 
 def get_shap_batch(loader, size=100):
     """Extract a batch of data for SHAP analysis"""

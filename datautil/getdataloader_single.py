@@ -79,7 +79,7 @@ class SafeSubset(Subset):
             return data
         elif isinstance(data, Data):
             # Correctly handle PyG Data objects
-            for key in data.keys():
+            for key in data.keys:
                 if hasattr(data, key):
                     setattr(data, key, self.convert_data(getattr(data, key)))
             return data
@@ -134,9 +134,9 @@ def get_dataloader(args, tr, val, tar):
         raise ValueError("Training dataset is empty")
     
     # Ensure we have datasets, not loaders
-    for ds in [tr, val, tar]:
+    for i, ds in enumerate([tr, val, tar]):
         if isinstance(ds, DataLoader):
-            raise TypeError("get_dataloader requires Datasets, not DataLoaders")
+            raise TypeError(f"get_dataloader requires Datasets, not DataLoaders (argument {i})")
     
     sample = tr[0]
     is_graph_data = False
@@ -231,8 +231,10 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         )
     
     # Ensure we have datasets, not loaders
-    if isinstance(train_dataset, DataLoader) or isinstance(val_dataset, DataLoader):
-        raise TypeError("get_curriculum_loader requires Datasets, not DataLoaders")
+    if isinstance(train_dataset, DataLoader):
+        raise TypeError("get_curriculum_loader requires train Dataset, not DataLoader")
+    if isinstance(val_dataset, DataLoader):
+        raise TypeError("get_curriculum_loader requires val Dataset, not DataLoader")
 
     # Collect domain indices from validation set
     domain_indices = {}

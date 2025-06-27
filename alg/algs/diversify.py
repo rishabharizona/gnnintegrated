@@ -60,20 +60,14 @@ def transform_for_gnn(x):
 
 # Focal Loss with class balancing
 class BalancedFocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, class_weights=None):
+    def __init__(self, gamma=1.0):  # Reduced gamma to 1.0
         super().__init__()
         self.gamma = gamma
-        self.class_weights = class_weights  # Should be [n_classes] tensor
 
     def forward(self, inputs, targets):
         ce_loss = F.cross_entropy(inputs, targets, reduction='none')
         pt = torch.exp(-ce_loss)
         focal_loss = (1-pt)**self.gamma * ce_loss
-        
-        if self.class_weights is not None:
-            weights = self.class_weights[targets]
-            focal_loss = weights * focal_loss
-            
         return focal_loss.mean()
         
 class GNNModel(nn.Module):
@@ -94,7 +88,7 @@ class GNNModel(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Dropout(0.5),
+            # Removed dropout layer
             nn.Linear(hidden_dim, num_classes)
         )
     
@@ -104,7 +98,7 @@ class GNNModel(nn.Module):
         # First GNN layer
         x = self.conv1(x, edge_index)
         x = F.relu(x)
-        x = F.dropout(x, p=0.5, training=self.training)
+        # Removed dropout
         
         # Second GNN layer
         x = self.conv2(x, edge_index)
@@ -138,29 +132,17 @@ class Diversify(Algorithm):
         self.discriminator = Adver_network.Discriminator(args.bottleneck, args.dis_hidden, args.latent_domain_num)
         self.args = args
         
-        # Initialize with class-balanced focal loss if weights available
-        if hasattr(args, 'class_weights'):
-            self.criterion = BalancedFocalLoss(gamma=2.0, class_weights=args.class_weights)
-        else:
-            self.criterion = BalancedFocalLoss(gamma=2.0)
+        # Simplified loss without class weights
+        self.criterion = BalancedFocalLoss(gamma=1.0)  # Reduced gamma
             
-        self.lambda_cls = getattr(args, "lambda_cls", 1.0)
-        self.lambda_dis = getattr(args, "lambda_dis", 0.1)
+        # Reduced regularization parameters
+        self.lambda_cls = 0.8
+        self.lambda_dis = 0.05
         self.explain_mode = False
         self.global_step = 0
         self.patch_skip_connection()
         
-        # Initialize learning rate warmup scheduler
-        self.warmup_steps = getattr(args, "warmup_steps", 1000)
-        self.warmup_scheduler = None
-        
-    def init_optimizers(self, optimizer):
-        """Initialize warmup scheduler after optimizer is created"""
-        if self.warmup_steps > 0:
-            self.warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(
-                optimizer, 
-                lr_lambda=lambda step: min(1.0, (step + 1) / self.warmup_steps)
-            )
+        # Removed warmup scheduler
         
     def patch_skip_connection(self):
         """Dynamically adjust skip connection based on actual input shape"""
@@ -187,23 +169,8 @@ class Diversify(Algorithm):
                         nn.Linear(actual_features, module.out_features)
                     ).to(device)
                     
-                    # Try to partially initialize with existing weights
-                    if hasattr(module, 'weight'):
-                        # Only try if it's a standard Linear layer
-                        if module.in_features > actual_features:
-                            # Use first 'actual_features' channels from existing weights
-                            new_layer[1].weight.data = module.weight.data[:, :actual_features].clone()
-                            new_layer[1].bias.data = module.bias.data.clone()
-                        elif actual_features > module.in_features:
-                            # Initialize new channels with small random values
-                            new_weights = torch.randn(module.out_features, actual_features).to(device) * 0.01
-                            new_weights[:, :module.in_features] = module.weight.data.clone()
-                            new_layer[1].weight.data = new_weights
-                            new_layer[1].bias.data = module.bias.data.clone()
-                    
                     # Replace the module
                     if '.' in name:
-                        # Handle nested modules (e.g., 'module.submodule.layer')
                         parts = name.split('.')
                         parent = self.featurizer
                         for part in parts[:-1]:
@@ -218,7 +185,7 @@ class Diversify(Algorithm):
         
         # If we reach here, no skip connection was found
         print("Warning: No skip connection layer found in featurizer")
-        self.actual_features = actual_features  # Store for later use
+        self.actual_features = actual_features
 
     def update_d(self, minibatch, opt):
         """Update domain discriminator and classifier"""
@@ -228,17 +195,17 @@ class Diversify(Algorithm):
             data = data.to('cuda')
             all_x1 = data
             
-            # Safely get class labels from Data object or fallback
+            # Get class labels from Data object or fallback
             if hasattr(data, 'y') and data.y is not None:
                 all_c1 = data.y
             else:
-                all_c1 = minibatch[1].cuda().long()  # Fallback to batch[1]
+                all_c1 = minibatch[1].cuda().long()
             
-            # Safely get domain labels from Data object or fallback
+            # Get domain labels from Data object or fallback
             if hasattr(data, 'domain') and data.domain is not None:
                 all_d1 = data.domain
             else:
-                all_d1 = minibatch[2].cuda().long()  # Fallback to batch[2]
+                all_d1 = minibatch[2].cuda().long()
         else:
             all_x1 = minibatch[0].cuda().float()
             all_c1 = minibatch[1].cuda().long()
@@ -250,13 +217,6 @@ class Diversify(Algorithm):
         
         n_domains = self.args.domain_num
         all_d1 = torch.clamp(all_d1, 0, n_domains - 1)
-        
-        # Apply data augmentation during training
-        if self.training and getattr(self.args, 'use_augmentation', False):
-            if isinstance(all_x1, (Data, Batch)):
-                all_x1.x = self.spectral_augmentation(all_x1.x)
-            else:
-                all_x1 = self.spectral_augmentation(all_x1)
         
         # Apply GNN transformation if needed
         if self.args.use_gnn:
@@ -286,22 +246,11 @@ class Diversify(Algorithm):
         opt.zero_grad()
         loss.backward()
         
-        # Gradient clipping
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        # Gradient clipping with increased max_norm
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=3.0)
         opt.step()
         
         return {'total': loss.item(), 'dis': disc_loss.item(), 'ent': ent_loss.item()}
-
-    def spectral_augmentation(self, x):
-        """Apply spectral augmentation to sensor data"""
-        # Random frequency masking
-        if np.random.rand() > 0.5 and x.dim() >= 3:
-            freq_mask = torch.ones_like(x)
-            f_start = np.random.randint(0, x.shape[1]//2)
-            f_length = np.random.randint(1, max(1, x.shape[1]//4))
-            freq_mask[:, f_start:f_start+f_length] = 0
-            x = x * freq_mask.to(x.device)
-        return x
 
     def set_dlabel(self, loader):
         """Set pseudo-domain labels using clustering with proper PyG Data handling"""
@@ -313,10 +262,8 @@ class Diversify(Algorithm):
         all_index = []  # Store original indices
     
         with torch.no_grad():
-            # Manually track the index counter
             index_counter = 0
             for batch in loader:
-                # Handle PyG Data objects differently
                 if isinstance(batch[0], (Data, Batch)):
                     data = batch[0].to('cuda')
                     inputs = data
@@ -327,7 +274,6 @@ class Diversify(Algorithm):
                 if self.args.use_gnn:
                     inputs = transform_for_gnn(inputs)
                 
-                # Apply dimension correction for non-PyG inputs
                 if not isinstance(inputs, (Data, Batch)):
                     inputs = self.ensure_correct_dimensions(inputs)
                 
@@ -335,7 +281,6 @@ class Diversify(Algorithm):
                 
                 all_fea.append(feas.float().cpu())
                 
-                # Store batch indices
                 batch_size = inputs.size(0) if not isinstance(inputs, (Data, Batch)) else inputs.num_graphs
                 batch_indices = np.arange(index_counter, index_counter + batch_size)
                 all_index.append(batch_indices)
@@ -351,12 +296,8 @@ class Diversify(Algorithm):
     
         # Clustering for pseudo-domain labels
         K = self.args.latent_domain_num
-        
-        # Use sklearn KMeans for robust clustering
         kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
         pred_label = kmeans.fit_predict(all_fea)
-        
-        # Ensure labels are in valid range
         pred_label = np.clip(pred_label, 0, K-1)
     
         # Handle dataset types
@@ -368,22 +309,17 @@ class Diversify(Algorithm):
                 ds = ds.dataset
             return ds
         
-        # Get the base dataset
         base_dataset = get_base_dataset(dataset)
         
-        # Map loader indices to original dataset indices
         if isinstance(dataset, Subset):
-            # Traverse through subset wrappers
             current = dataset
             while isinstance(current, Subset):
-                # Map indices through each subset layer
                 all_index = [current.indices[i] for i in all_index]
                 current = current.dataset
             base_dataset = current
         
         # Set labels on the base dataset
         if hasattr(base_dataset, 'set_labels_by_index'):
-            # Convert numpy labels to torch tensor
             pred_label_tensor = torch.from_numpy(pred_label).long()
             base_dataset.set_labels_by_index(pred_label_tensor, all_index, 'pdlabel')
             print(f"Set pseudo-labels on base dataset of type: {type(base_dataset).__name__}")
@@ -401,11 +337,9 @@ class Diversify(Algorithm):
     
     def ensure_correct_dimensions(self, inputs):
         """Ensure inputs have correct dimensions for skip connection"""
-        # Use stored feature dimension if available
         if hasattr(self, 'actual_features'):
             actual_features = self.actual_features
         else:
-            # Fallback: detect feature dimension
             device = next(self.featurizer.parameters()).device
             sample_input = torch.randn(1, *self.args.input_shape).to(device)
             with torch.no_grad():
@@ -414,13 +348,10 @@ class Diversify(Algorithm):
         
         # Reshape if needed
         if inputs.dim() == 2:
-            # [batch_size, features] -> [batch_size, time, features]
             inputs = inputs.view(inputs.size(0), 1, inputs.size(1))
         elif inputs.dim() == 3 and inputs.size(1) == 1:
-            # [batch_size, 1, features] - expand time dimension
             inputs = inputs.expand(-1, actual_features, -1)
         elif inputs.dim() == 3 and inputs.size(2) == actual_features:
-            # [batch_size, time, features] - transpose to match expected
             inputs = inputs.permute(0, 2, 1)
         return inputs
 
@@ -447,13 +378,6 @@ class Diversify(Algorithm):
             all_y = data[1].cuda().long()
             disc_labels = data[4].cuda().long()
         
-        # Apply augmentation during training
-        if self.training and getattr(self.args, 'use_augmentation', False):
-            if isinstance(all_x, (Data, Batch)):
-                all_x.x = self.spectral_augmentation(all_x.x)
-            else:
-                all_x = self.spectral_augmentation(all_x)
-        
         # Apply GNN transformation if needed
         if self.args.use_gnn:
             all_x = transform_for_gnn(all_x)
@@ -468,8 +392,8 @@ class Diversify(Algorithm):
             all_z = all_z.clone()
         self.global_step += 1
         
-        # Learning rate warmup
-        alpha = min(1.0, self.global_step / self.warmup_steps) if self.warmup_steps > 0 else 1.0
+        # Constant alpha (removed warmup)
+        alpha = 1.0
         disc_input = Adver_network.ReverseLayerF.apply(all_z, alpha)
         disc_out = self.discriminator(disc_input)
         
@@ -486,13 +410,9 @@ class Diversify(Algorithm):
         opt.zero_grad()
         loss.backward()
         
-        # Gradient clipping
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        # Gradient clipping with increased max_norm
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=3.0)
         opt.step()
-        
-        # Update learning rate with warmup scheduler
-        if self.warmup_scheduler:
-            self.warmup_scheduler.step()
         
         return {'total': loss.item(), 'class': classifier_loss.item(), 'dis': disc_loss.item()}
 
@@ -505,24 +425,21 @@ class Diversify(Algorithm):
         if isinstance(inputs, (Data, Batch)):
             inputs = inputs.to('cuda')
             
-            # Safely get class labels from Data object or fallback
             if hasattr(inputs, 'y') and inputs.y is not None:
                 all_c = inputs.y
             else:
-                # Fallback to minibatch[1] if available
                 if len(minibatches) > 1:
                     all_c = minibatches[1]
                 else:
-                    raise RuntimeError("Class labels not found in Data object and minibatch[1] is missing")
+                    raise RuntimeError("Class labels not found")
             
-            # Safely get domain labels from Data object or fallback
             if hasattr(inputs, 'domain') and inputs.domain is not None:
                 all_d = inputs.domain
             else:
                 if len(minibatches) > 2:
                     all_d = minibatches[2]
                 else:
-                    raise RuntimeError("Domain labels not found in Data object and minibatch[2] is missing")
+                    raise RuntimeError("Domain labels not found")
         else:
             inputs = inputs.cuda().float()
             all_c = minibatches[1]
@@ -547,17 +464,8 @@ class Diversify(Algorithm):
         # Ensure combined labels are within valid range
         max_class = self.aclassifier.fc.out_features
         if all_y.max() >= max_class:
-            print(f"Warning: Combined labels exceed classifier capacity! "
-                  f"Max label: {all_y.max().item()} vs max classes: {max_class}")
             all_y = torch.clamp(all_y, 0, max_class-1)
         
-        # Apply augmentation during training
-        if self.training and getattr(self.args, 'use_augmentation', False):
-            if isinstance(inputs, (Data, Batch)):
-                inputs.x = self.spectral_augmentation(inputs.x)
-            else:
-                inputs = self.spectral_augmentation(inputs)
-                
         # Apply GNN transformation if needed
         if self.args.use_gnn:
             inputs = transform_for_gnn(inputs)
@@ -568,10 +476,6 @@ class Diversify(Algorithm):
         
         # Forward pass
         all_z = self.abottleneck(self.featurizer(inputs))
-        
-        if self.explain_mode:
-            all_z = all_z.clone()
-        
         all_preds = self.aclassifier(all_z)
         
         # Loss calculation and optimization
@@ -591,16 +495,6 @@ class Diversify(Algorithm):
         if self.explain_mode:
             bottleneck_out = bottleneck_out.clone()
         return self.classifier(bottleneck_out)
-    
-    def predict1(self, x):
-        """Domain discriminator prediction"""
-        if not isinstance(x, (Data, Batch)):
-            x = self.ensure_correct_dimensions(x)
-        features = self.featurizer(x)
-        bottleneck_out = self.dbottleneck(features)
-        if self.explain_mode:
-            bottleneck_out = bottleneck_out.clone()
-        return self.ddiscriminator(bottleneck_out)
     
     def forward(self, batch):
         inputs = batch[0]

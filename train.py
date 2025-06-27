@@ -702,13 +702,15 @@ def main(args):
             curriculum_dataset,
             batch_size=args.batch_size,
             shuffle=True,
-            num_workers=min(2, args.N_WORKERS)
+            num_workers=min(2, args.N_WORKERS),
+            drop_last=False
             )
             train_loader_noshuffle = LoaderClass(
                 train_loader.dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
-                num_workers=min(1, args.N_WORKERS)  # MINIMAL
+                num_workers=min(1, args.N_WORKERS),
+                drop_last=False  # MINIMAL
             )
             algorithm.train()
         

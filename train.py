@@ -609,28 +609,25 @@ def main(args):
         temp_model.eval()
         feature_list = []
         
+        # In the automated K estimation section, inside the batch loop:
         with torch.no_grad():
             first_batch = True
             
-            for batch in temp_train_loader:  # Use temp_train_loader here
-                # Handle GNN data differently
+            for batch in temp_train_loader:
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
                     domains = batch[2].to(args.device)
-                    x = inputs
+                    # Apply transformation to get 3D input
+                    x = transform_for_gnn(inputs)
+                    if first_batch:
+                        print(f"Transformed GNN input shape: {x.shape}")
+                        first_batch = False
                 else:
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                     domains = batch[2].to(args.device).long()
                     x = inputs
-                
-                # Handle GNN input format if needed
-                if args.use_gnn and GNN_AVAILABLE:
-                    # Convert to (batch, time, channels) format
-                    x = transform_for_gnn(x)
-                    if x.dim() != 3:
-                        raise ValueError(f"GNN requires 3D input (B,T,C), got {x.shape}")
                 
                 features = temp_model(x)
                 feature_list.append(features.detach().cpu().numpy())

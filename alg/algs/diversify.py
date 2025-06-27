@@ -134,15 +134,8 @@ class Diversify(Algorithm):
         
         # Simplified loss without class weights
         self.criterion = BalancedFocalLoss(gamma=1.0)  # Reduced gamma
-            
-        # Reduced regularization parameters
-        self.lambda_cls = 0.8
-        self.lambda_dis = 0.05
         self.explain_mode = False
-        self.global_step = 0
         self.patch_skip_connection()
-        
-        # Removed warmup scheduler
         
     def patch_skip_connection(self):
         """Dynamically adjust skip connection based on actual input shape"""
@@ -240,7 +233,7 @@ class Diversify(Algorithm):
         # Loss calculations
         disc_loss = F.cross_entropy(disc_out1, all_d1)
         ent_loss = Entropylogits(cd1) * self.args.lam + self.criterion(cd1, all_c1)
-        loss = ent_loss + self.lambda_dis * disc_loss
+        loss = ent_loss + 0.05 * disc_loss  # Fixed lambda_dis
         
         # Optimization
         opt.zero_grad()
@@ -390,11 +383,9 @@ class Diversify(Algorithm):
         all_z = self.bottleneck(self.featurizer(all_x))
         if self.explain_mode:
             all_z = all_z.clone()
-        self.global_step += 1
-        
-        # Constant alpha (removed warmup)
-        alpha = 1.0
-        disc_input = Adver_network.ReverseLayerF.apply(all_z, alpha)
+            
+        # Constant alpha
+        disc_input = Adver_network.ReverseLayerF.apply(all_z, 1.0)
         disc_out = self.discriminator(disc_input)
         
         # Domain labels
@@ -404,7 +395,7 @@ class Diversify(Algorithm):
         disc_loss = F.cross_entropy(disc_out, disc_labels)
         all_preds = self.classifier(all_z)
         classifier_loss = self.criterion(all_preds, all_y)
-        loss = self.lambda_cls * classifier_loss + self.lambda_dis * disc_loss
+        loss = 0.8 * classifier_loss + 0.05 * disc_loss  # Fixed lambdas
         
         # Optimization
         opt.zero_grad()

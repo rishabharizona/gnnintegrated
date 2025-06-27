@@ -904,75 +904,75 @@ def main(args):
     print(f'\n🎯 Final Target Accuracy: {target_acc:.4f}')
     
     if getattr(args, 'enable_shap', False):
-    print("\n📊 Running SHAP explainability...")
-    try:
-        # Prepare background and evaluation data
-        if args.use_gnn and GNN_AVAILABLE:
-            # Batch graph data properly
-            background = next(iter(valid_loader))[0].to(args.device)
-            X_eval = background[:5]
-        else:
-            background = get_background_batch(valid_loader, size=32).cuda()
-            X_eval = background[:5]
-
-        disable_inplace_relu(algorithm)
-        
-        # Compute SHAP values with proper input types
-        shap_explanation = safe_compute_shap_values(algorithm, background, X_eval)
-        shap_vals = shap_explanation.values
-        print(f"SHAP values shape: {shap_vals.shape}")
-
-        # Convert to numpy for visualization
-        if args.use_gnn and GNN_AVAILABLE:
-            # Handle batched graph data
-            X_eval_np = [d.x.detach().cpu().numpy() for d in X_eval.to_data_list()[:5]]
-        else:
-            X_eval_np = X_eval.detach().cpu().numpy()
-
-        # Visualization paths
-        if args.use_gnn and GNN_AVAILABLE:
-            # Process SHAP values for graph data
-            if isinstance(shap_vals, list):
-                shap_vals = [np.abs(sv).sum(axis=-1) for sv in shap_vals]
-            plot_emg_shap_4d(X_eval_np[0], shap_vals[0], 
-                            output_path=os.path.join(args.output, "shap_gnn_sample.html"))
-        else:
-            try:
-                plot_summary(shap_vals, X_eval_np, 
-                            output_path=os.path.join(args.output, "shap_summary.png"))
-            except IndexError:
-                plot_emg_shap_4d(X_eval_np, shap_vals, 
-                                output_path=os.path.join(args.output, "shap_3d_fallback.html"))
-                
-            overlay_signal_with_shap(X_eval_np[0], shap_vals, 
-                                    output_path=os.path.join(args.output, "shap_overlay.png"))
-            plot_shap_heatmap(shap_vals, 
-                             output_path=os.path.join(args.output, "shap_heatmap.png"))
-        
-        # Save results and generate confusion matrix
-        save_path = os.path.join(args.output, "shap_values.npy")
-        save_shap_numpy(shap_vals, save_path=save_path)
-        
-        true_labels, pred_labels = [], []
-        for data in valid_loader:
-            inputs = data[0].to(args.device)
-            y = data[1]
+        print("\n📊 Running SHAP explainability...")
+        try:
+            # Prepare background and evaluation data
+            if args.use_gnn and GNN_AVAILABLE:
+                # Batch graph data properly
+                background = next(iter(valid_loader))[0].to(args.device)
+                X_eval = background[:5]
+            else:
+                background = get_background_batch(valid_loader, size=32).cuda()
+                X_eval = background[:5]
+    
+            disable_inplace_relu(algorithm)
             
-            with torch.no_grad():
-                preds = algorithm.predict(inputs).cpu()
-                true_labels.extend(y.cpu().numpy())
-                pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
-        
-        cm = confusion_matrix(true_labels, pred_labels)
-        disp = ConfusionMatrixDisplay(confusion_matrix=cm)
-        disp.plot(cmap="Blues")
-        plt.title("Confusion Matrix (Validation Set)")
-        plt.savefig(os.path.join(args.output, "confusion_matrix.png"), dpi=300)
-        plt.close()
-        
-        print("✅ SHAP analysis completed successfully")
-    except Exception as e:
-        print(f"[ERROR] SHAP analysis failed: {str(e)}")
+            # Compute SHAP values with proper input types
+            shap_explanation = safe_compute_shap_values(algorithm, background, X_eval)
+            shap_vals = shap_explanation.values
+            print(f"SHAP values shape: {shap_vals.shape}")
+    
+            # Convert to numpy for visualization
+            if args.use_gnn and GNN_AVAILABLE:
+                # Handle batched graph data
+                X_eval_np = [d.x.detach().cpu().numpy() for d in X_eval.to_data_list()[:5]]
+            else:
+                X_eval_np = X_eval.detach().cpu().numpy()
+    
+            # Visualization paths
+            if args.use_gnn and GNN_AVAILABLE:
+                # Process SHAP values for graph data
+                if isinstance(shap_vals, list):
+                    shap_vals = [np.abs(sv).sum(axis=-1) for sv in shap_vals]
+                plot_emg_shap_4d(X_eval_np[0], shap_vals[0], 
+                                output_path=os.path.join(args.output, "shap_gnn_sample.html"))
+            else:
+                try:
+                    plot_summary(shap_vals, X_eval_np, 
+                                output_path=os.path.join(args.output, "shap_summary.png"))
+                except IndexError:
+                    plot_emg_shap_4d(X_eval_np, shap_vals, 
+                                    output_path=os.path.join(args.output, "shap_3d_fallback.html"))
+                    
+                overlay_signal_with_shap(X_eval_np[0], shap_vals, 
+                                        output_path=os.path.join(args.output, "shap_overlay.png"))
+                plot_shap_heatmap(shap_vals, 
+                                 output_path=os.path.join(args.output, "shap_heatmap.png"))
+            
+            # Save results and generate confusion matrix
+            save_path = os.path.join(args.output, "shap_values.npy")
+            save_shap_numpy(shap_vals, save_path=save_path)
+            
+            true_labels, pred_labels = [], []
+            for data in valid_loader:
+                inputs = data[0].to(args.device)
+                y = data[1]
+                
+                with torch.no_grad():
+                    preds = algorithm.predict(inputs).cpu()
+                    true_labels.extend(y.cpu().numpy())
+                    pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
+            
+            cm = confusion_matrix(true_labels, pred_labels)
+            disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+            disp.plot(cmap="Blues")
+            plt.title("Confusion Matrix (Validation Set)")
+            plt.savefig(os.path.join(args.output, "confusion_matrix.png"), dpi=300)
+            plt.close()
+            
+            print("✅ SHAP analysis completed successfully")
+        except Exception as e:
+            print(f"[ERROR] SHAP analysis failed: {str(e)}")
     
     try:
         plt.figure(figsize=(12, 8))

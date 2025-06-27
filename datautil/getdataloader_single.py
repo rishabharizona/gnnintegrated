@@ -78,8 +78,8 @@ class SafeSubset(Subset):
         elif isinstance(data, torch.Tensor):
             return data
         elif isinstance(data, Data):
-            # Correctly handle PyG Data objects
-            for key in data.keys:
+            # FIXED: Use keys() method instead of keys attribute
+            for key in data.keys():
                 if hasattr(data, key):
                     setattr(data, key, self.convert_data(getattr(data, key)))
             return data

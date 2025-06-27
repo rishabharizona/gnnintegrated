@@ -258,14 +258,22 @@ class EMGDataAugmentation(nn.Module):
                 # Apply warping based on input dimensions
                 if x.dim() == 4:  # CNN format: [batch, channels, 1, time]
                     if torch.rand(1) > 0.5:  # Forward warp
-                        x = torch.cat([x[:, :, :, warp_amount:], x[:, :, :, :warp_amount]], dim=3)
-                else:  # Backward warp
-                        x = torch.cat([x[:, :, :, -warp_amount:], x[:, :, :, :-warp_amount]], dim=3)
+                        part1 = x[:, :, :, warp_amount:]
+                        part2 = x[:, :, :, :warp_amount]
+                        x = torch.cat([part1, part2], dim=3)
+                    else:  # Backward warp
+                        part1 = x[:, :, :, -warp_amount:]
+                        part2 = x[:, :, :, :-warp_amount]
+                        x = torch.cat([part1, part2], dim=3)
                 elif x.dim() == 3:  # GNN format: [batch, time, channels]
                     if torch.rand(1) > 0.5:  # Forward warp
-                        x = torch.cat([x[:, warp_amount:, :], x[:, :warp_amount, :]], dim=1)
+                        part1 = x[:, warp_amount:, :]
+                        part2 = x[:, :warp_amount, :]
+                        x = torch.cat([part1, part2], dim=1)
                     else:  # Backward warp
-                        x = torch.cat([x[:, -warp_amount:, :], x[:, :-warp_amount, :]], dim=1)
+                        part1 = x[:, -warp_amount:, :]
+                        part2 = x[:, :-warp_amount, :]
+                        x = torch.cat([part1, part2], dim=1)
 
         # Random channel dropout
         if torch.rand(1) < self.aug_prob:

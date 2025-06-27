@@ -20,7 +20,6 @@ from torch.utils.data import ConcatDataset, DataLoader as TorchDataLoader
 from network.act_network import ActNetwork
 
 # Suppress TensorFlow and SHAP warnings
-import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
 import tensorflow as tf
 tf.get_logger().setLevel('ERROR')  # Suppress TensorFlow warnings
@@ -223,7 +222,7 @@ class EMGDataAugmentation(nn.Module):
         self.scaling_std = args.scaling_std
         self.warp_ratio = args.warp_ratio
         self.dropout = nn.Dropout(p=args.channel_dropout)
-        self.aug_prob = getattr(args, 'aug_prob', 0.9)  # Increased from 0.7
+        self.aug_prob = getattr(args, 'aug_prob', 0.5)  # Reduced from 0.7
 
     def forward(self, x):
         # Apply augmentations only during training
@@ -260,7 +259,7 @@ class EMGDataAugmentation(nn.Module):
                 if x.dim() == 4:  # CNN format: [batch, channels, 1, time]
                     if torch.rand(1) > 0.5:  # Forward warp
                         x = torch.cat([x[:, :, :, warp_amount:], x[:, :, :, :warp_amount]], dim=3)
-                    else:  # Backward warp
+                else:  # Backward warp
                         x = torch.cat([x[:, :, :, -warp_amount:], x[:, :, :, :-warp_amount]], dim=3)
                 elif x.dim() == 3:  # GNN format: [batch, time, channels]
                     if torch.rand(1) > 0.5:  # Forward warp
@@ -284,7 +283,7 @@ def get_optimizer_adamw(algorithm, args, nettype='Diversify'):
             params, 
             lr=args.lr,
             weight_decay=args.weight_decay,
-            betas=(0.95, 0.99)  # Smoother momentum
+            betas=(0.9, 0.999)  # Default momentum
         )
     elif args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(
@@ -403,7 +402,7 @@ class EnhancedTemporalGCN(TemporalGCN):
             self.lstm = nn.LSTM(
                 input_size=self.hidden_dim,
                 hidden_size=lstm_hidden_size,
-                num_layers=lstm_layers,
+                num_workers=lstm_layers,
                 batch_first=True,
                 bidirectional=bidirectional,
                 dropout=lstm_dropout if lstm_layers > 1 else 0
@@ -592,7 +591,7 @@ def main(args):
                 hidden_dim=args.gnn_hidden_dim,
                 output_dim=args.gnn_output_dim,
                 graph_builder=graph_builder,
-                n_layers=getattr(args, 'gnn_layers', 9),
+                n_layers=getattr(args, 'gnn_layers', 3),  # Reduced layers
                 use_tcn=getattr(args, 'use_tcn', True)
             ).to(args.device)
         else:
@@ -609,32 +608,23 @@ def main(args):
                 # Handle GNN data differently
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
-                    # Convert PyG Batch to dense tensor
-                    from torch_geometric.utils import to_dense_batch
-                    x_dense, mask = to_dense_batch(inputs.x, inputs.batch)
-                    inputs = x_dense  # [batch_size, max_nodes, features]
+                    labels = batch[1].to(args.device)
+                    domains = batch[2].to(args.device)
+                    x = inputs
                 else:
                     inputs = batch[0].to(args.device).float()
+                    labels = batch[1].to(args.device).long()
+                    domains = batch[2].to(args.device).long()
+                    x = inputs
                 
                 # Handle GNN input format if needed
                 if args.use_gnn and GNN_AVAILABLE:
                     # Convert to (batch, time, channels) format
-                    inputs = inputs.reshape(args.batch_size, -1, 8)
-                    
-                    # Ensure it's 3D: [batch, time, channels]
-                    if inputs.dim() != 3:
-                        # For 4D: [batch, channels, 1, time] -> [batch, time, channels]
-                        if inputs.dim() == 4:
-                            inputs = inputs.squeeze(2).permute(0, 2, 1)
-                        else:
-                            raise ValueError(f"Unsupported GNN input dimension: {inputs.dim()}")
-                    
-                    # Only print first batch shape for verification
-                    if first_batch:
-                        print(f"GNN input shape: {inputs.shape}")
-                        first_batch = False
+                    x = transform_for_gnn(x)
+                    if x.dim() != 3:
+                        raise ValueError(f"GNN requires 3D input (B,T,C), got {x.shape}")
                 
-                features = temp_model(inputs)
+                features = temp_model(x)
                 feature_list.append(features.detach().cpu().numpy())
         
         all_features = np.concatenate(feature_list, axis=0)
@@ -647,9 +637,9 @@ def main(args):
     
     # Batch size adjustment
     if args.latent_domain_num < 6:
-        args.batch_size = 64 * args.latent_domain_num  # Increased from 32
+        args.batch_size = 32 * args.latent_domain_num  # Reduced from 64
     else:
-        args.batch_size = 32 * args.latent_domain_num  # Increased from 16
+        args.batch_size = 16 * args.latent_domain_num  # Reduced from 32
     print(f"Adjusted batch size: {args.batch_size}")
     
     # ====== CREATE MAIN LOADERS WITH SELECTED LOADERCLASS ======
@@ -703,7 +693,7 @@ def main(args):
         )
         
         # Add GNN parameters to args
-        args.gnn_layers = getattr(args, 'gnn_layers', 9)
+        args.gnn_layers = getattr(args, 'gnn_layers', 3)  # Reduced layers
         args.use_tcn = getattr(args, 'use_tcn', True)
         
         # Initialize enhanced GNN model
@@ -864,10 +854,10 @@ def main(args):
     # Early stopping tracking
     best_valid_acc = 0
     epochs_without_improvement = 0
-    early_stopping_patience = getattr(args, 'early_stopping_patience', 3)
+    early_stopping_patience = getattr(args, 'early_stopping_patience', 15)  # Increased patience
     
     # Set gradient clipping norm
-    MAX_GRAD_NORM = 0.1  # Reduced from 5.0 for tighter control
+    MAX_GRAD_NORM = args.max_grad_norm  # Use value from args
     
     # Main training loop
     global_step = 0
@@ -877,13 +867,13 @@ def main(args):
             if round_idx < 20:  # Longer gentle dropout period
                 algorithm.featurizer.dropout.p = 0.01
             else:
-                algorithm.featurizer.dropout.p = 0.03  # Less dropout than before
+                algorithm.featurizer.dropout.p = 0.02  # Reduced dropout
         
         # Adaptive data augmentation
         if round_idx < 10:
-            augmenter.aug_prob = 0.1  # Increased from 0.3
+            augmenter.aug_prob = 0.3  # Moderate augmentation
         else:
-            augmenter.aug_prob = getattr(args, 'aug_prob', 0.1)
+            augmenter.aug_prob = getattr(args, 'aug_prob', 0.3)  # Reduced probability
         
         print(f'\n======== ROUND {round_idx} ========')
         
@@ -1311,11 +1301,13 @@ def main(args):
 
 if __name__ == '__main__':
     args = get_args()
+    # ====================== CRITICAL HYPERPARAMETER OPTIMIZATIONS ======================
+    # Reduced loss weights and regularization
     args.lambda_cls = getattr(args, 'lambda_cls', 1.0)
-    args.lambda_dis = getattr(args, 'lambda_dis', 0.1)
-    args.label_smoothing = getattr(args, 'label_smoothing', 0.3)  # Increased from 0.1
-    args.max_grad_norm = getattr(args, 'max_grad_norm', 1.0)  # Reduced from 5.0
-    args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 20)
+    args.lambda_dis = getattr(args, 'lambda_dis', 0.05)  # Reduced from 0.1
+    args.label_smoothing = getattr(args, 'label_smoothing', 0.1)  # Reduced from 0.2
+    args.max_grad_norm = getattr(args, 'max_grad_norm', 0.5)  # Tighter gradient clipping
+    args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)  # Reduced pretraining
 
     # Add GNN-specific parameters to args
     if not hasattr(args, 'use_gnn'):
@@ -1326,12 +1318,12 @@ if __name__ == '__main__':
             print("[WARNING] GNN requested but not available. Falling back to CNN.")
             args.use_gnn = False
         else:
-            # GNN hyperparameters
+            # Reduced GNN complexity
             args.gnn_hidden_dim = getattr(args, 'gnn_hidden_dim', 64)
-            args.gnn_output_dim = getattr(args, 'gnn_output_dim', 256)
+            args.gnn_output_dim = getattr(args, 'gnn_output_dim', 128)  # Reduced from 256
             args.gnn_layers = getattr(args, 'gnn_layers', 3)
-            args.gnn_lr = getattr(args, 'gnn_lr', 0.001)
-            args.gnn_weight_decay = getattr(args, 'gnn_weight_decay', 0.0001)
+            args.gnn_lr = getattr(args, 'gnn_lr', 0.0005)  # Reduced learning rate
+            args.gnn_weight_decay = getattr(args, 'gnn_weight_decay', 1e-6)  # Reduced
             args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)
             
             # TCN/LSTM parameters
@@ -1339,30 +1331,26 @@ if __name__ == '__main__':
             args.lstm_hidden_size = getattr(args, 'lstm_hidden_size', 128)
             args.lstm_layers = getattr(args, 'lstm_layers', 1)
             args.bidirectional = getattr(args, 'bidirectional', False)
-            args.lstm_dropout = getattr(args, 'lstm_dropout', 0.2)
+            args.lstm_dropout = getattr(args, 'lstm_dropout', 0.1)
 
-    # Increase adversarial weight for better domain adaptation
-    if not hasattr(args, 'adv_weight'):
-        args.adv_weight = 2.0
-
-    # Add new hyperparameters
+    # Optimizer and regularization
     args.optimizer = getattr(args, 'optimizer', 'adamw')
-    args.weight_decay = getattr(args, 'weight_decay', 1e-4)
-    args.domain_adv_weight = getattr(args, 'domain_adv_weight', 0.5)
+    args.weight_decay = getattr(args, 'weight_decay', 1e-6)  # Reduced regularization
+    args.domain_adv_weight = getattr(args, 'domain_adv_weight', 0.1)  # Reduced from 0.3
 
-    # Augmentation parameters
-    args.jitter_scale = getattr(args, 'jitter_scale', 0.05)
-    args.scaling_std = getattr(args, 'scaling_std', 0.1)
-    args.warp_ratio = getattr(args, 'warp_ratio', 0.1)
-    args.channel_dropout = getattr(args, 'channel_dropout', 0.1)
-    args.aug_prob = getattr(args, 'aug_prob', 0.9)  # Increased from 0.7
+    # Augmentation parameters (reduced intensity)
+    args.jitter_scale = getattr(args, 'jitter_scale', 0.005)  # Reduced from 0.01
+    args.scaling_std = getattr(args, 'scaling_std', 0.03)  # Reduced from 0.05
+    args.warp_ratio = getattr(args, 'warp_ratio', 0.02)  # Reduced from 0.05
+    args.channel_dropout = getattr(args, 'channel_dropout', 0.03)  # Reduced from 0.05
+    args.aug_prob = getattr(args, 'aug_prob', 0.5)  # Reduced from 0.7
 
     # Training schedule
     args.max_epoch = getattr(args, 'max_epoch', 100)
-    args.early_stopping_patience = getattr(args, 'early_stopping_patience', 10)
+    args.early_stopping_patience = getattr(args, 'early_stopping_patience', 15)  # Increased
 
     # Domain adaptation
     if not hasattr(args, 'adv_weight'):
-        args.adv_weight = 1.5  # Increased adversarial weight
+        args.adv_weight = 0.5  # Reduced adversarial weight
 
     main(args)

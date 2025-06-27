@@ -193,7 +193,7 @@ def get_optimizer_adamw(algorithm, args, nettype='Diversify'):
             params, 
             lr=args.lr,
             weight_decay=0.0,  # ZERO WEIGHT DECAY
-            betas=(0.9, 0.999)
+            betas=(0.9, 0.999))
     elif args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(
             params, 

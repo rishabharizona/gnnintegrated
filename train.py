@@ -192,20 +192,20 @@ def get_optimizer_adamw(algorithm, args, nettype='Diversify'):
         optimizer = torch.optim.AdamW(
             params, 
             lr=args.lr,
-            weight_decay=0.0,  # ZERO WEIGHT DECAY
+            weight_decay=args.weight_decay,
             betas=(0.9, 0.999))
     elif args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(
             params, 
             lr=args.lr,
             momentum=0.9,
-            weight_decay=0.0,  # ZERO WEIGHT DECAY
+            weight_decay=args.weight_decay,
             nesterov=True)
     else:
         optimizer = torch.optim.Adam(
             params, 
             lr=args.lr,
-            weight_decay=0.0)  # ZERO WEIGHT DECAY
+            weight_decay=args.weight_decay)
     
     return optimizer
 # ======================= TEMPORAL GCN LAYER =======================
@@ -402,6 +402,23 @@ def main(args):
     print(f"Using device: {args.device}")
     os.makedirs(args.output, exist_ok=True)
     
+    # Handle curriculum parameters
+    if getattr(args, 'curriculum', False):
+        # Handle CL_PHASE_EPOCHS: if it's an integer, convert to a list of that integer for 3 phases
+        if hasattr(args, 'CL_PHASE_EPOCHS'):
+            if isinstance(args.CL_PHASE_EPOCHS, int):
+                args.CL_PHASE_EPOCHS = [args.CL_PHASE_EPOCHS] * 3
+            elif not isinstance(args.CL_PHASE_EPOCHS, list):
+                args.CL_PHASE_EPOCHS = [3, 3, 3]  # default
+        else:
+            args.CL_PHASE_EPOCHS = [3, 3, 3]
+        
+        # Similarly for CL_DIFFICULTY
+        if not hasattr(args, 'CL_DIFFICULTY') or not isinstance(args.CL_DIFFICULTY, list):
+            args.CL_DIFFICULTY = [0.2, 0.5, 0.8]  # default
+        
+        print(f"Curriculum settings: Phases={len(args.CL_PHASE_EPOCHS)}, Epochs per phase: {args.CL_PHASE_EPOCHS}, Difficulties: {args.CL_DIFFICULTY}")
+    
     loader_data = get_act_dataloader(args)
     tr = loader_data[4]
     val = loader_data[5]
@@ -565,22 +582,19 @@ def main(args):
         print(f"Created bottlenecks: {input_dim} -> {output_dim}")
         print(f"Bottleneck architecture: {algorithm.bottleneck}")
         
-        if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:
-            if args.lstm_layers > 0 or args.use_tcn:
-                print("Skipping GNN pretraining due to LSTM/TCN integration")
-                args.gnn_pretrain_epochs = 0
-        
+        # Enhanced GNN pretraining
         if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:
             print(f"\n==== GNN Pretraining ({args.gnn_pretrain_epochs} epochs) ====")
             gnn_optimizer = torch.optim.AdamW(
-                gnn_model.parameters(),
+                algorithm.featurizer.parameters(),
                 lr=args.gnn_lr,
-                weight_decay=0.0  # ZERO WEIGHT DECAY
+                weight_decay=0.0
             )
             
             for epoch in range(args.gnn_pretrain_epochs):
                 gnn_model.train()
                 total_loss = 0
+                batch_count = 0
                 for batch in train_loader:
                     if args.use_gnn and GNN_AVAILABLE:
                         inputs = batch[0].to(args.device)
@@ -609,8 +623,11 @@ def main(args):
                     gnn_optimizer.step()
                     
                     total_loss += loss.item()
+                    batch_count += 1
                 
-                print(f'GNN Pretrain Epoch {epoch+1}/{args.gnn_pretrain_epochs}: Loss {total_loss/len(train_loader):.4f}')
+                if batch_count > 0:
+                    avg_loss = total_loss / batch_count
+                    print(f'GNN Pretrain Epoch {epoch+1}/{args.gnn_pretrain_epochs}: Loss {avg_loss:.4f}')
             
             print("GNN pretraining complete")
     
@@ -649,7 +666,7 @@ def main(args):
     epochs_without_improvement = 0
     early_stopping_patience = getattr(args, 'early_stopping_patience', 20)  # INCREASED
     
-    MAX_GRAD_NORM = 0.1  # TIGHTER GRADIENT CLIPPING
+    MAX_GRAD_NORM = 1.0  # Loosened gradient clipping
     
     global_step = 0
     for round_idx in range(args.max_epoch):
@@ -662,22 +679,13 @@ def main(args):
             print(f"Early stopping at epoch {round_idx}")
             break
             
-        if getattr(args, 'curriculum', False):
-            if not hasattr(args, 'CL_PHASE_EPOCHS') or not isinstance(args.CL_PHASE_EPOCHS, list):
-                args.CL_PHASE_EPOCHS = [2, 3, 4]  # REDUCED
-            if not hasattr(args, 'CL_DIFFICULTY') or not isinstance(args.CL_DIFFICULTY, list):
-                args.CL_DIFFICULTY = [0.2, 0.5, 0.8]
-            
-            if round_idx < len(args.CL_PHASE_EPOCHS):
-                current_epochs = args.CL_PHASE_EPOCHS[round_idx]
-                print(f"Curriculum learning: Stage {round_idx} (using {current_epochs} epochs)")
-            else:
-                current_epochs = args.local_epoch
-        else:
-            current_epochs = args.local_epoch
-        
+        # Set current_epochs based on curriculum or default
         if getattr(args, 'curriculum', False) and round_idx < len(args.CL_PHASE_EPOCHS):
-            print(f"Curriculum learning: Stage {round_idx}")
+            current_epochs = args.CL_PHASE_EPOCHS[round_idx]
+            current_difficulty = args.CL_DIFFICULTY[round_idx]
+            print(f"\nCurriculum Stage {round_idx+1}/{len(args.CL_PHASE_EPOCHS)}")
+            print(f"Difficulty: {current_difficulty:.1f}, Epochs: {current_epochs}")
+            
             algorithm.eval()
             
             def curriculum_predict(x):
@@ -692,27 +700,30 @@ def main(args):
             evaluator = CurriculumEvaluator()
             
             curriculum_dataset = get_curriculum_loader(
-            args,
-            evaluator,
-            tr,
-            val,
-            stage=round_idx
+                args,
+                evaluator,
+                tr,
+                val,
+                stage=round_idx,
+                difficulty=current_difficulty
             )
             train_loader = LoaderClass(
-            curriculum_dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
-            num_workers=min(2, args.N_WORKERS),
-            drop_last=False
+                curriculum_dataset,
+                batch_size=args.batch_size,
+                shuffle=True,
+                num_workers=min(2, args.N_WORKERS),
+                drop_last=False
             )
             train_loader_noshuffle = LoaderClass(
                 curriculum_dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
                 num_workers=min(1, args.N_WORKERS),
-                drop_last=False  # MINIMAL
+                drop_last=False
             )
             algorithm.train()
+        else:
+            current_epochs = args.local_epoch
         
         print('\n==== Feature update ====')
         print_row(['epoch', 'class_loss'], colwidth=15)
@@ -903,63 +914,129 @@ def main(args):
             
     print(f'\n🎯 Final Target Accuracy: {target_acc:.4f}')
     
+    # ======================= SHAP EXPLAINABILITY =======================
     if getattr(args, 'enable_shap', False):
         print("\n📊 Running SHAP explainability...")
         try:
             # Prepare background and evaluation data
-            if args.use_gnn and GNN_AVAILABLE:
-                # Batch graph data properly
-                background = next(iter(valid_loader))[0].to(args.device)
-                X_eval = background[:5]
-            else:
-                background = get_background_batch(valid_loader, size=32).cuda()
-                X_eval = background[:5]
-    
+            background = get_background_batch(valid_loader, size=64).cuda()
+            X_eval = background[:10]
+            
+            # Disable inplace operations in the model
             disable_inplace_relu(algorithm)
             
-            # Compute SHAP values with proper input types
+            # Create transform wrapper for GNN if needed
+            transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
+                
+            # Transform background and X_eval if necessary
+            if transform_fn is not None:
+                background = transform_fn(background)
+                X_eval = transform_fn(X_eval)
+            
+            # Compute SHAP values safely
             shap_explanation = safe_compute_shap_values(algorithm, background, X_eval)
+            
+            # Extract values from Explanation object
             shap_vals = shap_explanation.values
             print(f"SHAP values shape: {shap_vals.shape}")
-    
-            # Convert to numpy for visualization
-            if args.use_gnn and GNN_AVAILABLE:
-                # Handle batched graph data
-                X_eval_np = [d.x.detach().cpu().numpy() for d in X_eval.to_data_list()[:5]]
-            else:
-                X_eval_np = X_eval.detach().cpu().numpy()
-    
-            # Visualization paths
-            if args.use_gnn and GNN_AVAILABLE:
-                # Process SHAP values for graph data
-                if isinstance(shap_vals, list):
-                    shap_vals = [np.abs(sv).sum(axis=-1) for sv in shap_vals]
-                plot_emg_shap_4d(X_eval_np[0], shap_vals[0], 
-                                output_path=os.path.join(args.output, "shap_gnn_sample.html"))
-            else:
-                try:
-                    plot_summary(shap_vals, X_eval_np, 
-                                output_path=os.path.join(args.output, "shap_summary.png"))
-                except IndexError:
-                    plot_emg_shap_4d(X_eval_np, shap_vals, 
-                                    output_path=os.path.join(args.output, "shap_3d_fallback.html"))
-                    
-                overlay_signal_with_shap(X_eval_np[0], shap_vals, 
-                                        output_path=os.path.join(args.output, "shap_overlay.png"))
-                plot_shap_heatmap(shap_vals, 
-                                 output_path=os.path.join(args.output, "shap_heatmap.png"))
             
-            # Save results and generate confusion matrix
+            # Convert to numpy safely before visualization
+            X_eval_np = X_eval.detach().cpu().numpy()
+            
+            # Handle GNN dimensionality for visualization
+            if args.use_gnn and GNN_AVAILABLE:
+                print(f"Original SHAP values shape: {shap_vals.shape}")
+                print(f"Original X_eval shape: {X_eval_np.shape}")
+                
+                # If 4D, reduce to 3D by summing over classes
+                if shap_vals.ndim == 4:
+                    # Sum across classes to get overall feature importance
+                    shap_vals = np.abs(shap_vals).sum(axis=-1)
+                    print(f"SHAP values after class sum: {shap_vals.shape}")
+                
+                # Now we should have 3D: [batch, time, channels]
+                if shap_vals.ndim == 3:
+                    # Convert to [batch, channels, 1, time] for visualization
+                    shap_vals = np.transpose(shap_vals, (0, 2, 1))
+                    shap_vals = np.expand_dims(shap_vals, axis=2)
+                    
+                    X_eval_np = np.transpose(X_eval_np, (0, 2, 1))
+                    X_eval_np = np.expand_dims(X_eval_np, axis=2)
+                else:
+                    print(f"⚠️ Unexpected SHAP values dimension: {shap_vals.ndim}")
+                    print("Skipping visualization-specific reshaping")
+            
+            # Generate core visualizations
+            try:
+                plot_summary(shap_vals, X_eval_np, 
+                            output_path=os.path.join(args.output, "shap_summary.png"))
+            except IndexError as e:
+                print(f"SHAP summary plot dimension error: {str(e)}")
+                print(f"Using fallback 3D visualization instead")
+                plot_emg_shap_4d(X_eval, shap_vals, 
+                                output_path=os.path.join(args.output, "shap_3d_fallback.html"))
+            
+            overlay_signal_with_shap(X_eval_np[0], shap_vals, 
+                                    output_path=os.path.join(args.output, "shap_overlay.png"))
+            plot_shap_heatmap(shap_vals, 
+                            output_path=os.path.join(args.output, "shap_heatmap.png"))
+            
+            # Evaluate SHAP impact
+            base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
+            
+            # Save SHAP values
             save_path = os.path.join(args.output, "shap_values.npy")
             save_shap_numpy(shap_vals, save_path=save_path)
             
+            # Compute impact metrics
+            print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
+            print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
+            print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
+            print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals):.4f}")
+            
+            # Compute advanced metrics
+            metrics = evaluate_advanced_shap_metrics(shap_vals, X_eval)
+            print(f"[SHAP] Entropy: {metrics.get('shap_entropy', 0):.4f}")
+            print(f"[SHAP] Coherence: {metrics.get('feature_coherence', 0):.4f}")
+            print(f"[SHAP] Channel Variance: {metrics.get('channel_variance', 0):.4f}")
+            print(f"[SHAP] Temporal Entropy: {metrics.get('temporal_entropy', 0):.4f}")
+            print(f"[SHAP] Mutual Info: {metrics.get('mutual_info', 0):.4f}")
+            print(f"[SHAP] PCA Alignment: {metrics.get('pca_alignment', 0):.4f}")
+            
+            # Compute similarity metrics between first two samples
+            shap_array = _get_shap_array(shap_vals)
+            if len(shap_array) >= 2:
+                # Extract SHAP values for first two samples
+                sample1 = shap_array[0]
+                sample2 = shap_array[1]
+                
+                print(f"[SHAP] Jaccard (top-10): {compute_jaccard_topk(sample1, sample2, k=10):.4f}")
+                print(f"[SHAP] Kendall's Tau: {compute_kendall_tau(sample1, sample2):.4f}")
+                print(f"[SHAP] Cosine Similarity: {cosine_similarity_shap(sample1, sample2):.4f}")
+            else:
+                print("[SHAP] Not enough samples for similarity metrics")
+            
+            # Generate 4D visualizations
+            plot_emg_shap_4d(X_eval, shap_vals, 
+                            output_path=os.path.join(args.output, "shap_4d_scatter.html"))
+            plot_4d_shap_surface(shap_vals, 
+                                output_path=os.path.join(args.output, "shap_4d_surface.html"))
+            
+            # Confusion matrix
             true_labels, pred_labels = [], []
             for data in valid_loader:
-                inputs = data[0].to(args.device)
-                y = data[1]
+                if args.use_gnn and GNN_AVAILABLE:
+                    x = data[0].to(args.device)
+                    y = data[1]
+                else:
+                    x = data[0].to(args.device).float()
+                    y = data[1]
                 
                 with torch.no_grad():
-                    preds = algorithm.predict(inputs).cpu()
+                    # Apply transform for GNN if needed
+                    if args.use_gnn and GNN_AVAILABLE:
+                        x = transform_for_gnn(x)
+                    preds = algorithm.predict(x).cpu()
                     true_labels.extend(y.cpu().numpy())
                     pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
             
@@ -973,6 +1050,9 @@ def main(args):
             print("✅ SHAP analysis completed successfully")
         except Exception as e:
             print(f"[ERROR] SHAP analysis failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    # ======================= END SHAP SECTION =======================
     
     try:
         plt.figure(figsize=(12, 8))
@@ -1027,8 +1107,8 @@ if __name__ == '__main__':
     args.lambda_cls = getattr(args, 'lambda_cls', 1.0)
     args.lambda_dis = getattr(args, 'lambda_dis', 0.01)  # MINIMAL
     args.label_smoothing = 0.0  # DISABLED
-    args.max_grad_norm = 0.1  # TIGHTER GRADIENT CLIPPING
-    args.gnn_pretrain_epochs = 0  # DISABLED
+    args.max_grad_norm = 1.0  # Loosened gradient clipping
+    args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)  # Enabled with 5 epochs
 
     # GNN parameters minimized
     if not hasattr(args, 'use_gnn'):
@@ -1039,23 +1119,23 @@ if __name__ == '__main__':
             print("[WARNING] GNN requested but not available. Falling back to CNN.")
             args.use_gnn = False
         else:
-            args.gnn_hidden_dim = getattr(args, 'gnn_hidden_dim', 32)  # MINIMAL
-            args.gnn_output_dim = getattr(args, 'gnn_output_dim', 64)  # MINIMAL
+            args.gnn_hidden_dim = getattr(args, 'gnn_hidden_dim', 64)  # Increased
+            args.gnn_output_dim = getattr(args, 'gnn_output_dim', 128)  # Increased
             args.gnn_layers = 1  # MINIMAL LAYERS
             args.gnn_lr = getattr(args, 'gnn_lr', 0.00005)  # MINIMAL
             args.gnn_weight_decay = 0.0  # DISABLED
             
             args.use_tcn = getattr(args, 'use_tcn', True)
-            args.lstm_hidden_size = 32  # MINIMAL
+            args.lstm_hidden_size = 64  # Increased
             args.lstm_layers = 1
             args.bidirectional = False  # DISABLED
             args.lstm_dropout = 0.0  # DISABLED
 
     # Optimizer settings minimized
     args.optimizer = getattr(args, 'optimizer', 'adamw')
-    args.weight_decay = 0.0  # DISABLED
-    args.domain_adv_weight = 0.0  # DISABLED
-    args.lr = 0.00005  # MINIMAL LEARNING RATE
+    args.weight_decay = 1e-4  # Enable weight decay
+    args.domain_adv_weight = 0.1  # Enable domain adaptation
+    args.lr = 0.0001  # Increased learning rate
 
     # Augmentation completely disabled
     args.jitter_scale = 0.0

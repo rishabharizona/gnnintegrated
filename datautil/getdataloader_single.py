@@ -219,6 +219,12 @@ def get_act_dataloader(args):
 
 def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     """Create curriculum data loader based on domain difficulty"""
+    # Get difficulty threshold for current stage
+    if stage < len(args.CL_DIFFICULTY):
+        difficulty_threshold = args.CL_DIFFICULTY[stage]
+    else:
+        difficulty_threshold = 1.0  # Use all domains if stage exceeds threshold list
+    
     # Helper function to detect graph data format
     def is_graph_data(dataset):
         if len(dataset) == 0:
@@ -307,11 +313,20 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # Sort domains by difficulty (easiest first)
     domain_scores.sort(key=lambda x: x[1])
     
-    # Curriculum progression
-    total_stages = len(args.CL_PHASE_EPOCHS)
-    progress = min(1.0, (stage + 1) / total_stages)
-    num_selected = max(1, int(np.ceil(progress * len(domain_scores))))
-    selected_domains = [domain for domain, _ in domain_scores[:num_selected]]
+    # Select domains below the difficulty threshold
+    selected_domains = []
+    for domain, difficulty in domain_scores:
+        if difficulty <= difficulty_threshold:
+            selected_domains.append(domain)
+        else:
+            # Since domains are sorted by difficulty, we can break early
+            break
+    
+    # Fallback to easiest domain if none selected
+    if not selected_domains:
+        selected_domains = [domain_scores[0][0]]
+        print(f"Warning: No domains below threshold {difficulty_threshold:.2f}, "
+              f"selecting easiest domain: {selected_domains[0]}")
     
     # Collect training samples from selected domains
     selected_indices = []
@@ -335,10 +350,17 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # Fallback to full dataset if no samples selected
     if not selected_indices:
         selected_indices = list(range(len(train_dataset)))
+        print("Warning: No samples found for selected domains, using full dataset")
     
     # Create curriculum subset
     curriculum_subset = SafeSubset(train_dataset, selected_indices)
-    return (curriculum_subset)
+    
+    print(f"Curriculum Stage {stage+1}: Selected {len(selected_domains)} domains "
+          f"(threshold: {difficulty_threshold:.2f}, "
+          f"domains: {selected_domains}, "
+          f"samples: {len(selected_indices)})")
+    
+    return curriculum_subset
     # Use proper loader based on data type
     #if is_graph_data(curriculum_subset):
     #    return get_gnn_dataloader(curriculum_subset, args.batch_size, 0, True)

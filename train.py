@@ -20,11 +20,11 @@ from torch.utils.data import ConcatDataset, DataLoader as TorchDataLoader
 from network.act_network import ActNetwork
 
 # Suppress TensorFlow and SHAP warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
-tf.get_logger().setLevel('ERROR')  # Suppress TensorFlow warnings
+tf.get_logger().setLevel('ERROR')
 import logging
-logging.getLogger("shap").setLevel(logging.WARNING)  # Suppress SHAP warnings
+logging.getLogger("shap").setLevel(logging.WARNING)
 
 # Unified SHAP utilities import
 from shap_utils import (
@@ -60,7 +60,6 @@ def automated_k_estimation(features, k_min=2, k_max=10):
         kmeans = KMeans(n_clusters=k, random_state=42, n_init=10).fit(features)
         labels = kmeans.labels_
         
-        # Skip if only one cluster exists
         if len(np.unique(labels)) < 2:
             silhouette = -1
             dbi = float('inf')
@@ -70,12 +69,11 @@ def automated_k_estimation(features, k_min=2, k_max=10):
             dbi = davies_bouldin_score(features, labels)
             ch_score = calinski_harabasz_score(features, labels)
         
-        # Combine scores: higher silhouette and CH are better, lower DBI is better
+        # Minimal parameter impact
         norm_silhouette = (silhouette + 1) / 2
         norm_dbi = 1 / (1 + dbi)
         norm_ch = ch_score / 1000
         
-        # Combined score gives weight to all three metrics
         combined_score = (0.5 * norm_silhouette) + (0.3 * norm_ch) + (0.2 * norm_dbi)
         scores.append((k, silhouette, dbi, ch_score, combined_score))
         
@@ -89,97 +87,61 @@ def automated_k_estimation(features, k_min=2, k_max=10):
     return best_k
 
 def calculate_h_divergence(features_source, features_target):
-    """
-    Calculate h-divergence between source and target domain features
-    
-    Args:
-        features_source: Features from source domain (numpy array)
-        features_target: Features from target domain (numpy array)
-        
-    Returns:
-        h_divergence: Domain discrepancy measure
-        domain_acc: Domain classifier accuracy
-    """
-    # Create domain labels: 0 for source, 1 for target
+    """Minimal domain discrepancy calculation"""
     labels_source = np.zeros(features_source.shape[0])
     labels_target = np.ones(features_target.shape[0])
     
-    # Combine features and labels
     X = np.vstack([features_source, features_target])
     y = np.hstack([labels_source, labels_target])
     
-    # Shuffle the data
     indices = np.random.permutation(len(X))
     X = X[indices]
     y = y[indices]
     
-    # Split into train and test sets (80-20)
     split = int(0.8 * len(X))
     X_train, X_test = X[:split], X[split:]
     y_train, y_test = y[:split], y[split:]
     
-    # Train a simple domain classifier
-    domain_classifier = LogisticRegression(max_iter=1000, random_state=42)
+    domain_classifier = LogisticRegression(max_iter=500, random_state=42)
     domain_classifier.fit(X_train, y_train)
     
-    # Evaluate on test set
     domain_acc = domain_classifier.score(X_test, y_test)
-    
-    # Calculate h-divergence: d = 2(1 - 2ε)
     h_divergence = 2 * (1 - 2 * (1 - domain_acc))
     
     return h_divergence, domain_acc
 
 def transform_for_gnn(x):
-    """Robust transformation for GNN input handling various formats"""
     if not GNN_AVAILABLE:
         return x
     
-    # Import PyG modules only when needed
     from torch_geometric.data import Data
     from torch_geometric.utils import to_dense_batch
     
-    # Handle PyG Data objects directly
     if isinstance(x, Data):
-        # Convert to dense representation
         x_dense, mask = to_dense_batch(x.x, x.batch)
         return x_dense
     
-    # Handle common 4D formats
     if x.dim() == 4:
-        # Format 1: [batch, channels, 1, time] -> [batch, time, channels]
         if x.size(1) == 8 or x.size(1) == 200:
             return x.squeeze(2).permute(0, 2, 1)
-        # Format 2: [batch, 1, channels, time] -> [batch, time, channels]
         elif x.size(2) == 8 or x.size(2) == 200:
             return x.squeeze(1).permute(0, 2, 1)
-        # Format 3: [batch, time, 1, channels] -> [batch, time, channels]
         elif x.size(3) == 8 or x.size(3) == 200:
             return x.squeeze(2)
-        # New format: [batch, time, channels, 1]
         elif x.size(3) == 1 and (x.size(2) == 8 or x.size(2) == 200):
             return x.squeeze(3)
     
-    # Handle 3D formats
     elif x.dim() == 3:
-        # Format 1: [batch, channels, time] -> [batch, time, channels]
         if x.size(1) == 8 or x.size(1) == 200:
             return x.permute(0, 2, 1)
-        # Format 2: [batch, time, channels] - already correct
         elif x.size(2) == 8 or x.size(2) == 200:
             return x
     
-    # Unsupported format
-    raise ValueError(
-        f"Cannot transform input of shape {x.shape if hasattr(x, 'shape') else type(x)} for GNN. "
-        f"Expected formats: PyG Data object, [B, C, 1, T], [B, 1, C, T], [B, T, 1, C], [B, T, C, 1], "
-        f"or 3D formats [B, C, T] or [B, T, C] where C is 8 or 200."
-    )
+    raise ValueError(f"Cannot transform input shape {x.shape} for GNN")
 
 # ======================= TEMPORAL CONVOLUTION BLOCK =======================
 class TemporalBlock(nn.Module):
-    """Temporal Convolution Block for TCN"""
-    def __init__(self, n_inputs, n_outputs, kernel_size, stride, dilation, dropout=0.2):
+    def __init__(self, n_inputs, n_outputs, kernel_size, stride, dilation, dropout=0.0):  # ZERO DROPOUT
         super().__init__()
         padding = (kernel_size - 1) * dilation
         
@@ -188,7 +150,6 @@ class TemporalBlock(nn.Module):
             stride=stride, padding=padding, dilation=dilation
         ))
         self.activation = nn.GELU()
-        self.dropout = nn.Dropout(dropout)
         self.downsample = nn.Conv1d(n_inputs, n_outputs, 1) if n_inputs != n_outputs else None
         self.init_weights()
         self.padding = padding
@@ -201,11 +162,9 @@ class TemporalBlock(nn.Module):
     def forward(self, x):
         residual = x
         out = self.conv1(x)
-        # Remove excess padding from convolution
         if self.padding != 0:
             out = out[:, :, :-self.padding]
         out = self.activation(out)
-        out = self.dropout(out)
         
         if self.downsample is not None:
             residual = self.downsample(residual)
@@ -214,97 +173,39 @@ class TemporalBlock(nn.Module):
 
 # ======================= DATA AUGMENTATION MODULE =======================
 class EMGDataAugmentation(nn.Module):
-    """Augmentation module for EMG signals"""
     def __init__(self, args):
         super().__init__()
         self.args = args
-        self.jitter_scale = args.jitter_scale
-        self.scaling_std = args.scaling_std
-        self.warp_ratio = args.warp_ratio
-        self.dropout = nn.Dropout(p=args.channel_dropout)
-        self.aug_prob = getattr(args, 'aug_prob', 0.5)  # Reduced from 0.7
+        self.jitter_scale = 0.0  # MINIMAL
+        self.scaling_std = 0.0  # MINIMAL
+        self.warp_ratio = 0.0  # MINIMAL
+        self.aug_prob = 0.0  # MINIMAL
 
     def forward(self, x):
-        # Apply augmentations only during training
-        if not self.training:
-            return x
-
-        # Random jitter (additive Gaussian noise)
-        if torch.rand(1) < self.aug_prob:
-            noise = torch.randn_like(x) * self.jitter_scale
-            x = x + noise
-
-        # Random scaling
-        if torch.rand(1) < self.aug_prob:
-            # Create scale factor with proper dimensions for broadcasting
-            scale_factor = torch.randn(x.size(0), *([1] * (x.dim() - 1)), device=x.device)
-            scale_factor = scale_factor * self.scaling_std + 0.1
-            x = x * scale_factor
-
-        # Random time warping - fixed for both 3D and 4D inputs
-        if torch.rand(1) < self.aug_prob and self.warp_ratio > 0:
-            # Calculate warp_amount first
-            if x.dim() == 4:  # [batch, channels, 1, time]
-                seq_len = x.size(3)
-            elif x.dim() == 3:  # [batch, time, channels]
-                seq_len = x.size(1)
-            else:
-                seq_len = x.size(-1)  # Last dimension as fallback
-            
-            warp_amount = int(torch.rand(1).item() * self.warp_ratio * seq_len)
-            warp_amount = min(warp_amount, seq_len - 1)  # Ensure valid slice
-            
-            if warp_amount > 0:
-                # Apply warping based on input dimensions
-                if x.dim() == 4:  # CNN format: [batch, channels, 1, time]
-                    if torch.rand(1) > 0.5:  # Forward warp
-                        part1 = x[:, :, :, warp_amount:]
-                        part2 = x[:, :, :, :warp_amount]
-                        x = torch.cat([part1, part2], dim=3)
-                    else:  # Backward warp
-                        part1 = x[:, :, :, -warp_amount:]
-                        part2 = x[:, :, :, :-warp_amount]
-                        x = torch.cat([part1, part2], dim=3)
-                elif x.dim() == 3:  # GNN format: [batch, time, channels]
-                    if torch.rand(1) > 0.5:  # Forward warp
-                        part1 = x[:, warp_amount:, :]
-                        part2 = x[:, :warp_amount, :]
-                        x = torch.cat([part1, part2], dim=1)
-                    else:  # Backward warp
-                        part1 = x[:, -warp_amount:, :]
-                        part2 = x[:, :-warp_amount, :]
-                        x = torch.cat([part1, part2], dim=1)
-
-        # Random channel dropout
-        if torch.rand(1) < self.aug_prob:
-            x = self.dropout(x)
-
-        return x
+        return x  # COMPLETELY DISABLED
 
 # ======================= OPTIMIZER FUNCTION =======================
 def get_optimizer_adamw(algorithm, args, nettype='Diversify'):
-    """Get optimizer with configurable parameters"""
     params = algorithm.parameters()
     
     if args.optimizer == 'adamw':
         optimizer = torch.optim.AdamW(
             params, 
             lr=args.lr,
-            weight_decay=args.weight_decay,
-            betas=(0.9, 0.999)  # Default momentum
-        )
+            weight_decay=0.0,  # ZERO WEIGHT DECAY
+            betas=(0.9, 0.999)
     elif args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(
             params, 
             lr=args.lr,
             momentum=0.9,
-            weight_decay=args.weight_decay,
+            weight_decay=0.0,  # ZERO WEIGHT DECAY
             nesterov=True)
-    else:  # Default to Adam
+    else:
         optimizer = torch.optim.Adam(
             params, 
             lr=args.lr,
-            weight_decay=args.weight_decay)
+            weight_decay=0.0)  # ZERO WEIGHT DECAY
     
     return optimizer
 # ======================= TEMPORAL GCN LAYER =======================
@@ -314,13 +215,10 @@ class TemporalGCNLayer(nn.Module):
         self.graph_builder = graph_builder
         self.linear = nn.Linear(input_dim, output_dim)
         self.activation = nn.GELU()
-        self.dropout = nn.Dropout(0.1)
         
     def forward(self, x):
-        # x shape: [batch, time, features]
         batch_size, seq_len, n_features = x.shape
         
-        # Get edge indices for all samples in the batch
         edge_indices = self.graph_builder.build_graph_for_batch(x)
         
         outputs = []
@@ -328,7 +226,6 @@ class TemporalGCNLayer(nn.Module):
             sample_features = x[i]
             edge_index = edge_indices[i]
             
-            # Create sparse adjacency matrix
             if edge_index.numel() > 0:
                 adj_matrix = torch.sparse_coo_tensor(
                     edge_index,
@@ -338,39 +235,30 @@ class TemporalGCNLayer(nn.Module):
             else:
                 adj_matrix = torch.eye(seq_len, device=x.device)
                 
-            # Graph convolution: A * X
             conv_result = torch.mm(adj_matrix, sample_features)
             outputs.append(conv_result)
         
         x = torch.stack(outputs, dim=0)
         x = self.linear(x)
         x = self.activation(x)
-        x = self.dropout(x)
         return x
 # ======================= ENHANCED GNN ARCHITECTURE =======================
 class EnhancedTemporalGCN(TemporalGCN):
     def __init__(self, *args, **kwargs):
-        # Extract parameters specific to EnhancedTemporalGCN
-        self.n_layers = kwargs.pop('n_layers', 3)
+        self.n_layers = kwargs.pop('n_layers', 1)  # MINIMAL LAYERS
         self.use_tcn = kwargs.pop('use_tcn', False)
         
-        # Extract LSTM parameters
-        lstm_hidden_size = kwargs.pop('lstm_hidden_size', 128)
+        lstm_hidden_size = kwargs.pop('lstm_hidden_size', 64)  # REDUCED
         lstm_layers = kwargs.pop('lstm_layers', 1)
         bidirectional = kwargs.pop('bidirectional', False)
-        lstm_dropout = kwargs.pop('lstm_dropout', 0.2)
         
-        # Now call super with cleaned kwargs
         super().__init__(*args, **kwargs)
         
-        # Define skip connection layer
         self.skip_conn = nn.Linear(self.hidden_dim, self.output_dim)
         
-        # Enhanced GNN architecture
         self.gnn_layers = nn.ModuleList()
         self.norms = nn.ModuleList()
         
-        # Build GNN layers with normalization
         for i in range(self.n_layers):
             layer = TemporalGCNLayer(
                 input_dim=self.input_dim if i == 0 else self.hidden_dim,
@@ -380,57 +268,47 @@ class EnhancedTemporalGCN(TemporalGCN):
             self.gnn_layers.append(layer)
             self.norms.append(nn.LayerNorm(self.hidden_dim))
         
-        # Add attention mechanism
         self.attention = nn.MultiheadAttention(
             embed_dim=self.hidden_dim,
-            num_heads=4,
-            dropout=0.1,
+            num_heads=2,  # REDUCED HEADS
+            dropout=0.0,  # ZERO DROPOUT
             batch_first=True
         )
         
-        # Add TCN as alternative to LSTM
         if self.use_tcn:
             tcn_layers = []
-            num_channels = [self.hidden_dim] * 3
-            kernel_size = 5
-            dropout = 0.1
+            num_channels = [self.hidden_dim] * 2  # REDUCED LAYERS
+            kernel_size = 3  # REDUCED
             for i in range(len(num_channels)):
                 dilation = 2 ** i
                 in_channels = self.hidden_dim if i == 0 else num_channels[i-1]
                 out_channels = num_channels[i]
                 tcn_layers += [TemporalBlock(
                     in_channels, out_channels, kernel_size,
-                    stride=1, dilation=dilation, dropout=dropout
+                    stride=1, dilation=dilation, dropout=0.0  # ZERO DROPOUT
                 )]
             self.tcn = nn.Sequential(*tcn_layers)
-            # Update projection to match actual output channels
             self.tcn_proj = nn.Linear(num_channels[-1], self.output_dim)
         else:
-            # LSTM remains as fallback
             self.lstm = nn.LSTM(
                 input_size=self.hidden_dim,
                 hidden_size=lstm_hidden_size,
-                num_workers=lstm_layers,
+                num_layers=lstm_layers,
                 batch_first=True,
                 bidirectional=bidirectional,
-                dropout=lstm_dropout if lstm_layers > 1 else 0
+                dropout=0.0  # ZERO DROPOUT
             )
-            # Calculate LSTM output dimension
             lstm_output_dim = lstm_hidden_size * (2 if bidirectional else 1)
             self.lstm_proj = nn.Linear(lstm_output_dim, self.output_dim)
             self.lstm_norm = nn.LayerNorm(lstm_output_dim)
         
-        # Add layer normalization after temporal processing
         self.temporal_norm = nn.LayerNorm(self.output_dim)
         
-        # Add projection head for contrastive learning
         self.projection_head = nn.Sequential(
             nn.Linear(self.output_dim, self.output_dim),
             nn.ReLU(),
             nn.Linear(self.output_dim, self.output_dim)
-        )
         
-        # Initialize weights
         self._init_weights()
 
     def _init_weights(self):
@@ -449,81 +327,51 @@ class EnhancedTemporalGCN(TemporalGCN):
                     nn.init.orthogonal_(param.data)
                 elif 'bias' in name:
                     param.data.fill_(0)
-                    # Set forget gate bias to 1 for better learning
-                    n = param.size(0)
-                    param.data[n//4:n//2].fill_(1)
 
     def forward(self, x):
-        # Convert PyG Data objects to dense tensors
         if hasattr(x, 'x') and hasattr(x, 'batch'):
             from torch_geometric.utils import to_dense_batch
-            # Convert to dense representation
             x, mask = to_dense_batch(x.x, x.batch)
-            # x now has shape [batch_size, max_nodes, features]
         
-        # Now handle tensor formats
-        # Convert 4D input to 3D if necessary
         if x.dim() == 4:
-            # Handle 4D input: [batch, channels, 1, time]
-            # Convert to [batch, time, channels]
             x = x.squeeze(2).permute(0, 2, 1)
         
-        # Input shape verification - allow both 8 (raw) and 200 (embedded)
         if x.size(-1) not in [8, 200]:
-            raise ValueError(
-                f"Input features dim mismatch! Expected 8 (raw) or 200 (embedded), "
-                f"got {x.size(-1)}. Full shape: {x.shape}"
-            )
+            raise ValueError(f"Input features dim mismatch! Expected 8 or 200, got {x.size(-1)}")
         
-        # Apply feature projection if needed (200 -> 8)
         if x.size(-1) == 200 and self.input_dim == 8:
             if not hasattr(self, 'feature_projection'):
-                # Create projection layer if not exists
                 self.feature_projection = nn.Linear(200, 8).to(x.device)
-                print("Created feature projection layer: 200 -> 8")
             x = self.feature_projection(x)
         
-        # Store original input for skip connection
         original_x = x.clone()
         
-        # GNN processing with normalization
-        gnn_features = x  # We'll keep track of the GNN processed features
+        gnn_features = x
         for layer, norm in zip(self.gnn_layers, self.norms):
             gnn_features = layer(gnn_features)
             gnn_features = norm(gnn_features)
             gnn_features = F.gelu(gnn_features)
         
-        # Attention pooling
         attn_out, _ = self.attention(gnn_features, gnn_features, gnn_features)
-        x = gnn_features + attn_out  # Residual connection
+        x = gnn_features + attn_out
         
-        # Temporal modeling
         if self.use_tcn:
-            # TCN expects (batch, channels, time)
             tcn_in = x.permute(0, 2, 1)
             tcn_out = self.tcn(tcn_in)
             tcn_out = tcn_out.permute(0, 2, 1)
-            # Project to output dimension
             temporal_out = self.tcn_proj(tcn_out)
         else:
-            # LSTM processing
             lstm_out, _ = self.lstm(x)
             lstm_out = self.lstm_norm(lstm_out)
             temporal_out = self.lstm_proj(lstm_out)
         
-        # Temporal aggregation using mean pooling
-        gnn_out = temporal_out.mean(dim=1)  # [batch, output_dim]
+        gnn_out = temporal_out.mean(dim=1)
         gnn_out = self.temporal_norm(gnn_out)
         
-        # Skip connection processing - USE GNN PROCESSED FEATURES!
-        # Process skip connection with temporal aggregation
-        skip_out = gnn_features  # Use the GNN processed features instead of original input
+        skip_out = gnn_features
+        skip_out = skip_out.mean(dim=1)
+        skip_out = self.skip_conn(skip_out)
         
-        # Temporal aggregation for skip connection
-        skip_out = skip_out.mean(dim=1)  # [batch, channels]
-        skip_out = self.skip_conn(skip_out)  # [batch, output_dim]
-        
-        # Residual connection with gating mechanism
         gate = torch.sigmoid(0.1 * gnn_out + 0.1 * skip_out)
         output = gate * gnn_out + (1 - gate) * skip_out
         
@@ -534,9 +382,9 @@ class DomainAdversarialLoss(nn.Module):
     def __init__(self, bottleneck_dim):
         super().__init__()
         self.domain_classifier = nn.Sequential(
-            nn.Linear(bottleneck_dim, 50),
+            nn.Linear(bottleneck_dim, 32),  # REDUCED SIZE
             nn.ReLU(),
-            nn.Linear(50, 1)
+            nn.Linear(32, 1)
         )
         self.loss_fn = nn.BCEWithLogitsLoss()
     
@@ -550,22 +398,15 @@ def main(args):
     set_random_seed(args.seed)
     print_environ()
     print(s)
-    # Add device configuration (GPU/CPU)
     args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {args.device}")
-    # Create output directory if it exists
     os.makedirs(args.output, exist_ok=True)
     
-    # Load datasets - IMPORTANT: This returns loader objects, not datasets
     loader_data = get_act_dataloader(args)
+    tr = loader_data[4]
+    val = loader_data[5]
+    targetdata = loader_data[6]
     
-    # Extract datasets only (ignore initial loaders)
-    tr = loader_data[4]  # Training dataset
-    val = loader_data[5]  # Validation dataset
-    targetdata = loader_data[6]  # Target dataset
-    
-    # ====== CONDITIONAL LOADER SELECTION ======
-    # Determine loader class based on GNN availability and flag
     if args.use_gnn and GNN_AVAILABLE:
         LoaderClass = PyGDataLoader
         print("Using PyGDataLoader for GNN data")
@@ -573,21 +414,17 @@ def main(args):
         LoaderClass = TorchDataLoader
         print("Using TorchDataLoader for CNN data")
     
-    # Create temporary loader for automated K estimation
     temp_train_loader = LoaderClass(
         dataset=tr,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=min(4, args.N_WORKERS))
+        num_workers=min(2, args.N_WORKERS))  # REDUCED WORKERS
     
-    # Automated K estimation if enabled
     if getattr(args, 'automated_k', False):
         print("\nRunning automated K estimation...")
         
-        # Use GNN if enabled and available, otherwise use standard CNN
         if args.use_gnn and GNN_AVAILABLE:
             print("Using GNN for feature extraction")
-            # Initialize graph builder for feature extraction
             graph_builder = GraphBuilder(
                 method='correlation',
                 threshold_type='adaptive',
@@ -595,11 +432,11 @@ def main(args):
                 adaptive_factor=1.5
             )
             temp_model = EnhancedTemporalGCN(
-                input_dim=8,  # EMG channels
+                input_dim=8,
                 hidden_dim=args.gnn_hidden_dim,
                 output_dim=args.gnn_output_dim,
                 graph_builder=graph_builder,
-                n_layers=getattr(args, 'gnn_layers', 3),  # Reduced layers
+                n_layers=getattr(args, 'gnn_layers', 1),  # MINIMAL LAYERS
                 use_tcn=getattr(args, 'use_tcn', True)
             ).to(args.device)
         else:
@@ -609,20 +446,13 @@ def main(args):
         temp_model.eval()
         feature_list = []
         
-        # In the automated K estimation section, inside the batch loop:
         with torch.no_grad():
-            first_batch = True
-            
             for batch in temp_train_loader:
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
                     domains = batch[2].to(args.device)
-                    # Apply transformation to get 3D input
                     x = transform_for_gnn(inputs)
-                    if first_batch:
-                        print(f"Transformed GNN input shape: {x.shape}")
-                        first_batch = False
                 else:
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
@@ -640,18 +470,16 @@ def main(args):
         del temp_model
         torch.cuda.empty_cache()
     
-    # Batch size adjustment
     if args.latent_domain_num < 6:
-        args.batch_size = 32 * args.latent_domain_num  # Reduced from 64
+        args.batch_size = 16 * args.latent_domain_num  # REDUCED
     else:
-        args.batch_size = 16 * args.latent_domain_num  # Reduced from 32
+        args.batch_size = 8 * args.latent_domain_num  # REDUCED
     print(f"Adjusted batch size: {args.batch_size}")
     
-    # ====== CREATE MAIN LOADERS WITH SELECTED LOADERCLASS ======
     train_loader = LoaderClass(
         dataset=tr,
         batch_size=args.batch_size,
-        num_workers=min(4, args.N_WORKERS),
+        num_workers=min(2, args.N_WORKERS),  # REDUCED
         drop_last=False,
         shuffle=True
     )
@@ -659,7 +487,7 @@ def main(args):
     train_loader_noshuffle = LoaderClass(
         dataset=tr,
         batch_size=args.batch_size,
-        num_workers=min(4, args.N_WORKERS),
+        num_workers=min(2, args.N_WORKERS),  # REDUCED
         drop_last=False,
         shuffle=False
     )
@@ -667,7 +495,7 @@ def main(args):
     valid_loader = LoaderClass(
         dataset=val,
         batch_size=args.batch_size,
-        num_workers=min(4, args.N_WORKERS),
+        num_workers=min(2, args.N_WORKERS),  # REDUCED
         drop_last=False,
         shuffle=False
     )
@@ -675,20 +503,17 @@ def main(args):
     target_loader = LoaderClass(
         dataset=targetdata,
         batch_size=args.batch_size,
-        num_workers=min(4, args.N_WORKERS),
+        num_workers=min(2, args.N_WORKERS),  # REDUCED
         drop_last=False,
         shuffle=False
     )
     
-    # Initialize algorithm
     algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).to(args.device)
     
-    # ======================= GNN INITIALIZATION START =======================
     if args.use_gnn and GNN_AVAILABLE:
         print("\n===== Initializing GNN Feature Extractor =====")
         
-        # Initialize graph builder with research-optimized parameters
         graph_builder = GraphBuilder(
             method='correlation',
             threshold_type='adaptive',
@@ -697,53 +522,42 @@ def main(args):
             fully_connected_fallback=True
         )
         
-        # Add GNN parameters to args
-        args.gnn_layers = getattr(args, 'gnn_layers', 3)  # Reduced layers
+        args.gnn_layers = getattr(args, 'gnn_layers', 1)  # MINIMAL LAYERS
         args.use_tcn = getattr(args, 'use_tcn', True)
         
-        # Initialize enhanced GNN model
         gnn_model = EnhancedTemporalGCN(
-            input_dim=8,  # EMG channels
+            input_dim=8,
             hidden_dim=args.gnn_hidden_dim,
             output_dim=args.gnn_output_dim,
             graph_builder=graph_builder,
             lstm_hidden_size=args.lstm_hidden_size,
             lstm_layers=args.lstm_layers,
             bidirectional=args.bidirectional,
-            lstm_dropout=args.lstm_dropout,
             n_layers=args.gnn_layers,
             use_tcn=args.use_tcn
         ).to(args.device)
         
-        # Replace CNN feature extractor with GNN
         algorithm.featurizer = gnn_model
         
-        # Create a function to build consistent bottleneck layers
         def create_bottleneck(input_dim, output_dim, layer_spec):
-            """Create a bottleneck layer with consistent architecture"""
             try:
                 num_layers = int(layer_spec)
                 layers = []
                 current_dim = input_dim
                 
-                # Add intermediate layers
                 for _ in range(num_layers - 1):
                     layers.append(nn.Linear(current_dim, current_dim))
                     layers.append(nn.BatchNorm1d(current_dim))
                     layers.append(nn.ReLU(inplace=True))
                 
-                # Add final projection layer
                 layers.append(nn.Linear(current_dim, output_dim))
                 return nn.Sequential(*layers)
             except ValueError:
-                # Fallback to simple linear projection
                 return nn.Sequential(nn.Linear(input_dim, output_dim))
         
-        # Create both bottlenecks with the correct dimensions
         input_dim = args.gnn_output_dim
         output_dim = int(args.bottleneck)
         
-        # Create both bottlenecks (classifier and adversarial)
         algorithm.bottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
         algorithm.abottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
         algorithm.dbottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
@@ -751,26 +565,23 @@ def main(args):
         print(f"Created bottlenecks: {input_dim} -> {output_dim}")
         print(f"Bottleneck architecture: {algorithm.bottleneck}")
         
-        # Skip pretraining when using LSTM or TCN
         if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:
             if args.lstm_layers > 0 or args.use_tcn:
                 print("Skipping GNN pretraining due to LSTM/TCN integration")
                 args.gnn_pretrain_epochs = 0
         
-        # GNN Pretraining if enabled
         if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:
             print(f"\n==== GNN Pretraining ({args.gnn_pretrain_epochs} epochs) ====")
             gnn_optimizer = torch.optim.AdamW(
                 gnn_model.parameters(),
                 lr=args.gnn_lr,
-                weight_decay=args.gnn_weight_decay
+                weight_decay=0.0  # ZERO WEIGHT DECAY
             )
             
             for epoch in range(args.gnn_pretrain_epochs):
                 gnn_model.train()
                 total_loss = 0
                 for batch in train_loader:
-                    # Handle GNN data differently
                     if args.use_gnn and GNN_AVAILABLE:
                         inputs = batch[0].to(args.device)
                         labels = batch[1].to(args.device)
@@ -782,31 +593,19 @@ def main(args):
                         domains = batch[2].to(args.device).long()
                         x = inputs
                     
-                    # Convert to (batch, time, features) format
                     if args.use_gnn and GNN_AVAILABLE:
                         x = transform_for_gnn(x)
-                        if x.dim() != 3:
-                            raise ValueError(f"GNN requires 3D input (B,T,C), got {x.shape}")
                     
-                    # Calculate mean across time dimension
-                    target = torch.mean(x, dim=1)  # [batch, channels]
-                    
-                    # Forward pass
+                    target = torch.mean(x, dim=1)
                     features = gnn_model(x)
-                    
-                    # Reconstruction loss
                     reconstructed = gnn_model.reconstruct(features)
                     loss = torch.nn.functional.mse_loss(reconstructed, target)
                     
-                    # Skip update if NaN loss
                     if torch.isnan(loss):
-                        print("NaN loss detected during pretraining, skipping update")
                         continue
                     
-                    # Optimization with gradient clipping
                     gnn_optimizer.zero_grad()
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(gnn_model.parameters(), 1.0)
                     gnn_optimizer.step()
                     
                     total_loss += loss.item()
@@ -814,90 +613,61 @@ def main(args):
                 print(f'GNN Pretrain Epoch {epoch+1}/{args.gnn_pretrain_epochs}: Loss {total_loss/len(train_loader):.4f}')
             
             print("GNN pretraining complete")
-    # ======================= GNN INITIALIZATION END =======================
     
     algorithm.train()
     
-    # Setup optimizers with AdamW
     optd = get_optimizer_adamw(algorithm, args, nettype='Diversify-adv')
     opt = get_optimizer_adamw(algorithm, args, nettype='Diversify-cls')
     opta = get_optimizer_adamw(algorithm, args, nettype='Diversify-all')
     
-    # Add learning rate scheduler with warmup
-    from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
-    
-    # Warmup for the first 5 epochs
-    warmup_epochs = 5
+    from torch.optim.lr_scheduler import LambdaLR
+    warmup_epochs = 3  # REDUCED
     warmup_scheduler = LambdaLR(
         opta,
         lr_lambda=lambda epoch: min(0.1, (epoch + 1) / warmup_epochs)
-    )
     
-    # Add data augmentation module
     augmenter = EMGDataAugmentation(args).cuda()
     
-    # Add domain adversarial training if enabled
     if getattr(args, 'domain_adv_weight', 0.0) > 0:
         algorithm.domain_adv_loss = DomainAdversarialLoss(
             bottleneck_dim=int(args.bottleneck)
         ).cuda()
         print(f"Added domain adversarial training (weight: {args.domain_adv_weight})")
     
-    # Training metrics logging
     logs = {k: [] for k in ['epoch', 'class_loss', 'dis_loss', 'ent_loss',
                             'total_loss', 'train_acc', 'valid_acc', 'target_acc',
                             'total_cost_time', 'h_divergence', 'domain_acc']}
     best_valid_acc, target_acc = 0, 0
     
-    # Create entire source loader for h-divergence calculation
     entire_source_loader = LoaderClass(
         tr,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=min(4, args.N_WORKERS))
+        num_workers=min(2, args.N_WORKERS))  # REDUCED
     
-    # Early stopping tracking
     best_valid_acc = 0
     epochs_without_improvement = 0
-    early_stopping_patience = getattr(args, 'early_stopping_patience', 15)  # Increased patience
+    early_stopping_patience = getattr(args, 'early_stopping_patience', 20)  # INCREASED
     
-    # Set gradient clipping norm
-    MAX_GRAD_NORM = args.max_grad_norm  # Use value from args
+    MAX_GRAD_NORM = 0.1  # TIGHTER GRADIENT CLIPPING
     
-    # Main training loop
     global_step = 0
     for round_idx in range(args.max_epoch):
-        # Dropout adjustment - extended gentle period
         if hasattr(algorithm.featurizer, 'dropout'):
-            if round_idx < 20:  # Longer gentle dropout period
-                algorithm.featurizer.dropout.p = 0.01
-            else:
-                algorithm.featurizer.dropout.p = 0.02  # Reduced dropout
-        
-        # Adaptive data augmentation
-        if round_idx < 10:
-            augmenter.aug_prob = 0.3  # Moderate augmentation
-        else:
-            augmenter.aug_prob = getattr(args, 'aug_prob', 0.3)  # Reduced probability
+            algorithm.featurizer.dropout.p = 0.0  # ZERO DROPOUT
         
         print(f'\n======== ROUND {round_idx} ========')
         
-        # Early stopping check
         if epochs_without_improvement >= early_stopping_patience:
             print(f"Early stopping at epoch {round_idx}")
             break
             
-        # Determine epochs for this round
         if getattr(args, 'curriculum', False):
-            # Ensure CL_PHASE_EPOCHS is a list
             if not hasattr(args, 'CL_PHASE_EPOCHS') or not isinstance(args.CL_PHASE_EPOCHS, list):
-                args.CL_PHASE_EPOCHS = [3, 5, 8]  # Default to list of phases
-            
-            # Ensure CL_DIFFICULTY is a list
+                args.CL_PHASE_EPOCHS = [2, 3, 4]  # REDUCED
             if not hasattr(args, 'CL_DIFFICULTY') or not isinstance(args.CL_DIFFICULTY, list):
-                args.CL_DIFFICULTY = [0.2, 0.5, 0.8]  # Default difficulty levels
+                args.CL_DIFFICULTY = [0.2, 0.5, 0.8]
             
-            # Check if current round is within curriculum phases
             if round_idx < len(args.CL_PHASE_EPOCHS):
                 current_epochs = args.CL_PHASE_EPOCHS[round_idx]
                 print(f"Curriculum learning: Stage {round_idx} (using {current_epochs} epochs)")
@@ -906,54 +676,44 @@ def main(args):
         else:
             current_epochs = args.local_epoch
         
-        # Curriculum learning setup
         if getattr(args, 'curriculum', False) and round_idx < len(args.CL_PHASE_EPOCHS):
             print(f"Curriculum learning: Stage {round_idx}")
-            
-            # Set algorithm to evaluation mode
             algorithm.eval()
             
-            # Create a prediction function that handles GNN transformation
             def curriculum_predict(x):
                 if args.use_gnn and GNN_AVAILABLE:
                     x = transform_for_gnn(x)
                 return algorithm.predict(x)
             
-            # Create a simple object for domain evaluation
             class CurriculumEvaluator:
                 def predict(self, x):
                     return curriculum_predict(x)
             
             evaluator = CurriculumEvaluator()
             
-            # Get the curriculum loader
             train_loader = get_curriculum_loader(
                 args,
-                evaluator,  # Pass evaluator instead of algorithm
+                evaluator,
                 tr,
                 val,
                 stage=round_idx,
-                loader_class=LoaderClass  # Use selected loader class
+                loader_class=LoaderClass
             )
             
-            # Update the no-shuffle loader
             train_loader_noshuffle = LoaderClass(
                 train_loader.dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
-                num_workers=min(2, args.N_WORKERS)
+                num_workers=min(1, args.N_WORKERS)  # MINIMAL
             )
-            # Set algorithm back to training mode
             algorithm.train()
         
-        # Phase 1: Feature update
         print('\n==== Feature update ====')
         print_row(['epoch', 'class_loss'], colwidth=15)
         for step in range(current_epochs):
             epoch_class_loss = 0.0
             batch_count = 0
             for batch in train_loader:
-                # Handle GNN data differently
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
@@ -963,15 +723,11 @@ def main(args):
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                     domains = batch[2].to(args.device).long()
-                    # Apply augmentation
-                    inputs = augmenter(inputs)
                     data = [inputs, labels, domains]
                 
                 loss_result_dict = algorithm.update_a(data, opta)
                 
-                # Skip update if NaN loss
                 if not np.isfinite(loss_result_dict['class']):
-                    print("Skipping step due to non-finite loss")
                     continue
                 
                 epoch_class_loss += loss_result_dict['class']
@@ -982,10 +738,8 @@ def main(args):
                 print_row([step, epoch_class_loss], colwidth=15)
                 logs['class_loss'].append(epoch_class_loss)
             
-            # Apply warmup scheduler
             warmup_scheduler.step()
         
-        # Phase 2: Latent domain characterization
         print('\n==== Latent domain characterization ====')
         print_row(['epoch', 'total_loss', 'dis_loss', 'ent_loss'], colwidth=15)
         for step in range(current_epochs):
@@ -995,7 +749,6 @@ def main(args):
             batch_count = 0
             
             for batch in train_loader:
-                # Handle GNN data differently
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
@@ -1005,14 +758,11 @@ def main(args):
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                     domains = batch[2].to(args.device).long()
-                    # Apply augmentation
-                    inputs = augmenter(inputs)
                     data = [inputs, labels, domains]
                 
                 loss_result_dict = algorithm.update_d(data, optd)
                 
                 if any(not np.isfinite(v) for v in loss_result_dict.values()):
-                    print("Skipping step due to non-finite loss")
                     continue
                     
                 epoch_total += loss_result_dict['total']
@@ -1042,7 +792,6 @@ def main(args):
         for step in range(current_epochs):
             step_start_time = time.time()
             for batch in train_loader:
-                # Handle GNN data differently
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
@@ -1052,19 +801,13 @@ def main(args):
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                     domains = batch[2].to(args.device).long()
-                    # Apply augmentation
-                    inputs = augmenter(inputs)
                     data = [inputs, labels, domains]
                 
                 step_vals = algorithm.update(data, opt)
-                
-                # Apply gradient clipping to prevent explosions
                 torch.nn.utils.clip_grad_norm_(algorithm.parameters(), MAX_GRAD_NORM)
             
-            # Create transform wrapper for GNN if needed
             transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
             
-            # Calculate accuracies
             results = {
                 'epoch': global_step,
                 'train_acc': modelopera.accuracy(algorithm, train_loader_noshuffle, None, transform_fn=transform_fn),
@@ -1073,21 +816,17 @@ def main(args):
                 'total_cost_time': time.time() - step_start_time
             }
             
-            # Log losses
             for key in loss_list:
                 results[f"{key}_loss"] = step_vals[key]
                 logs[f"{key}_loss"].append(step_vals[key])
             
-            # Log metrics
             for metric in ['train_acc', 'valid_acc', 'target_acc']:
                 logs[metric].append(results[metric])
             
-            # Update best validation accuracy
             if results['valid_acc'] > best_valid_acc:
                 best_valid_acc = results['valid_acc']
                 target_acc = results['target_acc']
                 epochs_without_improvement = 0
-                # Save best model
                 torch.save(algorithm.state_dict(), os.path.join(args.output, 'best_model.pth'))
             else:
                 epochs_without_improvement += 1
@@ -1097,19 +836,15 @@ def main(args):
             
         logs['total_cost_time'].append(time.time() - round_start_time)
         
-        # Calculate h-divergence every 5 epochs
         if round_idx % 5 == 0:
             print("\nCalculating h-divergence...")
             algorithm.eval()
             
-            # Extract features for source domain
             source_features = []
             with torch.no_grad():
                 for data in entire_source_loader:
-                    # Handle GNN data differently
                     if args.use_gnn and GNN_AVAILABLE:
                         inputs = data[0].to(args.device)
-                        # Convert to (batch, time, channels) format
                         inputs = transform_for_gnn(inputs)
                     else:
                         inputs = data[0].to(args.device).float()
@@ -1118,14 +853,11 @@ def main(args):
                     source_features.append(features)
             source_features = np.concatenate(source_features, axis=0)
             
-            # Extract features for target domain
             target_features = []
             with torch.no_grad():
                 for data in target_loader:
-                    # Handle GNN data differently
                     if args.use_gnn and GNN_AVAILABLE:
                         inputs = data[0].to(args.device)
-                        # Convert to (batch, time, channels) format
                         inputs = transform_for_gnn(inputs)
                     else:
                         inputs = data[0].to(args.device).float()
@@ -1134,7 +866,6 @@ def main(args):
                     target_features.append(features)
             target_features = np.concatenate(target_features, axis=0)
             
-            # Calculate h-divergence
             h_div, domain_acc = calculate_h_divergence(source_features, target_features)
             logs['h_divergence'].append(h_div)
             logs['domain_acc'].append(domain_acc)
@@ -1144,73 +875,49 @@ def main(args):
             
     print(f'\n🎯 Final Target Accuracy: {target_acc:.4f}')
     
-    # SHAP explainability analysis
     if getattr(args, 'enable_shap', False):
         print("\n📊 Running SHAP explainability...")
         try:
-            # Prepare background and evaluation data
             if args.use_gnn and GNN_AVAILABLE:
-                # For GNN, we need to sample individual graphs
                 background = []
                 for data in valid_loader:
                     background.extend(data[0].to_data_list())
-                    if len(background) >= 64:
+                    if len(background) >= 32:  # REDUCED
                         break
-                background = background[:64]
-                X_eval = background[:10]
+                background = background[:32]
+                X_eval = background[:5]  # REDUCED
             else:
-                background = get_background_batch(valid_loader, size=64).cuda()
-                X_eval = background[:10]
+                background = get_background_batch(valid_loader, size=32).cuda()  # REDUCED
+                X_eval = background[:5]  # REDUCED
             
-            # Disable inplace operations in the model
             disable_inplace_relu(algorithm)
             
-            # Create transform wrapper for GNN if needed
             transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
             
-            # Transform background and X_eval if necessary
             if transform_fn is not None and not args.use_gnn:
                 background = transform_fn(background)
                 X_eval = transform_fn(X_eval)
             
-            # Compute SHAP values safely
             shap_explanation = safe_compute_shap_values(algorithm, background, X_eval)
-            
-            # Extract values from Explanation object
             shap_vals = shap_explanation.values
             print(f"SHAP values shape: {shap_vals.shape}")
             
-            # Convert to numpy safely before visualization
             X_eval_np = X_eval
             if isinstance(X_eval, list):
-                # Handle PyG data list
                 X_eval_np = [d.x.detach().cpu().numpy() for d in X_eval]
             else:
                 X_eval_np = X_eval.detach().cpu().numpy()
             
-            # Handle GNN dimensionality for visualization
             if args.use_gnn and GNN_AVAILABLE:
-                print(f"Original SHAP values shape: {shap_vals.shape}")
-                print(f"Original X_eval shape: {X_eval_np[0].shape}")
-                
-                # If 4D, reduce to 3D by summing over classes
                 if isinstance(shap_vals, list):
-                    # For GNN, shap_vals is a list of arrays
                     shap_vals = [np.abs(sv).sum(axis=-1) for sv in shap_vals]
-                    print(f"SHAP values after class sum: {shap_vals[0].shape}")
-                
-                # Now we should have list of 3D arrays: [channels, time] for each graph
-                # We'll just visualize the first sample
                 plot_emg_shap_4d(X_eval_np[0], shap_vals[0], 
                                 output_path=os.path.join(args.output, "shap_gnn_sample.html"))
             else:
-                # Generate core visualizations for non-GNN data
                 try:
                     plot_summary(shap_vals, X_eval_np, 
                                 output_path=os.path.join(args.output, "shap_summary.png"))
-                except IndexError as e:
-                    print(f"SHAP summary plot dimension error: {str(e)}")
-                    print(f"Using fallback 3D visualization instead")
+                except IndexError:
                     plot_emg_shap_4d(X_eval, shap_vals, 
                                     output_path=os.path.join(args.output, "shap_3d_fallback.html"))
                     
@@ -1219,14 +926,11 @@ def main(args):
                 plot_shap_heatmap(shap_vals, 
                                  output_path=os.path.join(args.output, "shap_heatmap.png"))
             
-            # Save SHAP values
             save_path = os.path.join(args.output, "shap_values.npy")
             save_shap_numpy(shap_vals, save_path=save_path)
             
-            # Confusion matrix
             true_labels, pred_labels = [], []
             for data in valid_loader:
-                # Handle GNN data differently
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = data[0].to(args.device)
                     y = data[1]
@@ -1235,7 +939,6 @@ def main(args):
                     y = data[1]
                 
                 with torch.no_grad():
-                    # Apply transform for GNN if needed
                     if args.use_gnn and GNN_AVAILABLE:
                         inputs = transform_for_gnn(inputs)
                     preds = algorithm.predict(inputs).cpu()
@@ -1252,12 +955,8 @@ def main(args):
             print("✅ SHAP analysis completed successfully")
         except Exception as e:
             print(f"[ERROR] SHAP analysis failed: {str(e)}")
-            import traceback
-            traceback.print_exc()
     
-    # Plot training metrics
     try:
-        # Main training metrics plot
         plt.figure(figsize=(12, 8))
         plt.subplot(2, 1, 1)
         epochs = list(range(len(logs['class_loss'])))
@@ -1286,7 +985,6 @@ def main(args):
         plt.close()
         print("✅ Training metrics plot saved")
         
-        # H-Divergence plot
         if logs['h_divergence']:
             plt.figure(figsize=(10, 6))
             h_epochs = [i * 5 for i in range(len(logs['h_divergence']))]
@@ -1306,15 +1004,15 @@ def main(args):
 
 if __name__ == '__main__':
     args = get_args()
-    # ====================== CRITICAL HYPERPARAMETER OPTIMIZATIONS ======================
-    # Reduced loss weights and regularization
+    # ====================== MINIMAL PARAMETER SETTINGS ======================
+    # All regularization removed
     args.lambda_cls = getattr(args, 'lambda_cls', 1.0)
-    args.lambda_dis = getattr(args, 'lambda_dis', 0.05)  # Reduced from 0.1
-    args.label_smoothing = getattr(args, 'label_smoothing', 0.1)  # Reduced from 0.2
-    args.max_grad_norm = getattr(args, 'max_grad_norm', 0.5)  # Tighter gradient clipping
-    args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)  # Reduced pretraining
+    args.lambda_dis = getattr(args, 'lambda_dis', 0.01)  # MINIMAL
+    args.label_smoothing = 0.0  # DISABLED
+    args.max_grad_norm = 0.1  # TIGHTER GRADIENT CLIPPING
+    args.gnn_pretrain_epochs = 0  # DISABLED
 
-    # Add GNN-specific parameters to args
+    # GNN parameters minimized
     if not hasattr(args, 'use_gnn'):
         args.use_gnn = False
         
@@ -1323,39 +1021,37 @@ if __name__ == '__main__':
             print("[WARNING] GNN requested but not available. Falling back to CNN.")
             args.use_gnn = False
         else:
-            # Reduced GNN complexity
-            args.gnn_hidden_dim = getattr(args, 'gnn_hidden_dim', 64)
-            args.gnn_output_dim = getattr(args, 'gnn_output_dim', 128)  # Reduced from 256
-            args.gnn_layers = getattr(args, 'gnn_layers', 3)
-            args.gnn_lr = getattr(args, 'gnn_lr', 0.0005)  # Reduced learning rate
-            args.gnn_weight_decay = getattr(args, 'gnn_weight_decay', 1e-6)  # Reduced
-            args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)
+            args.gnn_hidden_dim = getattr(args, 'gnn_hidden_dim', 32)  # MINIMAL
+            args.gnn_output_dim = getattr(args, 'gnn_output_dim', 64)  # MINIMAL
+            args.gnn_layers = 1  # MINIMAL LAYERS
+            args.gnn_lr = getattr(args, 'gnn_lr', 0.00005)  # MINIMAL
+            args.gnn_weight_decay = 0.0  # DISABLED
             
-            # TCN/LSTM parameters
             args.use_tcn = getattr(args, 'use_tcn', True)
-            args.lstm_hidden_size = getattr(args, 'lstm_hidden_size', 128)
-            args.lstm_layers = getattr(args, 'lstm_layers', 1)
-            args.bidirectional = getattr(args, 'bidirectional', False)
-            args.lstm_dropout = getattr(args, 'lstm_dropout', 0.1)
+            args.lstm_hidden_size = 32  # MINIMAL
+            args.lstm_layers = 1
+            args.bidirectional = False  # DISABLED
+            args.lstm_dropout = 0.0  # DISABLED
 
-    # Optimizer and regularization
+    # Optimizer settings minimized
     args.optimizer = getattr(args, 'optimizer', 'adamw')
-    args.weight_decay = getattr(args, 'weight_decay', 1e-6)  # Reduced regularization
-    args.domain_adv_weight = getattr(args, 'domain_adv_weight', 0.1)  # Reduced from 0.3
+    args.weight_decay = 0.0  # DISABLED
+    args.domain_adv_weight = 0.0  # DISABLED
+    args.lr = 0.00005  # MINIMAL LEARNING RATE
 
-    # Augmentation parameters (reduced intensity)
-    args.jitter_scale = getattr(args, 'jitter_scale', 0.005)  # Reduced from 0.01
-    args.scaling_std = getattr(args, 'scaling_std', 0.03)  # Reduced from 0.05
-    args.warp_ratio = getattr(args, 'warp_ratio', 0.02)  # Reduced from 0.05
-    args.channel_dropout = getattr(args, 'channel_dropout', 0.03)  # Reduced from 0.05
-    args.aug_prob = getattr(args, 'aug_prob', 0.5)  # Reduced from 0.7
+    # Augmentation completely disabled
+    args.jitter_scale = 0.0
+    args.scaling_std = 0.0
+    args.warp_ratio = 0.0
+    args.channel_dropout = 0.0
+    args.aug_prob = 0.0
 
-    # Training schedule
-    args.max_epoch = getattr(args, 'max_epoch', 100)
-    args.early_stopping_patience = getattr(args, 'early_stopping_patience', 15)  # Increased
+    # Training schedule minimized
+    args.max_epoch = getattr(args, 'max_epoch', 50)  # REDUCED
+    args.early_stopping_patience = 20  # INCREASED
 
-    # Domain adaptation
+    # Domain adaptation minimized
     if not hasattr(args, 'adv_weight'):
-        args.adv_weight = 0.5  # Reduced adversarial weight
+        args.adv_weight = 0.0  # DISABLED
 
     main(args)

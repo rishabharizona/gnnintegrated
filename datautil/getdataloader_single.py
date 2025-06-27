@@ -338,12 +338,12 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     
     # Create curriculum subset
     curriculum_subset = SafeSubset(train_dataset, selected_indices)
-    
+    return (curriculum_subset)
     # Use proper loader based on data type
-    if is_graph_data(curriculum_subset):
-        return get_gnn_dataloader(curriculum_subset, args.batch_size, 0, True)
-    else:
-        return DataLoader(curriculum_subset, batch_size=args.batch_size, shuffle=True)
+    #if is_graph_data(curriculum_subset):
+    #    return get_gnn_dataloader(curriculum_subset, args.batch_size, 0, True)
+    #else:
+    #    return DataLoader(curriculum_subset, batch_size=args.batch_size, shuffle=True)
 
 def get_shap_batch(loader, size=100):
     """Extract a batch of data for SHAP analysis"""

@@ -928,8 +928,19 @@ def main(args):
         print("\n📊 Running SHAP explainability...")
         try:
             # Prepare background and evaluation data
-            background = get_background_batch(valid_loader, size=64).cuda()
-            X_eval = background[:10]
+            if args.use_gnn and GNN_AVAILABLE:
+                # Handle PyG DataBatch objects for GNN
+                background_list = []
+                for data in valid_loader:
+                    background_list.append(data)
+                    if len(background_list) * args.batch_size >= 64:
+                        break
+                background = background_list[0]  # Use first batch
+                X_eval = background[:10]  # First 10 samples from the batch
+            else:
+                # Standard tensor handling for CNN
+                background = get_background_batch(valid_loader, size=64).cuda()
+                X_eval = background[:10]
             
             # Disable inplace operations in the model
             disable_inplace_relu(algorithm)

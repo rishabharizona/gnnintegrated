@@ -283,14 +283,6 @@ class Diversify(Algorithm):
         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         opt.step()
         
-        # Debugging information
-        if self.global_step % 50 == 0:
-            with torch.no_grad():
-                preds = cd1.argmax(dim=1)
-                acc = (preds == all_c1).float().mean().item()
-                domain_acc = (disc_out1.argmax(dim=1) == all_d1).float().mean().item()
-                print(f"[D-Step {self.global_step}] Loss: {loss.item():.4f} | "
-                      f"ClassAcc: {acc:.4f} | DomainAcc: {domain_acc:.4f}")
         
         return {'total': loss.item(), 'dis': disc_loss.item(), 'ent': ent_loss.item()}
 
@@ -467,14 +459,6 @@ class Diversify(Algorithm):
         if self.warmup_scheduler:
             self.warmup_scheduler.step()
         
-        # Debug information
-        if self.global_step % 100 == 0:
-            with torch.no_grad():
-                preds = all_preds.argmax(dim=1)
-                acc = (preds == all_y).float().mean().item()
-                domain_acc = (disc_out.argmax(dim=1) == disc_labels).float().mean().item()
-                print(f"[Step {self.global_step}] ClassLoss={classifier_loss.item():.4f} | "
-                      f"DiscLoss={disc_loss.item():.4f} | ClassAcc: {acc:.4f} | DomainAcc: {domain_acc:.4f}")
         return {'total': loss.item(), 'class': classifier_loss.item(), 'dis': disc_loss.item()}
 
     def update_a(self, minibatches, opt):

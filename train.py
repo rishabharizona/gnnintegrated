@@ -625,7 +625,7 @@ def main(args):
     warmup_scheduler = LambdaLR(
         opta,
         lr_lambda=lambda epoch: min(0.1, (epoch + 1) / warmup_epochs)
-    
+    )
     augmenter = EMGDataAugmentation(args).cuda()
     
     if getattr(args, 'domain_adv_weight', 0.0) > 0:

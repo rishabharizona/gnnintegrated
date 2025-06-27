@@ -813,12 +813,34 @@ def main(args):
                 torch.nn.utils.clip_grad_norm_(algorithm.parameters(), MAX_GRAD_NORM)
             
             transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
-            
+            def evaluate_accuracy(loader):
+                correct = 0
+                total = 0
+                algorithm.eval()
+                with torch.no_grad():
+                    for batch in loader:
+                        if args.use_gnn and GNN_AVAILABLE:
+                            inputs = batch[0].to(args.device)
+                            labels = batch[1].to(args.device)
+                            domains = batch[2].to(args.device)
+                            if transform_fn:
+                                inputs = transform_fn(inputs)
+                        else:
+                            inputs = batch[0].to(args.device).float()
+                            labels = batch[1].to(args.device).long()
+                            domains = batch[2].to(args.device).long()
+                        
+                        outputs = algorithm.predict(inputs)
+                        _, predicted = torch.max(outputs.data, 1)
+                        total += labels.size(0)
+                        correct += (predicted == labels).sum().item()
+                algorithm.train()
+                return 100 * correct / total
             results = {
                 'epoch': global_step,
-                'train_acc': modelopera.accuracy(algorithm, train_loader_noshuffle, None, transform_fn=transform_fn),
-                'valid_acc': modelopera.accuracy(algorithm, valid_loader, None, transform_fn=transform_fn),
-                'target_acc': modelopera.accuracy(algorithm, target_loader, None, transform_fn=transform_fn),
+                'train_acc': evaluate_accuracy(train_loader_noshuffle),
+                'valid_acc': evaluate_accuracy(valid_loader),
+                'target_acc': evaluate_accuracy(target_loader),
                 'total_cost_time': time.time() - step_start_time
             }
             

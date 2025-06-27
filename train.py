@@ -308,9 +308,9 @@ class EnhancedTemporalGCN(TemporalGCN):
             nn.Linear(self.output_dim, self.output_dim),
             nn.ReLU(),
             nn.Linear(self.output_dim, self.output_dim)
-        
+        )
         self._init_weights()
-
+        
     def _init_weights(self):
         for layer in self.gnn_layers:
             if hasattr(layer, 'weight'):

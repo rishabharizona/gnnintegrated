@@ -706,7 +706,7 @@ def main(args):
             drop_last=False
             )
             train_loader_noshuffle = LoaderClass(
-                train_loader.dataset,
+                curriculum_dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
                 num_workers=min(1, args.N_WORKERS),

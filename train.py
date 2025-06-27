@@ -727,8 +727,7 @@ def main(args):
                 evaluator,
                 tr,
                 val,
-                stage=round_idx,
-                difficulty=current_difficulty
+                stage=round_idx
             )
             train_loader = LoaderClass(
                 curriculum_dataset,

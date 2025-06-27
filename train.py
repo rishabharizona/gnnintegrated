@@ -607,12 +607,35 @@ def main(args):
                         domains = batch[2].to(args.device).long()
                         x = inputs
                     
+                    # New corrected code
                     if args.use_gnn and GNN_AVAILABLE:
                         x = transform_for_gnn(x)
                     
-                    target = torch.mean(x, dim=1)
+                    # Compute target: mean along time dimension
+                    if x.dim() == 3:  # [batch, time, features]
+                        target = torch.mean(x, dim=1)
+                    elif x.dim() == 4:  # [batch, channels, 1, time]
+                        # Convert to [batch, channels, time] and then average
+                        x_processed = x.squeeze(2).permute(0, 2, 1)
+                        target = torch.mean(x_processed, dim=1)
+                    else:
+                        target = torch.mean(x, dim=1)
+                    
                     features = gnn_model(x)
-                    reconstructed = gnn_model.reconstruct(features)
+                    
+                    # For reconstruction, we need to match the target shape
+                    # Add reconstruction head if not exists
+                    if not hasattr(gnn_model, 'reconstruction_head'):
+                        # Create a reconstruction head that matches the target dimension
+                        target_dim = target.shape[1]
+                        gnn_model.reconstruction_head = nn.Sequential(
+                            nn.Linear(args.gnn_output_dim, 64),
+                            nn.ReLU(),
+                            nn.Linear(64, target_dim)
+                        ).to(args.device)
+                        print(f"Created reconstruction head with output dim: {target_dim}")
+                    
+                    reconstructed = gnn_model.reconstruction_head(features)
                     loss = torch.nn.functional.mse_loss(reconstructed, target)
                     
                     if torch.isnan(loss):

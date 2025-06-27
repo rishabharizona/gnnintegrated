@@ -13,7 +13,7 @@ from typing import List, Tuple, Dict, Any, Optional
 import collections
 
 # Task mapping for activity recognition
-task_act = {'cross_people': actutil.cross_people}
+task_act = {'cross_people': cross_people}  # Use the directly imported module
 
 class ConsistentFormatWrapper(torch.utils.data.Dataset):
     """Ensures samples always return (graph, label, domain) format"""
@@ -152,7 +152,7 @@ def get_act_dataloader(args):
     """Create activity recognition data loaders"""
     source_datasets = []
     target_datasets = []
-    pcross_act = task_act[args.task]
+    pcross_act = task_act[args.task]  # This now uses the properly imported module
     tmpp = args.act_people[args.dataset]
     args.domain_num = len(tmpp)
     
@@ -289,7 +289,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     curriculum_subset = SafeSubset(train_dataset, selected_indices)
     
     # Create appropriate loader
-    if isinstance(curriculum_subset[0][0], Data):  # Graph data
+    if curriculum_subset and isinstance(curriculum_subset[0][0], Data):  # Graph data
         return get_gnn_dataloader(curriculum_subset, args.batch_size, 0, True)
     else:
         return DataLoader(curriculum_subset, batch_size=args.batch_size, shuffle=True)

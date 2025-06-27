@@ -361,18 +361,31 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
           f"samples: {len(selected_indices)})")
     
     return curriculum_subset
-    # Use proper loader based on data type
-    #if is_graph_data(curriculum_subset):
-    #    return get_gnn_dataloader(curriculum_subset, args.batch_size, 0, True)
-    #else:
-    #    return DataLoader(curriculum_subset, batch_size=args.batch_size, shuffle=True)
 
 def get_shap_batch(loader, size=100):
     """Extract a batch of data for SHAP analysis"""
     samples = []
     for batch in loader:
         inputs = batch[0] if isinstance(batch, (list, tuple)) else batch
-        samples.append(inputs)
-        if len(torch.cat(samples)) >= size:
+        if isinstance(inputs, (Data, Batch)):
+            # Handle PyG DataBatch objects
+            samples.append(inputs)
+        elif isinstance(inputs, torch.Tensor):
+            # Handle standard tensors
+            samples.append(inputs)
+        else:
+            # Handle other formats
+            try:
+                samples.append(torch.tensor(inputs))
+            except:
+                print(f"Warning: Could not convert input of type {type(inputs)} to tensor")
+                
+        if len(samples) * inputs.size(0) >= size:
             break
+            
+    # Return first batch if we have PyG Data objects
+    if isinstance(samples[0], (Data, Batch)):
+        return samples[0]
+    
+    # Concatenate tensors
     return torch.cat(samples)[:size]

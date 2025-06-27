@@ -149,7 +149,7 @@ class TemporalBlock(nn.Module):
             n_inputs, n_outputs, kernel_size,
             stride=stride, padding=padding, dilation=dilation
         ))
-        self.activation = nn.GELU()
+        self.activation = nn.ReLU()  # Changed from GELU to ReLU
         self.downsample = nn.Conv1d(n_inputs, n_outputs, 1) if n_inputs != n_outputs else None
         self.init_weights()
         self.padding = padding
@@ -185,36 +185,31 @@ class EMGDataAugmentation(nn.Module):
         return x  # COMPLETELY DISABLED
 
 # ======================= OPTIMIZER FUNCTION =======================
-def get_optimizer_adamw(algorithm, args, nettype='Diversify'):
+def get_optimizer(algorithm, args, nettype='Diversify'):
     params = algorithm.parameters()
     
-    if args.optimizer == 'adamw':
-        optimizer = torch.optim.AdamW(
-            params, 
-            lr=args.lr,
-            weight_decay=args.weight_decay,
-            betas=(0.9, 0.999))
-    elif args.optimizer == 'sgd':
+    if args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(
             params, 
             lr=args.lr,
             momentum=0.9,
             weight_decay=args.weight_decay,
             nesterov=True)
-    else:
+    else:  # Default to Adam
         optimizer = torch.optim.Adam(
             params, 
             lr=args.lr,
             weight_decay=args.weight_decay)
     
     return optimizer
+
 # ======================= TEMPORAL GCN LAYER =======================
 class TemporalGCNLayer(nn.Module):
     def __init__(self, input_dim, output_dim, graph_builder):
         super().__init__()
         self.graph_builder = graph_builder
         self.linear = nn.Linear(input_dim, output_dim)
-        self.activation = nn.GELU()
+        self.activation = nn.ReLU()  # Changed from GELU to ReLU
         
     def forward(self, x):
         batch_size, seq_len, n_features = x.shape
@@ -242,6 +237,7 @@ class TemporalGCNLayer(nn.Module):
         x = self.linear(x)
         x = self.activation(x)
         return x
+
 # ======================= ENHANCED GNN ARCHITECTURE =======================
 class EnhancedTemporalGCN(TemporalGCN):
     def __init__(self, *args, **kwargs):
@@ -306,7 +302,7 @@ class EnhancedTemporalGCN(TemporalGCN):
         
         self.projection_head = nn.Sequential(
             nn.Linear(self.output_dim, self.output_dim),
-            nn.ReLU(),
+            nn.ReLU(),  # Changed from ReLU to ReLU (no change needed)
             nn.Linear(self.output_dim, self.output_dim)
         )
         self._init_weights()
@@ -350,7 +346,7 @@ class EnhancedTemporalGCN(TemporalGCN):
         for layer, norm in zip(self.gnn_layers, self.norms):
             gnn_features = layer(gnn_features)
             gnn_features = norm(gnn_features)
-            gnn_features = F.gelu(gnn_features)
+            gnn_features = F.relu(gnn_features)  # Changed from gelu to relu
         
         attn_out, _ = self.attention(gnn_features, gnn_features, gnn_features)
         x = gnn_features + attn_out
@@ -383,7 +379,7 @@ class DomainAdversarialLoss(nn.Module):
         super().__init__()
         self.domain_classifier = nn.Sequential(
             nn.Linear(bottleneck_dim, 32),  # REDUCED SIZE
-            nn.ReLU(),
+            nn.ReLU(),  # Changed from ReLU to ReLU (no change needed)
             nn.Linear(32, 1)
         )
         self.loss_fn = nn.BCEWithLogitsLoss()
@@ -585,7 +581,7 @@ def main(args):
         # Enhanced GNN pretraining
         if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:
             print(f"\n==== GNN Pretraining ({args.gnn_pretrain_epochs} epochs) ====")
-            gnn_optimizer = torch.optim.AdamW(
+            gnn_optimizer = torch.optim.Adam(
                 algorithm.featurizer.parameters(),
                 lr=args.gnn_lr,
                 weight_decay=0.0
@@ -607,7 +603,6 @@ def main(args):
                         domains = batch[2].to(args.device).long()
                         x = inputs
                     
-                    # New corrected code
                     if args.use_gnn and GNN_AVAILABLE:
                         x = transform_for_gnn(x)
                     
@@ -620,9 +615,9 @@ def main(args):
                         target = torch.mean(x_processed, dim=1)
                     else:
                         target = torch.mean(x, dim=1)
-                    
+
                     features = gnn_model(x)
-                    
+
                     # For reconstruction, we need to match the target shape
                     # Add reconstruction head if not exists
                     if not hasattr(gnn_model, 'reconstruction_head'):
@@ -634,7 +629,7 @@ def main(args):
                             nn.Linear(64, target_dim)
                         ).to(args.device)
                         print(f"Created reconstruction head with output dim: {target_dim}")
-                    
+
                     reconstructed = gnn_model.reconstruction_head(features)
                     loss = torch.nn.functional.mse_loss(reconstructed, target)
                     
@@ -656,16 +651,10 @@ def main(args):
     
     algorithm.train()
     
-    optd = get_optimizer_adamw(algorithm, args, nettype='Diversify-adv')
-    opt = get_optimizer_adamw(algorithm, args, nettype='Diversify-cls')
-    opta = get_optimizer_adamw(algorithm, args, nettype='Diversify-all')
+    optd = get_optimizer(algorithm, args, nettype='Diversify-adv')
+    opt = get_optimizer(algorithm, args, nettype='Diversify-cls')
+    opta = get_optimizer(algorithm, args, nettype='Diversify-all')
     
-    from torch.optim.lr_scheduler import LambdaLR
-    warmup_epochs = 3  # REDUCED
-    warmup_scheduler = LambdaLR(
-        opta,
-        lr_lambda=lambda epoch: min(0.1, (epoch + 1) / warmup_epochs)
-    )
     augmenter = EMGDataAugmentation(args).cuda()
     
     if getattr(args, 'domain_adv_weight', 0.0) > 0:
@@ -777,8 +766,6 @@ def main(args):
                 print_row([step, epoch_class_loss], colwidth=15)
                 logs['class_loss'].append(epoch_class_loss)
             
-            warmup_scheduler.step()
-        
         print('\n==== Latent domain characterization ====')
         print_row(['epoch', 'total_loss', 'dis_loss', 'ent_loss'], colwidth=15)
         for step in range(current_epochs):
@@ -1154,7 +1141,7 @@ if __name__ == '__main__':
             args.lstm_dropout = 0.0  # DISABLED
 
     # Optimizer settings minimized
-    args.optimizer = getattr(args, 'optimizer', 'adamw')
+    args.optimizer = getattr(args, 'optimizer', 'adam')
     args.weight_decay = 1e-4  # Enable weight decay
     args.domain_adv_weight = 0.1  # Enable domain adaptation
     args.lr = 0.0001  # Increased learning rate

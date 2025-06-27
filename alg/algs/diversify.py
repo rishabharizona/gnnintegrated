@@ -441,7 +441,7 @@ class Diversify(Algorithm):
             if hasattr(batch_data, 'domain') and batch_data.domain is not None:
                 disc_labels = batch_data.domain
             else:
-                disc_labels = data[4].cuda().long()
+                disc_labels = data[1].cuda().long()
         else:
             all_x = data[0].cuda().float()
             all_y = data[1].cuda().long()

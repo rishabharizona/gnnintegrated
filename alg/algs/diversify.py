@@ -253,8 +253,15 @@ class Diversify(Algorithm):
         
         # Apply data augmentation during training
         if self.training and getattr(self.args, 'use_augmentation', False):
-            all_x1 = self.spectral_augmentation(all_x1)
+            if isinstance(all_x1, (Data, Batch)):
+                all_x1.x = self.spectral_augmentation(all_x1.x)
+            else:
+                all_x1 = self.spectral_augmentation(all_x1)
         
+        # Apply GNN transformation if needed
+        if self.args.use_gnn:
+            all_x1 = transform_for_gnn(all_x1)
+            
         # Ensure correct dimensions for non-PyG inputs
         if not isinstance(all_x1, (Data, Batch)):
             all_x1 = self.ensure_correct_dimensions(all_x1)
@@ -283,6 +290,14 @@ class Diversify(Algorithm):
         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         opt.step()
         
+        # Debugging information
+        if self.global_step % 50 == 0:
+            with torch.no_grad():
+                preds = cd1.argmax(dim=1)
+                acc = (preds == all_c1).float().mean().item()
+                domain_acc = (disc_out1.argmax(dim=1) == all_d1).float().mean().item()
+                print(f"[D-Step {self.global_step}] Loss: {loss.item():.4f} | "
+                      f"ClassAcc: {acc:.4f} | DomainAcc: {domain_acc:.4f}")
         
         return {'total': loss.item(), 'dis': disc_loss.item(), 'ent': ent_loss.item()}
 
@@ -419,14 +434,44 @@ class Diversify(Algorithm):
         return inputs
 
     def update(self, data, opt):
-        all_x = data[0].cuda().float()
-        all_x = self.ensure_correct_dimensions(all_x)
-        all_y = data[1].cuda().long()
+        """Main update method with PyG data support"""
+        # Handle PyG Data objects
+        if isinstance(data[0], (Data, Batch)):
+            batch_data = data[0].to('cuda')
+            all_x = batch_data
+            
+            # Get class labels from Data object or fallback
+            if hasattr(batch_data, 'y') and batch_data.y is not None:
+                all_y = batch_data.y
+            else:
+                all_y = data[1].cuda().long()
+                
+            # Get domain labels from Data object or fallback
+            if hasattr(batch_data, 'domain') and batch_data.domain is not None:
+                disc_labels = batch_data.domain
+            else:
+                disc_labels = data[4].cuda().long()
+        else:
+            all_x = data[0].cuda().float()
+            all_y = data[1].cuda().long()
+            disc_labels = data[4].cuda().long()
         
         # Apply augmentation during training
         if self.training and getattr(self.args, 'use_augmentation', False):
-            all_x = self.spectral_augmentation(all_x)
+            if isinstance(all_x, (Data, Batch)):
+                all_x.x = self.spectral_augmentation(all_x.x)
+            else:
+                all_x = self.spectral_augmentation(all_x)
+        
+        # Apply GNN transformation if needed
+        if self.args.use_gnn:
+            all_x = transform_for_gnn(all_x)
             
+        # Ensure correct dimensions for non-PyG inputs
+        if not isinstance(all_x, (Data, Batch)):
+            all_x = self.ensure_correct_dimensions(all_x)
+        
+        # Forward pass
         all_z = self.bottleneck(self.featurizer(all_x))
         if self.explain_mode:
             all_z = all_z.clone()
@@ -438,7 +483,6 @@ class Diversify(Algorithm):
         disc_out = self.discriminator(disc_input)
         
         # Domain labels
-        disc_labels = data[4].cuda().long()
         disc_labels = torch.clamp(disc_labels, 0, self.args.latent_domain_num - 1)
         
         # Loss calculations
@@ -459,6 +503,14 @@ class Diversify(Algorithm):
         if self.warmup_scheduler:
             self.warmup_scheduler.step()
         
+        # Debug information
+        if self.global_step % 100 == 0:
+            with torch.no_grad():
+                preds = all_preds.argmax(dim=1)
+                acc = (preds == all_y).float().mean().item()
+                domain_acc = (disc_out.argmax(dim=1) == disc_labels).float().mean().item()
+                print(f"[Step {self.global_step}] ClassLoss={classifier_loss.item():.4f} | "
+                      f"DiscLoss={disc_loss.item():.4f} | ClassAcc: {acc:.4f} | DomainAcc: {domain_acc:.4f}")
         return {'total': loss.item(), 'class': classifier_loss.item(), 'dis': disc_loss.item()}
 
     def update_a(self, minibatches, opt):
@@ -490,7 +542,6 @@ class Diversify(Algorithm):
                     raise RuntimeError("Domain labels not found in Data object and minibatch[2] is missing")
         else:
             inputs = inputs.cuda().float()
-            inputs = self.ensure_correct_dimensions(inputs)
             all_c = minibatches[1]
             all_d = minibatches[2]
         
@@ -517,6 +568,21 @@ class Diversify(Algorithm):
                   f"Max label: {all_y.max().item()} vs max classes: {max_class}")
             all_y = torch.clamp(all_y, 0, max_class-1)
         
+        # Apply augmentation during training
+        if self.training and getattr(self.args, 'use_augmentation', False):
+            if isinstance(inputs, (Data, Batch)):
+                inputs.x = self.spectral_augmentation(inputs.x)
+            else:
+                inputs = self.spectral_augmentation(inputs)
+                
+        # Apply GNN transformation if needed
+        if self.args.use_gnn:
+            inputs = transform_for_gnn(inputs)
+            
+        # Ensure correct dimensions for non-PyG inputs
+        if not isinstance(inputs, (Data, Batch)):
+            inputs = self.ensure_correct_dimensions(inputs)
+        
         # Forward pass
         all_z = self.abottleneck(self.featurizer(inputs))
         
@@ -531,11 +597,19 @@ class Diversify(Algorithm):
         classifier_loss.backward()
         opt.step()
         
+        # Debug information
+        if self.global_step % 100 == 0:
+            with torch.no_grad():
+                preds = all_preds.argmax(dim=1)
+                acc = (preds == all_y).float().mean().item()
+                print(f"[Aux-Step {self.global_step}] AuxLoss={classifier_loss.item():.4f} | AuxAcc: {acc:.4f}")
+        
         return {'class': classifier_loss.item()}
 
     def predict(self, x):
         """Main prediction method"""
-        x = self.ensure_correct_dimensions(x)
+        if not isinstance(x, (Data, Batch)):
+            x = self.ensure_correct_dimensions(x)
         features = self.featurizer(x)
         bottleneck_out = self.bottleneck(features)
         if self.explain_mode:
@@ -544,7 +618,8 @@ class Diversify(Algorithm):
     
     def predict1(self, x):
         """Domain discriminator prediction"""
-        x = self.ensure_correct_dimensions(x)
+        if not isinstance(x, (Data, Batch)):
+            x = self.ensure_correct_dimensions(x)
         features = self.featurizer(x)
         bottleneck_out = self.dbottleneck(features)
         if self.explain_mode:
@@ -553,7 +628,8 @@ class Diversify(Algorithm):
     
     def forward(self, batch):
         inputs = batch[0]
-        inputs = self.ensure_correct_dimensions(inputs)
+        if not isinstance(inputs, (Data, Batch)):
+            inputs = self.ensure_correct_dimensions(inputs)
         labels = batch[1]
         
         preds = self.predict(inputs)
@@ -569,7 +645,8 @@ class Diversify(Algorithm):
         try:
             self.explain_mode = True
             with torch.no_grad():
-                x = self.ensure_correct_dimensions(x)
+                if not isinstance(x, (Data, Batch)):
+                    x = self.ensure_correct_dimensions(x)
                 return self.predict(x)
         finally:
             self.explain_mode = original_mode

@@ -681,13 +681,13 @@ def main(args):
             algorithm.eval()
             
             def curriculum_predict(x):
-            if args.use_gnn and GNN_AVAILABLE:
-                x = transform_for_gnn(x)
-            return algorithm.predict(x)
+                if args.use_gnn and GNN_AVAILABLE:
+                    x = transform_for_gnn(x)
+                return algorithm.predict(x)
             
             class CurriculumEvaluator:
-            def predict(self, x):
-                return curriculum_predict(x)
+                def predict(self, x):
+                    return curriculum_predict(x)
             
             evaluator = CurriculumEvaluator()
             

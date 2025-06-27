@@ -74,10 +74,10 @@ class SafeSubset(Subset):
         elif isinstance(data, torch.Tensor):
             return data
         elif isinstance(data, Data):
-            # Correctly handle PyG Data objects
-            for key in data.keys:  # Use the keys property directly
-                if key in data:  # Only process existing attributes
-                    data[key] = self.convert_data(data[key])
+            # CORRECTED: Use keys() method for PyG Data objects
+            for key in data.keys():  # Call the method to get keys
+                if hasattr(data, key):  # Only process existing attributes
+                    setattr(data, key, self.convert_data(getattr(data, key)))
             return data
         else:
             return data
@@ -130,11 +130,13 @@ def get_dataloader(args, tr, val, tar):
     sample = tr[0]
     is_graph_data = False
     
-    if (isinstance(sample, tuple) and len(sample) >= 3 and 
-        isinstance(sample[0], Data)):
+    # Check if the sample is a tuple containing a Data object
+    if isinstance(sample, tuple) and len(sample) >= 3 and isinstance(sample[0], Data):
         is_graph_data = True
+    # Check if the sample is a Data object itself
     elif isinstance(sample, Data):
         is_graph_data = True
+    # Check if the sample is a dictionary with a graph key
     elif isinstance(sample, dict) and 'graph' in sample:
         is_graph_data = True
 
@@ -180,10 +182,12 @@ def get_act_dataloader(args):
             source_datasets.append(tdata)
     
     # Combine and wrap datasets
-    source_data = ConsistentFormatWrapper(combindataset(args, source_datasets))
-    target_data = ConsistentFormatWrapper(combindataset(args, target_datasets))
+    source_data = combindataset(args, source_datasets)
+    source_data = ConsistentFormatWrapper(source_data)
+    target_data = combindataset(args, target_datasets)
+    target_data = ConsistentFormatWrapper(target_data)
     
-    # Split source data (80/20 train/validation)
+    # Split source data (80% train, 20% validation)
     l = len(source_data)
     if l == 0:
         raise ValueError("Source dataset is empty after processing")
@@ -192,8 +196,8 @@ def get_act_dataloader(args):
     np.random.seed(args.seed)
     np.random.shuffle(indices)
     split_point = int(l * 0.8)
-    train_indices = indices[split_point:]
-    val_indices = indices[:split_point]
+    train_indices = indices[:split_point]  # First 80% for training
+    val_indices = indices[split_point:]    # Last 20% for validation
     
     train_set = SafeSubset(source_data, train_indices)
     val_set = SafeSubset(source_data, val_indices)
@@ -223,17 +227,20 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             
         domain_indices.setdefault(domain, []).append(idx)
     
+    # If no domains found, return full dataset
+    if not domain_indices:
+        print("Warning: No domains found for curriculum learning, using full dataset")
+        if train_dataset and isinstance(train_dataset[0], (tuple, list)) and isinstance(train_dataset[0][0], Data):
+            return get_gnn_dataloader(train_dataset, args.batch_size, 0, True)
+        else:
+            return DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    
     # Compute loss per domain
     domain_metrics = []
     with torch.no_grad():
         for domain, indices in domain_indices.items():
-            if not indices:
-                continue
-                
             subset = Subset(val_dataset, indices)
-            is_graph_data = False
-            if subset and isinstance(subset[0], (tuple, list)) and subset[0] and isinstance(subset[0][0], Data):
-                is_graph_data = True
+            is_graph_data = isinstance(subset[0][0], Data) if subset else False
             
             loader = get_gnn_dataloader(subset, args.batch_size, 0, False) if is_graph_data else \
                      DataLoader(subset, batch_size=args.batch_size, shuffle=False)
@@ -254,14 +261,6 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             
             avg_loss = total_loss / max(1, len(loader))
             domain_metrics.append((domain, avg_loss))
-    
-    # If no domains found, return full dataset
-    if not domain_metrics:
-        print("Warning: No domains found for curriculum learning, using full dataset")
-        if train_dataset and isinstance(train_dataset[0][0], Data):
-            return get_gnn_dataloader(train_dataset, args.batch_size, 0, True)
-        else:
-            return DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     
     # Calculate domain difficulty using only loss
     losses = [m[1] for m in domain_metrics]
@@ -309,7 +308,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     curriculum_subset = SafeSubset(train_dataset, selected_indices)
     
     # Create appropriate loader
-    if curriculum_subset and isinstance(curriculum_subset[0], (tuple, list)) and curriculum_subset[0] and isinstance(curriculum_subset[0][0], Data):
+    if curriculum_subset and isinstance(curriculum_subset[0], (tuple, list)) and isinstance(curriculum_subset[0][0], Data):
         return get_gnn_dataloader(curriculum_subset, args.batch_size, 0, True)
     else:
         return DataLoader(curriculum_subset, batch_size=args.batch_size, shuffle=True)

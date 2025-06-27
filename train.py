@@ -681,25 +681,29 @@ def main(args):
             algorithm.eval()
             
             def curriculum_predict(x):
-                if args.use_gnn and GNN_AVAILABLE:
-                    x = transform_for_gnn(x)
-                return algorithm.predict(x)
+            if args.use_gnn and GNN_AVAILABLE:
+                x = transform_for_gnn(x)
+            return algorithm.predict(x)
             
             class CurriculumEvaluator:
-                def predict(self, x):
-                    return curriculum_predict(x)
+            def predict(self, x):
+                return curriculum_predict(x)
             
             evaluator = CurriculumEvaluator()
             
-            train_loader = get_curriculum_loader(
-                args,
-                evaluator,
-                tr,
-                val,
-                stage=round_idx,
-                loader_class=LoaderClass
+            curriculum_dataset = get_curriculum_loader(
+            args,
+            evaluator,
+            tr,
+            val,
+            stage=round_idx
             )
-            
+            train_loader = LoaderClass(
+            curriculum_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=min(2, args.N_WORKERS)
+            )
             train_loader_noshuffle = LoaderClass(
                 train_loader.dataset,
                 batch_size=args.batch_size,

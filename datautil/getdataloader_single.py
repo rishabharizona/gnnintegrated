@@ -15,9 +15,11 @@ import collections
 # Task mapping for activity recognition
 task_act = {'cross_people': cross_people}
 
-class ConsistentFormatWrapper(torch.utils.data.Dataset):
+class ConsistentFormatWrapper(Dataset):
     """Ensures samples always return (graph, label, domain) format"""
     def __init__(self, dataset):
+        if isinstance(dataset, DataLoader):
+            raise TypeError("ConsistentFormatWrapper requires a Dataset, not a DataLoader")
         self.dataset = dataset
         
     def __len__(self):
@@ -52,6 +54,8 @@ class ConsistentFormatWrapper(torch.utils.data.Dataset):
 class SafeSubset(Subset):
     """Safe subset that converts numpy types to PyTorch tensors"""
     def __init__(self, dataset, indices):
+        if isinstance(dataset, DataLoader):
+            raise TypeError("SafeSubset requires a Dataset, not a DataLoader")
         super().__init__(dataset, indices)
         self.indices = indices
         
@@ -112,6 +116,8 @@ def collate_gnn(batch):
 
 def get_gnn_dataloader(dataset, batch_size, num_workers, shuffle=True):
     """Create GNN-specific data loader with custom collate"""
+    if isinstance(dataset, DataLoader):
+        raise TypeError("get_gnn_dataloader requires a Dataset, not a DataLoader")
     return DataLoader(
         dataset=dataset,
         batch_size=batch_size,
@@ -126,6 +132,11 @@ def get_dataloader(args, tr, val, tar):
     # Handle empty datasets
     if len(tr) == 0:
         raise ValueError("Training dataset is empty")
+    
+    # Ensure we have datasets, not loaders
+    for ds in [tr, val, tar]:
+        if isinstance(ds, DataLoader):
+            raise TypeError("get_dataloader requires Datasets, not DataLoaders")
     
     sample = tr[0]
     is_graph_data = False
@@ -218,6 +229,10 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             isinstance(sample, Data) or
             (isinstance(sample, dict) and 'graph' in sample)
         )
+    
+    # Ensure we have datasets, not loaders
+    if isinstance(train_dataset, DataLoader) or isinstance(val_dataset, DataLoader):
+        raise TypeError("get_curriculum_loader requires Datasets, not DataLoaders")
 
     # Collect domain indices from validation set
     domain_indices = {}
@@ -327,6 +342,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         return get_gnn_dataloader(curriculum_subset, args.batch_size, 0, True)
     else:
         return DataLoader(curriculum_subset, batch_size=args.batch_size, shuffle=True)
+
 def get_shap_batch(loader, size=100):
     """Extract a batch of data for SHAP analysis"""
     samples = []

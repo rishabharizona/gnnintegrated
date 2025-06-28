@@ -42,7 +42,7 @@ from shap_utils import (
 try:
     from gnn.temporal_gcn import TemporalGCN
     from gnn.graph_builder import GraphBuilder
-    from torch_geometric.data import Data, Batch  # ADDED IMPORT
+    from torch_geometric.data import Data, Batch
     GNN_AVAILABLE = True
     print("GNN modules successfully imported")
 except ImportError as e:
@@ -742,6 +742,7 @@ def main(args):
                 
                 # Ensure consistent input dimensions
                 if not isinstance(inputs, (Data, Batch)):
+                    inputs = inputs.reshape(inputs.size(0), -1)
                     if hasattr(algorithm, 'ensure_correct_dimensions'):
                         inputs = algorithm.ensure_correct_dimensions(inputs)
                 
@@ -749,7 +750,6 @@ def main(args):
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
-        algorithm.train()
         return 100 * correct / total
     # ======================= END FIXED EVALUATION FUNCTION =======================
     
@@ -1217,7 +1217,7 @@ if __name__ == '__main__':
     # ====================== OPTIMIZED PARAMETER SETTINGS ======================
     # All regularization removed
     args.lambda_cls = getattr(args, 'lambda_cls', 1.0)
-    args.lambda_dis = getattr(args, 'lambda_dis', 0.001)  # MINIMAL
+    args.lambda_dis = getattr(args, 'lambda_dis', 0.01)  # MINIMAL
     args.label_smoothing = 0.0  # DISABLED
     args.max_grad_norm = 1.0  # Loosened gradient clipping
     args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)  # Enabled with 5 epochs
@@ -1237,7 +1237,7 @@ if __name__ == '__main__':
             args.gnn_hidden_dim = getattr(args, 'gnn_hidden_dim', 128)  # Increased
             args.gnn_output_dim = getattr(args, 'gnn_output_dim', 256)  # Increased
             args.gnn_layers = 1  # MINIMAL LAYERS
-            args.gnn_lr = getattr(args, 'gnn_lr', 0.01)  # Increased
+            args.gnn_lr = getattr(args, 'gnn_lr', 0.0001)  # Increased
             args.gnn_weight_decay = 0.0  # DISABLED
             
             args.use_tcn = getattr(args, 'use_tcn', True)
@@ -1250,13 +1250,13 @@ if __name__ == '__main__':
     args.optimizer = getattr(args, 'optimizer', 'adam')
     args.weight_decay = 1e-4  # Enable weight decay
     args.domain_adv_weight = 0.1  # Enable domain adaptation
-    args.lr = 0.01  # Increased learning rate
+    args.lr = 0.001  # Increased learning rate
 
     # Augmentation enabled for contrastive learning
-    args.jitter_scale = 0.0
-    args.scaling_std = 0.0
-    args.warp_ratio = 0.0
-    args.aug_prob = 0.0
+    args.jitter_scale = 0.5
+    args.scaling_std = 0.5
+    args.warp_ratio = 0.5
+    args.aug_prob = 0.9
 
     # Training schedule minimized
     args.max_epoch = getattr(args, 'max_epoch', 100)  # INCREASED

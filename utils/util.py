@@ -203,7 +203,16 @@ def get_args():
     parser.add_argument('--debug_mode', action='store_true',
                         help='Enable debugging mode with small dataset subset')
     # ====== END ADDED DEBUGGING PARAMETER ======
-    
+    parser.add_argument('--contrastive_weight', type=float, default=0.5,
+                        help='Weight for contrastive loss component')
+    parser.add_argument('--domain_align_weight', type=float, default=0.1,
+                        help='Weight for domain alignment loss')
+    parser.add_argument('--use_ema', action='store_true',
+                        help='Enable exponential moving average for model weights')
+    parser.add_argument('--ema_decay', type=float, default=0.999,
+                        help='Decay rate for exponential moving average')
+    parser.add_argument('--domain_adv_weight', type=float, default=0.1,
+                        help='Weight for domain adversarial loss')
     # ======== GNN PARAMETERS ========
     parser.add_argument('--use_gnn', action='store_true', 
                         help='Use GNN instead of CNN')

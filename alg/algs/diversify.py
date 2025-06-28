@@ -16,6 +16,43 @@ from loss.common_loss import Entropylogits
 from torch_geometric.utils import to_dense_batch
 
 GNN_AVAILABLE = True  # Flag indicating GNN availability
+
+# ======================= CONTRASTIVE LOSS =======================
+class SupConLoss(nn.Module):
+    """Supervised Contrastive Loss"""
+    def __init__(self, temperature=0.1):
+        super(SupConLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, features, labels):
+        device = features.device
+        batch_size = features.shape[0]
+        
+        # Normalize features
+        features = F.normalize(features, dim=1)
+        
+        # Compute similarity matrix
+        similarity_matrix = torch.matmul(features, features.T) / self.temperature
+        
+        # Create mask for positive pairs
+        labels = labels.contiguous().view(-1, 1)
+        mask = torch.eq(labels, labels.T).float().to(device)
+        
+        # Remove diagonal
+        logits_mask = torch.ones_like(mask) - torch.eye(batch_size, device=device)
+        mask = mask * logits_mask
+        
+        # Compute log probabilities
+        exp_logits = torch.exp(similarity_matrix) * logits_mask
+        log_prob = similarity_matrix - torch.log(exp_logits.sum(dim=1, keepdim=True))
+        
+        # Compute mean log-likelihood over positive pairs
+        mean_log_prob_pos = (mask * log_prob).sum(dim=1) / mask.sum(dim=1)
+        
+        # Loss
+        loss = -mean_log_prob_pos.mean()
+        return loss
+# ======================= END CONTRASTIVE LOSS =======================
         
 def transform_for_gnn(x):
     """Robust transformation for GNN input handling various formats"""
@@ -134,6 +171,17 @@ class Diversify(Algorithm):
         self.criterion = StandardLoss()
         self.explain_mode = False
         self.patch_skip_connection()
+        
+        # ======================= CONTRASTIVE COMPONENTS =======================
+        # Projection heads for contrastive learning
+        self.projection_head = nn.Sequential(
+            nn.Linear(args.bottleneck, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128)
+        )
+        self.supcon_loss = SupConLoss(temperature=0.1)
+        self.contrast_weight = 0.5  # Weight for contrastive loss
+        # ======================= END CONTRASTIVE COMPONENTS =======================
         
     def patch_skip_connection(self):
         """Dynamically adjust skip connection based on actual input shape"""
@@ -382,6 +430,12 @@ class Diversify(Algorithm):
         if self.explain_mode:
             all_z = all_z.clone()
             
+        # ======================= CONTRASTIVE LEARNING =======================
+        # Project features for contrastive loss
+        projections = self.projection_head(all_z)
+        contrastive_loss = self.supcon_loss(projections, all_y) * self.contrast_weight
+        # ======================= END CONTRASTIVE LEARNING =======================
+            
         # Constant alpha
         disc_input = Adver_network.ReverseLayerF.apply(all_z, 1.0)
         disc_out = self.discriminator(disc_input)
@@ -393,7 +447,7 @@ class Diversify(Algorithm):
         disc_loss = F.cross_entropy(disc_out, disc_labels)
         all_preds = self.classifier(all_z)
         classifier_loss = self.criterion(all_preds, all_y)
-        loss = classifier_loss + 0.01 * disc_loss  # Reduced domain loss weight
+        loss = classifier_loss + 0.01 * disc_loss + contrastive_loss  # Include contrastive loss
         
         # Optimization
         opt.zero_grad()
@@ -403,7 +457,12 @@ class Diversify(Algorithm):
         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         opt.step()
         
-        return {'total': loss.item(), 'class': classifier_loss.item(), 'dis': disc_loss.item()}
+        return {
+            'total': loss.item(), 
+            'class': classifier_loss.item(), 
+            'dis': disc_loss.item(),
+            'contrast': contrastive_loss.item()
+        }
 
     def update_a(self, minibatches, opt):
         """Update auxiliary classifier with robust label handling"""

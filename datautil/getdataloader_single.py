@@ -312,13 +312,25 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         for idx in range(len(train_dataset)):
             sample = train_dataset[idx]
             
-            # Extract data based on format
+            # Improved label extraction
             if is_graph_data([sample]):
-                inputs = sample[0] if isinstance(sample, tuple) else sample
-                labels = sample[1] if isinstance(sample, tuple) else None
+                if isinstance(sample, tuple):
+                    inputs, labels = sample[0], sample[1]
+                else:
+                    inputs = sample
+                    # Handle PyG Data objects
+                    labels = sample.y if hasattr(sample, 'y') else None
             else:
-                inputs = sample[0] if isinstance(sample, tuple) else sample
-                labels = sample[1] if isinstance(sample, tuple) else None
+                if isinstance(sample, tuple) and len(sample) >= 2:
+                    inputs, labels = sample[0], sample[1]
+                else:
+                    inputs = sample
+                    labels = None
+            
+            # Ensure labels are properly formatted
+            if labels is not None:
+                if isinstance(labels, torch.Tensor) and labels.dim() == 0:
+                    labels = labels.unsqueeze(0)  # Convert scalar to tensor
                 
             # Move to device
             inputs = inputs.to(args.device)
@@ -329,8 +341,10 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             outputs = algorithm.predict(inputs)
             probs = F.softmax(outputs, dim=-1)
             
-            # Calculate difficulty metrics
-            if labels is not None:
+            # Add dimension check before loss calculation
+            valid_labels = labels is not None and isinstance(labels, torch.Tensor) and labels.numel() > 0
+            
+            if valid_labels and outputs.shape[0] == labels.shape[0]:
                 # Cross-entropy loss
                 loss = F.cross_entropy(outputs, labels).item()
                 
@@ -340,6 +354,9 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             else:
                 loss = 0
                 accuracy = 0
+                if args.verbose:
+                    print(f"Warning: Invalid labels in sample {idx} - "
+                          f"Output shape: {outputs.shape}, Label shape: {labels.shape if labels is not None else 'None'}")
                 
             # Confidence-based metrics
             max_prob = probs.max().item()

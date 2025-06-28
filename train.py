@@ -680,6 +680,31 @@ def main(args):
     
     MAX_GRAD_NORM = 1.0  # Loosened gradient clipping
     
+    # Define evaluation function
+    def evaluate_accuracy(loader):
+        correct = 0
+        total = 0
+        algorithm.eval()
+        with torch.no_grad():
+            for batch in loader:
+                if args.use_gnn and GNN_AVAILABLE:
+                    inputs = batch[0].to(args.device)
+                    labels = batch[1].to(args.device)
+                    domains = batch[2].to(args.device)
+                    if transform_fn:
+                        inputs = transform_for_gnn(inputs)
+                else:
+                    inputs = batch[0].to(args.device).float()
+                    labels = batch[1].to(args.device).long()
+                    domains = batch[2].to(args.device).long()
+                
+                outputs = algorithm.predict(inputs)
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+        algorithm.train()
+        return 100 * correct / total
+    
     global_step = 0
     for round_idx in range(args.max_epoch):
         if hasattr(algorithm.featurizer, 'dropout'):
@@ -831,6 +856,8 @@ def main(args):
         round_start_time = time.time()
         for step in range(current_epochs):
             step_start_time = time.time()
+            
+            # Train for one epoch
             for batch in train_loader:
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
@@ -846,35 +873,16 @@ def main(args):
                 step_vals = algorithm.update(data, opt)
                 torch.nn.utils.clip_grad_norm_(algorithm.parameters(), MAX_GRAD_NORM)
             
-            transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
-            def evaluate_accuracy(loader):
-                correct = 0
-                total = 0
-                algorithm.eval()
-                with torch.no_grad():
-                    for batch in loader:
-                        if args.use_gnn and GNN_AVAILABLE:
-                            inputs = batch[0].to(args.device)
-                            labels = batch[1].to(args.device)
-                            domains = batch[2].to(args.device)
-                            if transform_fn:
-                                inputs = transform_fn(inputs)
-                        else:
-                            inputs = batch[0].to(args.device).float()
-                            labels = batch[1].to(args.device).long()
-                            domains = batch[2].to(args.device).long()
-                        
-                        outputs = algorithm.predict(inputs)
-                        _, predicted = torch.max(outputs.data, 1)
-                        total += labels.size(0)
-                        correct += (predicted == labels).sum().item()
-                algorithm.train()
-                return 100 * correct / total
+            # Evaluate after each epoch
+            train_acc = evaluate_accuracy(train_loader_noshuffle)
+            valid_acc = evaluate_accuracy(valid_loader)
+            target_acc = evaluate_accuracy(target_loader)
+            
             results = {
                 'epoch': global_step,
-                'train_acc': evaluate_accuracy(train_loader_noshuffle),
-                'valid_acc': evaluate_accuracy(valid_loader),
-                'target_acc': evaluate_accuracy(target_loader),
+                'train_acc': train_acc,
+                'valid_acc': valid_acc,
+                'target_acc': target_acc,
                 'total_cost_time': time.time() - step_start_time
             }
             

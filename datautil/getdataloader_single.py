@@ -318,8 +318,6 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     sample_difficulties = []
     algorithm.eval()
     with torch.no_grad():
-        features = algorithm.featurizer(inputs).detach().cpu().numpy().reshape(-1)
-        outputs = algorithm.predict(inputs)
         for idx in range(len(train_dataset)):
             sample = train_dataset[idx]
             
@@ -329,7 +327,6 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
                     inputs, labels = sample[0], sample[1]
                 else:
                     inputs = sample
-                    # Handle PyG Data objects
                     labels = sample.y if hasattr(sample, 'y') else None
             else:
                 if isinstance(sample, tuple) and len(sample) >= 2:
@@ -337,40 +334,36 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
                 else:
                     inputs = sample
                     labels = None
-
-            # Ensure labels are properly formatted
-            if labels is not None:
-                if isinstance(labels, torch.Tensor) and labels.dim() == 0:
-                    labels = labels.unsqueeze(0)  # Convert scalar to tensor
-            
+    
             # Move to device
             inputs = inputs.to(args.device)
             if labels is not None and isinstance(labels, torch.Tensor):
                 labels = labels.to(args.device).long()
             
-            # Get model predictions
+            # Initialize target_sim with default value
+            target_sim = 0.0
+            
+            # Extract features for current sample
+            features = algorithm.featurizer(inputs).detach().cpu().numpy().reshape(-1)
             outputs = algorithm.predict(inputs)
-            probs = F.softmax(outputs, dim=-1)
+            
+            # Calculate target similarity if centroid available
+            if hasattr(args, 'target_centroid'):
+                target_centroid = args.target_centroid.reshape(-1)
+                target_sim = np.exp(-np.linalg.norm(features - target_centroid))
             
             # Calculate difficulty metrics
-            # Add dimension check before loss calculation
+            probs = F.softmax(outputs, dim=-1)
             valid_labels = labels is not None and isinstance(labels, torch.Tensor) and labels.numel() > 0
-
+    
             if valid_labels and outputs.shape[0] == labels.shape[0]:
-                # Cross-entropy loss
                 loss = F.cross_entropy(outputs, labels).item()
-                
-                # Accuracy (0-1)
                 _, preds = torch.max(outputs, 1)
                 accuracy = (preds == labels).float().mean().item()
             else:
                 loss = 0
                 accuracy = 0
-                if args.verbose:
-                    print(f"Warning: Invalid labels in sample {idx} - "
-                        f"Output shape: {outputs.shape}, Label shape: {labels.shape if labels is not None else 'None'}")
-                    
-            # Confidence-based metrics
+            
             max_prob = probs.max().item()
             entropy = -(probs * torch.log(probs + 1e-9)).sum().item()
             
@@ -378,34 +371,28 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             domain = to_tensor(get_domain(sample))
             domain_diff = domain_avg_dist.get(domain, 0)
             
-            # Revised difficulty score: Focus on uncertain/diverse samples
+            # Revised difficulty score
             difficulty_score = (
-                0.4 * (1 - max_prob) +          # Model uncertainty
-                0.3 * target_sim +        # Similarity to target domain
-                0.2 * domain_diff +              # Domain diversity
-                0.1 * loss                       # Traditional loss
+                0.4 * (1 - max_prob) +   # Model uncertainty
+                0.3 * target_sim +       # Similarity to target domain
+                0.2 * domain_diff +      # Domain diversity
+                0.1 * loss               # Traditional loss
             )
             
-            # Add target similarity calculation:
-            if hasattr(args, 'target_centroid'):
-                target_centroid = args.target_centroid.reshape(-1)
-                target_sim = np.exp(-np.linalg.norm(features - target_centroid))
-            else:
-                target_sim = 0
             sample_difficulties.append((idx, difficulty_score))
-    
-    # Normalize difficulties to [0, 1] range
-    difficulties = [d for _, d in sample_difficulties]
-    min_difficulty = min(difficulties)
-    max_difficulty = max(difficulties) if max(difficulties) > min_difficulty else 1
-    normalized_difficulties = [
-        (d - min_difficulty) / (max_difficulty - min_difficulty) 
-        for d in difficulties
-    ]
-    
-    # Update sample difficulties with normalized values
-    sample_difficulties = [(idx, norm_d) for (idx, _), norm_d in 
-                          zip(sample_difficulties, normalized_difficulties)]
+        
+        # Normalize difficulties to [0, 1] range
+        difficulties = [d for _, d in sample_difficulties]
+        min_difficulty = min(difficulties)
+        max_difficulty = max(difficulties) if max(difficulties) > min_difficulty else 1
+        normalized_difficulties = [
+            (d - min_difficulty) / (max_difficulty - min_difficulty) 
+            for d in difficulties
+        ]
+        
+        # Update sample difficulties with normalized values
+        sample_difficulties = [(idx, norm_d) for (idx, _), norm_d in 
+                              zip(sample_difficulties, normalized_difficulties)]
     
     # ================= DYNAMIC THRESHOLD ADJUSTMENT =================
     # Adjust threshold based on model performance (easier if model struggling)

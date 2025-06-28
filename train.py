@@ -42,12 +42,18 @@ from shap_utils import (
 try:
     from gnn.temporal_gcn import TemporalGCN
     from gnn.graph_builder import GraphBuilder
+    from torch_geometric.data import Data, Batch  # ADDED IMPORT
     GNN_AVAILABLE = True
     print("GNN modules successfully imported")
 except ImportError as e:
     print(f"[WARNING] GNN modules not available: {str(e)}")
     print("Falling back to CNN architecture")
     GNN_AVAILABLE = False
+    # Define dummy classes for non-GNN environments
+    class Data:
+        pass
+    class Batch:
+        pass
 # ======================= GNN INTEGRATION END =======================
 
 def automated_k_estimation(features, k_min=2, k_max=10):
@@ -736,7 +742,6 @@ def main(args):
                 
                 # Ensure consistent input dimensions
                 if not isinstance(inputs, (Data, Batch)):
-                    inputs = inputs.reshape(inputs.size(0), -1)
                     if hasattr(algorithm, 'ensure_correct_dimensions'):
                         inputs = algorithm.ensure_correct_dimensions(inputs)
                 
@@ -744,6 +749,7 @@ def main(args):
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
+        algorithm.train()
         return 100 * correct / total
     # ======================= END FIXED EVALUATION FUNCTION =======================
     
@@ -1244,17 +1250,17 @@ if __name__ == '__main__':
     args.optimizer = getattr(args, 'optimizer', 'adam')
     args.weight_decay = 1e-4  # Enable weight decay
     args.domain_adv_weight = 0.1  # Enable domain adaptation
-    args.lr = 0.01  # Increased learning rate
+    args.lr = 0.001  # Increased learning rate
 
     # Augmentation enabled for contrastive learning
-    args.jitter_scale = 0.0
-    args.scaling_std = 0.0
-    args.warp_ratio = 0.0
-    args.aug_prob = 0.0
+    args.jitter_scale = 0.1
+    args.scaling_std = 0.1
+    args.warp_ratio = 0.1
+    args.aug_prob = 0.5
 
     # Training schedule minimized
     args.max_epoch = getattr(args, 'max_epoch', 100)  # INCREASED
-    args.early_stopping_patience = 5  # INCREASED
+    args.early_stopping_patience = 20  # INCREASED
 
     # Domain adaptation minimized
     if not hasattr(args, 'adv_weight'):

@@ -116,6 +116,8 @@ def init_gnn_model(args, input_dim, num_classes):
 
 class Diversify(Algorithm):
     def __init__(self, args):
+        if not hasattr(args, 'bottleneck_dim'):
+            args.bottleneck_dim = args.bottleneck    
         super().__init__(args)
         self.featurizer = get_fea(args)
         self.dbottleneck = common_network.feat_bottleneck(self.featurizer.in_features, args.bottleneck, args.layer)

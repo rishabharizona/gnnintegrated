@@ -128,7 +128,7 @@ def transform_for_gnn(x):
             return x.squeeze(1).permute(0, 2, 1)
         elif x.size(3) == 8 or x.size(3) == 200:
             return x.squeeze(2)
-        elif x.size(3) == 1 and (x.size(2) == 8 or x.size(2) == 200):
+        elif x.size(3) == 1 and (x.size(2) == 8 or x.size(2) == 200:
             return x.squeeze(3)
     
     elif x.dim() == 3:
@@ -176,13 +176,50 @@ class EMGDataAugmentation(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
-        self.jitter_scale = 0.0  # MINIMAL
-        self.scaling_std = 0.0  # MINIMAL
-        self.warp_ratio = 0.0  # MINIMAL
-        self.aug_prob = 0.0  # MINIMAL
+        self.jitter_scale = 0.1  # ENABLED FOR CONTRASTIVE LEARNING
+        self.scaling_std = 0.1   # ENABLED FOR CONTRASTIVE LEARNING
+        self.warp_ratio = 0.1    # ENABLED FOR CONTRASTIVE LEARNING
+        self.aug_prob = 0.5      # ENABLED FOR CONTRASTIVE LEARNING
 
     def forward(self, x):
-        return x  # COMPLETELY DISABLED
+        # Only apply augmentation during training
+        if not self.training:
+            return x
+            
+        # Apply jitter
+        if random.random() < self.aug_prob:
+            jitter = torch.randn_like(x) * self.jitter_scale
+            x = x + jitter
+            
+        # Apply scaling
+        if random.random() < self.aug_prob:
+            scale_factor = torch.randn(x.size(0), 1, 1, device=x.device) * self.scaling_std + 1.0
+            x = x * scale_factor
+            
+        # Apply time warping
+        if random.random() < self.aug_prob and x.dim() > 2:
+            seq_len = x.size(2)
+            warp_points = max(3, seq_len // 10)
+            warp_strength = self.warp_ratio * seq_len
+            
+            for i in range(x.size(0)):
+                # Create random warping path
+                orig_points = np.linspace(0, seq_len-1, num=warp_points)
+                warp_values = np.random.normal(0, warp_strength, warp_points)
+                new_points = orig_points + warp_values
+                new_points[0] = 0
+                new_points[-1] = seq_len-1
+                
+                # Interpolate
+                orig_idx = np.arange(seq_len)
+                warped_signal = np.interp(orig_idx, new_points, orig_points)
+                
+                # Apply warping
+                for ch in range(x.size(1)):
+                    x[i, ch] = torch.from_numpy(np.interp(orig_idx, warped_signal, x[i, ch].cpu().numpy())).to(x.device)
+                    
+        return x
+# ======================= END AUGMENTATION MODULE =======================
 
 # ======================= OPTIMIZER FUNCTION =======================
 def get_optimizer(algorithm, args, nettype='Diversify'):
@@ -484,9 +521,9 @@ def main(args):
         torch.cuda.empty_cache()
     
     if args.latent_domain_num < 6:
-        args.batch_size = 16 * args.latent_domain_num  # REDUCED
+        args.batch_size = 32 * args.latent_domain_num  # INCREASED FOR CONTRASTIVE LEARNING
     else:
-        args.batch_size = 8 * args.latent_domain_num  # REDUCED
+        args.batch_size = 16 * args.latent_domain_num  # INCREASED FOR CONTRASTIVE LEARNING
     print(f"Adjusted batch size: {args.batch_size}")
     
     train_loader = LoaderClass(
@@ -665,7 +702,7 @@ def main(args):
     
     logs = {k: [] for k in ['epoch', 'class_loss', 'dis_loss', 'ent_loss',
                             'total_loss', 'train_acc', 'valid_acc', 'target_acc',
-                            'total_cost_time', 'h_divergence', 'domain_acc']}
+                            'total_cost_time', 'h_divergence', 'domain_acc', 'contrast_loss']}
     best_valid_acc, target_acc = 0, 0
     
     entire_source_loader = LoaderClass(
@@ -1144,7 +1181,7 @@ def main(args):
 
 if __name__ == '__main__':
     args = get_args()
-    # ====================== MINIMAL PARAMETER SETTINGS ======================
+    # ====================== OPTIMIZED PARAMETER SETTINGS ======================
     # All regularization removed
     args.lambda_cls = getattr(args, 'lambda_cls', 1.0)
     args.lambda_dis = getattr(args, 'lambda_dis', 0.01)  # MINIMAL
@@ -1164,33 +1201,32 @@ if __name__ == '__main__':
             print("[WARNING] GNN requested but not available. Falling back to CNN.")
             args.use_gnn = False
         else:
-            args.gnn_hidden_dim = getattr(args, 'gnn_hidden_dim', 64)  # Increased
-            args.gnn_output_dim = getattr(args, 'gnn_output_dim', 128)  # Increased
+            args.gnn_hidden_dim = getattr(args, 'gnn_hidden_dim', 128)  # Increased
+            args.gnn_output_dim = getattr(args, 'gnn_output_dim', 256)  # Increased
             args.gnn_layers = 1  # MINIMAL LAYERS
-            args.gnn_lr = getattr(args, 'gnn_lr', 0.00005)  # MINIMAL
+            args.gnn_lr = getattr(args, 'gnn_lr', 0.0001)  # Increased
             args.gnn_weight_decay = 0.0  # DISABLED
             
             args.use_tcn = getattr(args, 'use_tcn', True)
-            args.lstm_hidden_size = 64  # Increased
+            args.lstm_hidden_size = 128  # Increased
             args.lstm_layers = 1
-            args.bidirectional = False  # DISABLED
+            args.bidirectional = True  # ENABLED
             args.lstm_dropout = 0.0  # DISABLED
 
     # Optimizer settings minimized
     args.optimizer = getattr(args, 'optimizer', 'adam')
     args.weight_decay = 1e-4  # Enable weight decay
     args.domain_adv_weight = 0.1  # Enable domain adaptation
-    args.lr = 0.0001  # Increased learning rate
+    args.lr = 0.001  # Increased learning rate
 
-    # Augmentation completely disabled
-    args.jitter_scale = 0.0
-    args.scaling_std = 0.0
-    args.warp_ratio = 0.0
-    args.channel_dropout = 0.0
-    args.aug_prob = 0.0
+    # Augmentation enabled for contrastive learning
+    args.jitter_scale = 0.1
+    args.scaling_std = 0.1
+    args.warp_ratio = 0.1
+    args.aug_prob = 0.5
 
     # Training schedule minimized
-    args.max_epoch = getattr(args, 'max_epoch', 50)  # REDUCED
+    args.max_epoch = getattr(args, 'max_epoch', 100)  # INCREASED
     args.early_stopping_patience = 20  # INCREASED
 
     # Domain adaptation minimized

@@ -18,8 +18,10 @@ class Algorithm(nn.Module):
         # Domain alignment components
         self.domain_align_weight = getattr(args, 'domain_align_weight', 0.5)
         if self.domain_align_weight > 0:
-            self.domain_align = DomainAlignLayer(args.bottleneck_dim)
-            print(f"Initialized domain alignment (weight: {self.domain_align_weight})")
+            # Use args.bottleneck instead of bottleneck_dim
+            bottleneck_dim = int(args.bottleneck)  # Convert to integer
+            self.domain_align = DomainAlignLayer(bottleneck_dim)
+            print(f"Initialized domain alignment (weight: {self.domain_align_weight}, dim: {bottleneck_dim})")
     
     def update(self, minibatches):
         """Update the model parameters using a batch of data"""
@@ -56,8 +58,11 @@ class Algorithm(nn.Module):
         with torch.no_grad():
             for batch in target_loader:
                 inputs = batch[0].to(self.args.device)
-                if self.args.use_gnn and GNN_AVAILABLE:
-                    inputs = transform_for_gnn(inputs)
+                # Handle GNN transformation if needed
+                if getattr(self.args, 'use_gnn', False):
+                    from train import transform_for_gnn, GNN_AVAILABLE
+                    if GNN_AVAILABLE:
+                        inputs = transform_for_gnn(inputs)
                 _ = self.predict(inputs)  # Forward pass updates BN stats
         
         self.train(original_mode)

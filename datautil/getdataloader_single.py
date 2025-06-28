@@ -376,12 +376,17 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             
             # Revised difficulty score: Focus on uncertain/diverse samples
             difficulty_score = (
-                0.4 * (1 - max_prob) +  # Higher weight to uncertainty
-                0.3 * entropy +         # Focus on high entropy samples
-                0.2 * domain_diff +     # Domain diversity
-                0.1 * loss              # Traditional loss
+                0.4 * (1 - max_prob) +          # Model uncertainty
+                0.3 * target_similarity +        # Similarity to target domain
+                0.2 * domain_diff +              # Domain diversity
+                0.1 * loss                       # Traditional loss
             )
             
+            # Add target similarity calculation:
+            if hasattr(args, 'target_centroid'):
+                target_sim = np.exp(-np.linalg.norm(features - args.target_centroid))
+            else:
+                target_sim = 0
             sample_difficulties.append((idx, difficulty_score))
     
     # Normalize difficulties to [0, 1] range

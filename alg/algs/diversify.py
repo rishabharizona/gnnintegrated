@@ -118,6 +118,12 @@ def init_gnn_model(args, input_dim, num_classes):
 class Diversify(Algorithm):
     def __init__(self, args):
         super().__init__(args)
+        # Set defaults for new parameters
+        self.contrastive_weight = getattr(args, 'contrastive_weight', 0.0)
+        self.use_ema = getattr(args, 'use_ema', False)
+        self.ema_decay = getattr(args, 'ema_decay', 0.99)
+        self.domain_align_weight = getattr(args, 'domain_align_weight', 0.0)
+        
         self.featurizer = get_fea(args)
         self.dbottleneck = common_network.feat_bottleneck(self.featurizer.in_features, args.bottleneck, args.layer)
         self.ddiscriminator = Adver_network.Discriminator(args.bottleneck, args.dis_hidden, args.domain_num)
@@ -140,14 +146,13 @@ class Diversify(Algorithm):
             nn.Linear(int(args.bottleneck), 128),
             nn.ReLU(),
             nn.Linear(128, 64)
-        ) if args.contrastive_weight > 0 else None
+        ) if self.contrastive_weight > 0 else None
         
         # EMA model for stable predictions
-        if args.use_ema:
+        if self.use_ema:
             self.ema_featurizer = copy.deepcopy(self.featurizer)
             self.ema_bottleneck = copy.deepcopy(self.bottleneck)
             self.ema_classifier = copy.deepcopy(self.classifier)
-            self.ema_decay = args.ema_decay
             # Freeze EMA parameters
             for param in self.ema_featurizer.parameters():
                 param.requires_grad = False
@@ -413,7 +418,7 @@ class Diversify(Algorithm):
         # ========== ENHANCEMENTS ========== #
         # Domain alignment loss (MMD/CORAL)
         align_loss = 0
-        if self.args.domain_align_weight > 0:
+        if self.domain_align_weight > 0:
             source_mask = (disc_labels < self.args.latent_domain_num)
             if torch.any(source_mask) and torch.any(~source_mask):
                 source_features = all_z[source_mask]
@@ -422,7 +427,7 @@ class Diversify(Algorithm):
         
         # Contrastive learning
         contrastive_loss = 0
-        if self.args.contrastive_weight > 0 and self.projection_head:
+        if self.contrastive_weight > 0 and self.projection_head:
             projections = self.projection_head(all_z)
             # Simple contrastive loss with consecutive samples as positives
             contrastive_loss = F.cosine_embedding_loss(
@@ -432,13 +437,18 @@ class Diversify(Algorithm):
             )
         # ================================= #
             
-        # Loss calculations - reduced domain loss weight
-        disc_loss = F.cross_entropy(disc_out, disc_labels)
+        # Classification loss
+        all_preds = self.classifier(all_z)
         classifier_loss = self.criterion(all_preds, all_y)
+        
+        # Domain discrimination loss
+        disc_loss = F.cross_entropy(disc_out, disc_labels)
+        
+        # Combined loss
         loss = (classifier_loss + 
                 0.01 * disc_loss + 
-                self.args.domain_align_weight * align_loss +
-                self.args.contrastive_weight * contrastive_loss)
+                self.domain_align_weight * align_loss +
+                self.contrastive_weight * contrastive_loss)
         
         # Optimization
         opt.zero_grad()
@@ -449,7 +459,7 @@ class Diversify(Algorithm):
         opt.step()
         
         # ========== EMA UPDATE ========== #
-        if self.args.use_ema:
+        if self.use_ema:
             self.update_ema()
         # =============================== #
         
@@ -457,8 +467,8 @@ class Diversify(Algorithm):
             'total': loss.item(), 
             'class': classifier_loss.item(), 
             'dis': disc_loss.item(),
-            'align': align_loss.item(),
-            'contrastive': contrastive_loss.item()
+            'align': align_loss.item() if align_loss != 0 else 0.0,
+            'contrastive': contrastive_loss.item() if contrastive_loss != 0 else 0.0
         }
 
     def update_a(self, minibatches, opt):
@@ -534,7 +544,7 @@ class Diversify(Algorithm):
     def predict(self, x):
         """Main prediction method with EMA support"""
         # Use EMA model if available
-        if self.args.use_ema:
+        if self.use_ema:
             if not isinstance(x, (Data, Batch)):
                 x = self.ensure_correct_dimensions(x)
             features = self.ema_featurizer(x)

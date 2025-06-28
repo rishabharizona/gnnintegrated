@@ -128,7 +128,7 @@ def transform_for_gnn(x):
             return x.squeeze(1).permute(0, 2, 1)
         elif x.size(3) == 8 or x.size(3) == 200:
             return x.squeeze(2)
-        elif x.size(3) == 1 and (x.size(2) == 8 or x.size(2) == 200:
+        elif x.size(3) == 1 and (x.size(2) == 8 or x.size(2) == 200):
             return x.squeeze(3)
     
     elif x.dim() == 3:
@@ -717,30 +717,35 @@ def main(args):
     
     MAX_GRAD_NORM = 1.0  # Loosened gradient clipping
     
-    # Define evaluation function
+    # ======================= FIXED EVALUATION FUNCTION =======================
     def evaluate_accuracy(loader):
         correct = 0
         total = 0
         algorithm.eval()
         with torch.no_grad():
             for batch in loader:
+                # Handle different data formats consistently
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
-                    domains = batch[2].to(args.device)
-                    if transform_fn:
-                        inputs = transform_for_gnn(inputs)
+                    # Always apply transformation for GNN
+                    inputs = transform_for_gnn(inputs)
                 else:
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
-                    domains = batch[2].to(args.device).long()
+                
+                # Ensure consistent input dimensions
+                if not isinstance(inputs, (Data, Batch)):
+                    inputs = inputs.reshape(inputs.size(0), -1)
+                    if hasattr(algorithm, 'ensure_correct_dimensions'):
+                        inputs = algorithm.ensure_correct_dimensions(inputs)
                 
                 outputs = algorithm.predict(inputs)
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
-        algorithm.train()
         return 100 * correct / total
+    # ======================= END FIXED EVALUATION FUNCTION =======================
     
     global_step = 0
     for round_idx in range(args.max_epoch):
@@ -760,8 +765,7 @@ def main(args):
             print(f"\nCurriculum Stage {round_idx+1}/{len(args.CL_PHASE_EPOCHS)}")
             print(f"Difficulty: {current_difficulty:.1f}, Epochs: {current_epochs}")
             
-            if hasattr(algorithm, 'eval'):
-                algorithm.eval()
+            algorithm.eval()
             
             transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
     
@@ -817,6 +821,7 @@ def main(args):
         for step in range(current_epochs):
             epoch_class_loss = 0.0
             batch_count = 0
+            algorithm.train()  # Ensure training mode
             for batch in train_loader:
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
@@ -850,6 +855,7 @@ def main(args):
             epoch_ent = 0.0
             batch_count = 0
             
+            algorithm.train()  # Ensure training mode
             for batch in train_loader:
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
@@ -886,8 +892,9 @@ def main(args):
         print('\n==== Domain-invariant feature learning ====')
         loss_list = alg_loss_dict(args)
         eval_dict = train_valid_target_eval_names(args)
-        print_key = ['epoch'] + [f"{item}_loss" for item in loss_list] + \
-                   [f"{item}_acc" for item in eval_dict] + ['total_cost_time']
+        # Updated print_key to include contrast_loss
+        print_key = ['epoch', 'class_loss', 'dis_loss', 'contrast_loss', 
+                     'train_acc', 'valid_acc', 'target_acc', 'total_cost_time']
         print_row(print_key, colwidth=15)
         
         round_start_time = time.time()
@@ -895,6 +902,7 @@ def main(args):
             step_start_time = time.time()
             
             # Train for one epoch
+            algorithm.train()  # Ensure training mode
             for batch in train_loader:
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
@@ -911,6 +919,7 @@ def main(args):
                 torch.nn.utils.clip_grad_norm_(algorithm.parameters(), MAX_GRAD_NORM)
             
             # Evaluate after each epoch
+            algorithm.eval()  # Ensure evaluation mode
             train_acc = evaluate_accuracy(train_loader_noshuffle)
             valid_acc = evaluate_accuracy(valid_loader)
             target_acc = evaluate_accuracy(target_loader)
@@ -923,9 +932,16 @@ def main(args):
                 'total_cost_time': time.time() - step_start_time
             }
             
-            for key in loss_list:
-                results[f"{key}_loss"] = step_vals[key]
-                logs[f"{key}_loss"].append(step_vals[key])
+            # Include the contrastive loss if available
+            if 'contrast' in step_vals:
+                results['contrast_loss'] = step_vals['contrast']
+                logs['contrast_loss'].append(step_vals['contrast'])
+            
+            # Log classification and domain losses
+            for key in ['class', 'dis']:
+                if key in step_vals:
+                    results[f"{key}_loss"] = step_vals[key]
+                    logs[f"{key}_loss"].append(step_vals[key])
             
             for metric in ['train_acc', 'valid_acc', 'target_acc']:
                 logs[metric].append(results[metric])
@@ -938,7 +954,18 @@ def main(args):
             else:
                 epochs_without_improvement += 1
                 
-            print_row([results[key] for key in print_key], colwidth=15)
+            # Prepare row for printing
+            row = [
+                results.get('epoch', global_step),
+                results.get('class_loss', 0),
+                results.get('dis_loss', 0),
+                results.get('contrast_loss', 0),
+                results.get('train_acc', 0),
+                results.get('valid_acc', 0),
+                results.get('target_acc', 0),
+                results.get('total_cost_time', 0)
+            ]
+            print_row(row, colwidth=15)
             global_step += 1
             
         logs['total_cost_time'].append(time.time() - round_start_time)
@@ -1217,7 +1244,7 @@ if __name__ == '__main__':
     args.optimizer = getattr(args, 'optimizer', 'adam')
     args.weight_decay = 1e-4  # Enable weight decay
     args.domain_adv_weight = 0.1  # Enable domain adaptation
-    args.lr = 0.001  # Increased learning rate
+    args.lr = 0.01  # Increased learning rate
 
     # Augmentation enabled for contrastive learning
     args.jitter_scale = 0.1

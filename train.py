@@ -289,7 +289,7 @@ class EnhancedTemporalGCN(TemporalGCN):
             self.lstm = nn.LSTM(
                 input_size=self.hidden_dim,
                 hidden_size=lstm_hidden_size,
-                num_layers=lstm_layers,
+                num_ayers=lstm_layers,
                 batch_first=True,
                 bidirectional=bidirectional,
                 dropout=0.0  # ZERO DROPOUT
@@ -387,6 +387,7 @@ class DomainAdversarialLoss(nn.Module):
     def forward(self, features, domain_labels):
         domain_pred = self.domain_classifier(features)
         return self.loss_fn(domain_pred.squeeze(), domain_labels.float())
+
 # ======================= MAIN TRAINING FUNCTION =======================
 def main(args):
     s = print_args(args, [])
@@ -674,7 +675,10 @@ def main(args):
         num_workers=min(2, args.N_WORKERS))  # REDUCED
     
     best_valid_acc = 0
+    best_target_acc = 0
     epochs_without_improvement = 0
+    patience_counter = 0
+    PATIENCE_LIMIT = 15  # More patience for target adaptation
     early_stopping_patience = getattr(args, 'early_stopping_patience', 20)  # INCREASED
     
     MAX_GRAD_NORM = 1.0  # Loosened gradient clipping
@@ -690,6 +694,30 @@ def main(args):
             print(f"Early stopping at epoch {round_idx}")
             break
             
+        # Enhanced accuracy evaluation function
+        def evaluate_accuracy(loader):
+            algorithm.eval()
+            total = 0
+            correct = 0
+            
+            with torch.no_grad():
+                for batch in loader:
+                    if args.use_gnn and GNN_AVAILABLE:
+                        inputs = batch[0].to(args.device)
+                        labels = batch[1].to(args.device)
+                        inputs = transform_for_gnn(inputs)
+                    else:
+                        inputs = batch[0].to(args.device).float()
+                        labels = batch[1].to(args.device).long()
+                    
+                    outputs = algorithm.predict(inputs)
+                    _, preds = torch.max(outputs, 1)
+                    total += labels.size(0)
+                    correct += (preds == labels).sum().item()
+            
+            algorithm.train()
+            return 100 * correct / total if total > 0 else 0
+
         # Set current_epochs based on curriculum or default
         if getattr(args, 'curriculum', False) and round_idx < len(args.CL_PHASE_EPOCHS):
             current_epochs = args.CL_PHASE_EPOCHS[round_idx]
@@ -843,36 +871,52 @@ def main(args):
                 step_vals = algorithm.update(data, opt)
                 torch.nn.utils.clip_grad_norm_(algorithm.parameters(), MAX_GRAD_NORM)
             
-            transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
-            def evaluate_accuracy(loader):
-                correct = 0
-                total = 0
-                algorithm.eval()
-                with torch.no_grad():
-                    for batch in loader:
-                        if args.use_gnn and GNN_AVAILABLE:
-                            inputs = batch[0].to(args.device)
-                            labels = batch[1].to(args.device)
-                            if transform_fn:
-                                inputs = transform_fn(inputs)
-                        else:
-                            inputs = batch[0].to(args.device).float()
-                            labels = batch[1].to(args.device).long()
-                            
-                        
-                        outputs = algorithm.predict(inputs)
-                        _, predicted = torch.max(outputs.data, 1)
-                        total += labels.size(0)
-                        correct += (predicted == labels).sum().item()
-                algorithm.train()
-                return 100 * correct / total if total > 0 else 0
+            # After evaluation
             results = {
-                'epoch': global_step,
                 'train_acc': evaluate_accuracy(train_loader_noshuffle),
                 'valid_acc': evaluate_accuracy(valid_loader),
                 'target_acc': evaluate_accuracy(target_loader),
-                'total_cost_time': time.time() - step_start_time
             }
+            
+            # Track best validation accuracy
+            if results['valid_acc'] > best_valid_acc:
+                best_valid_acc = results['valid_acc']
+                epochs_without_improvement = 0
+                torch.save(algorithm.state_dict(), os.path.join(args.output, 'best_model.pth'))
+            else:
+                epochs_without_improvement += 1
+                
+            # Track best target accuracy separately
+            if results['target_acc'] > best_target_acc:
+                best_target_acc = results['target_acc']
+                torch.save(algorithm.state_dict(), os.path.join(args.output, 'best_target_model.pth'))
+                print(f"New best target accuracy: {best_target_acc:.2f}%")
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                
+            # Early stopping based on target accuracy
+            if patience_counter >= PATIENCE_LIMIT:
+                print(f"Early stopping: No target improvement for {PATIENCE_LIMIT} rounds")
+                break
+                
+            # Update BN stats with target data
+            if round_idx % 3 == 0:
+                print("Updating BN stats with target data...")
+                algorithm.eval()
+                with torch.no_grad():
+                    for batch in target_loader:
+                        if args.use_gnn and GNN_AVAILABLE:
+                            inputs = batch[0].to(args.device)
+                            inputs = transform_for_gnn(inputs)
+                        else:
+                            inputs = batch[0].to(args.device).float()
+                        _ = algorithm.predict(inputs)  # Forward pass updates BN stats
+                algorithm.train()
+            
+            # Log results
+            results['total_cost_time'] = time.time() - step_start_time
+            results['epoch'] = global_step
             
             for key in loss_list:
                 results[f"{key}_loss"] = step_vals[key]
@@ -881,14 +925,6 @@ def main(args):
             for metric in ['train_acc', 'valid_acc', 'target_acc']:
                 logs[metric].append(results[metric])
             
-            if results['valid_acc'] > best_valid_acc:
-                best_valid_acc = results['valid_acc']
-                target_acc = results['target_acc']
-                epochs_without_improvement = 0
-                torch.save(algorithm.state_dict(), os.path.join(args.output, 'best_model.pth'))
-            else:
-                epochs_without_improvement += 1
-                
             print_row([results[key] for key in print_key], colwidth=15)
             global_step += 1
             
@@ -1193,8 +1229,5 @@ if __name__ == '__main__':
     
     # Learning rate
     args.lr = 0.0001  # Increased learning rate
-    # Domain adaptation minimized
-    if not hasattr(args, 'adv_weight'):
-        args.adv_weight = 0.0  # DISABLED
 
     main(args)

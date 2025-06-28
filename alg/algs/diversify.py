@@ -587,17 +587,17 @@ class Diversify(Algorithm):
 
     # ========== ENHANCEMENT METHODS ========== #
     def update_ema(self):
-    """Update EMA model parameters with shape compatibility check"""
-    with torch.no_grad():
-        # Update featurizer EMA
-        for param, ema_param in zip(self.featurizer.parameters(), self.ema_featurizer.parameters()):
-            if param.shape == ema_param.shape:
-                ema_param.data = self.ema_decay * ema_param.data + (1 - self.ema_decay) * param.data
-        
-        # Update bottleneck EMA
-        for param, ema_param in zip(self.bottleneck.parameters(), self.ema_bottleneck.parameters()):
-            if param.shape == ema_param.shape:
-                ema_param.data = self.ema_decay * ema_param.data + (1 - self.ema_decay) * param.data
+        """Update EMA model parameters with shape compatibility check"""
+        with torch.no_grad():
+            # Update featurizer EMA
+            for param, ema_param in zip(self.featurizer.parameters(), self.ema_featurizer.parameters()):
+                if param.shape == ema_param.shape:
+                    ema_param.data = self.ema_decay * ema_param.data + (1 - self.ema_decay) * param.data
+                
+                # Update bottleneck EMA
+            for param, ema_param in zip(self.bottleneck.parameters(), self.ema_bottleneck.parameters()):
+                if param.shape == ema_param.shape:
+                    ema_param.data = self.ema_decay * ema_param.data + (1 - self.ema_decay) * param.data
         
         # Update classifier EMA
         for param, ema_param in zip(self.classifier.parameters(), self.ema_classifier.parameters()):

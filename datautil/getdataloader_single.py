@@ -286,8 +286,8 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         inputs = inputs.to(args.device)
         if labels is not None and isinstance(labels, torch.Tensor):
             labels = labels.to(args.device).long()
-        #features = algorithm.featurizer(inputs).detach().cpu().numpy()
-        #domain = to_tensor(get_domain(sample))
+        features = algorithm.featurizer(inputs).detach().cpu().numpy()
+        domain = to_tensor(get_domain(sample))
         
         if domain not in domain_features:
             domain_features[domain] = []

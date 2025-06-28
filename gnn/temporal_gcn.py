@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, GATConv
 from gnn.graph_builder import GraphBuilder
+import numpy as np
 
 class TemporalGCN(nn.Module):
     """

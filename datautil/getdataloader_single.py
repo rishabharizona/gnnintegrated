@@ -218,12 +218,12 @@ def get_act_dataloader(args):
     return (*loaders, train_set, val_set, target_data)
 
 def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
-    """Create curriculum data loader based on domain difficulty"""
+    """Advanced curriculum data loader with multi-faceted difficulty scoring"""
     # Get difficulty threshold for current stage
     if stage < len(args.CL_DIFFICULTY):
         difficulty_threshold = args.CL_DIFFICULTY[stage]
     else:
-        difficulty_threshold = 1.0  # Use all domains if stage exceeds threshold list
+        difficulty_threshold = 1.0  # Use all samples if stage exceeds threshold list
     
     # Helper function to detect graph data format
     def is_graph_data(dataset):
@@ -242,123 +242,217 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     if isinstance(val_dataset, DataLoader):
         raise TypeError("get_curriculum_loader requires val Dataset, not DataLoader")
 
-    # Collect domain indices from validation set
-    domain_indices = {}
-    for idx in range(len(val_dataset)):
-        sample = val_dataset[idx]
-        domain = 0
-        
-        # Extract domain from different formats
+    # Create helper functions for data extraction
+    def get_domain(sample):
+        """Extract domain from different data formats"""
         if isinstance(sample, tuple) and len(sample) >= 3:
-            domain = sample[2]
+            return sample[2]
         elif isinstance(sample, Data) and hasattr(sample, 'domain'):
-            domain = sample.domain
+            return sample.domain
         elif isinstance(sample, dict) and 'domain' in sample:
-            domain = sample['domain']
-            
-        if isinstance(domain, torch.Tensor):
-            domain = domain.item()
-            
-        domain_indices.setdefault(domain, []).append(idx)
+            return sample['domain']
+        return 0  # Default domain if not found
     
-    # If no domains found, return full dataset with proper collate
-    if not domain_indices:
-        print("Warning: No domains found for curriculum learning, using full dataset")
-        if is_graph_data(train_dataset):
-            return get_gnn_dataloader(train_dataset, args.batch_size, 0, True)
-        else:
-            return DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    def to_tensor(domain):
+        """Convert domain to tensor if needed"""
+        return domain.item() if isinstance(domain, torch.Tensor) else domain
     
-    # Compute loss per domain - Use proper collate based on data type
-    domain_metrics = []
+    # ================= ADVANCED DIFFICULTY SCORING =================
+    # Step 1: Calculate domain divergence metrics
+    domain_features = {}
     with torch.no_grad():
-        for domain, indices in domain_indices.items():
-            subset = Subset(val_dataset, indices)
-            
-            # Determine data type for this domain subset
-            if is_graph_data(subset):
-                loader = get_gnn_dataloader(subset, args.batch_size, 0, False)
-            else:
-                loader = DataLoader(subset, args.batch_size, shuffle=False)
-            
-            total_loss = 0.0
-            for batch in loader:
-                if is_graph_data(subset):
-                    # For GNN data, batch is (batched_graph, labels, domains)
-                    inputs, labels, _ = batch
-                    inputs = inputs.to(args.device)
-                    labels = labels.to(args.device)
-                else:
-                    # For standard data, batch is (inputs, labels)
-                    inputs = batch[0].to(args.device).float()
-                    labels = batch[1].to(args.device).long()
-                
-                output = algorithm.predict(inputs)
-                loss = torch.nn.functional.cross_entropy(output, labels)
-                total_loss += loss.item()
-            
-            avg_loss = total_loss / max(1, len(loader))
-            domain_metrics.append((domain, avg_loss))
-    
-    # Calculate domain difficulty using only loss
-    losses = [m[1] for m in domain_metrics]
-    min_loss, max_loss = min(losses), max(losses)
-    loss_range = max(1e-8, max_loss - min_loss)
-    
-    domain_scores = []
-    for domain, loss in domain_metrics:
-        difficulty = (loss - min_loss) / loss_range
-        domain_scores.append((domain, difficulty))
-    
-    # Sort domains by difficulty (easiest first)
-    domain_scores.sort(key=lambda x: x[1])
-    
-    # Select domains below the difficulty threshold
-    selected_domains = []
-    for domain, difficulty in domain_scores:
-        if difficulty <= difficulty_threshold:
-            selected_domains.append(domain)
-        else:
-            # Since domains are sorted by difficulty, we can break early
-            break
-    
-    # Fallback to easiest domain if none selected
-    if not selected_domains:
-        selected_domains = [domain_scores[0][0]]
-        print(f"Warning: No domains below threshold {difficulty_threshold:.2f}, "
-              f"selecting easiest domain: {selected_domains[0]}")
-    
-    # Collect training samples from selected domains
-    selected_indices = []
-    for idx in range(len(train_dataset)):
-        sample = train_dataset[idx]
-        domain = 0
+        algorithm.eval()
         
-        if isinstance(sample, tuple) and len(sample) >= 3:
-            domain = sample[2]
-        elif isinstance(sample, Data) and hasattr(sample, 'domain'):
-            domain = sample.domain
-        elif isinstance(sample, dict) and 'domain' in sample:
-            domain = sample['domain']
+        # Extract features for all validation samples
+        for idx in range(len(val_dataset)):
+            sample = val_dataset[idx]
             
-        if isinstance(domain, torch.Tensor):
-            domain = domain.item()
+            # Extract data based on format
+            if is_graph_data([sample]):
+                inputs = sample[0] if isinstance(sample, tuple) else sample
+                labels = sample[1] if isinstance(sample, tuple) else None
+            else:
+                inputs = sample[0] if isinstance(sample, tuple) else sample
+                labels = sample[1] if isinstance(sample, tuple) else None
             
-        if domain in selected_domains:
-            selected_indices.append(idx)
+            # Move to device and get features
+            inputs = inputs.to(args.device)
+            features = algorithm.featurizer(inputs).detach().cpu().numpy()
+            domain = to_tensor(get_domain(sample))
+            
+            if domain not in domain_features:
+                domain_features[domain] = []
+            domain_features[domain].append(features)
+        
+        # Compute domain centroids
+        domain_centroids = {}
+        for domain, features in domain_features.items():
+            domain_centroids[domain] = np.mean(features, axis=0)
+        
+        # Compute pairwise domain distances
+        domain_distances = {}
+        domains = list(domain_centroids.keys())
+        for i, domain1 in enumerate(domains):
+            for domain2 in domains[i+1:]:
+                dist = np.linalg.norm(domain_centroids[domain1] - domain_centroids[domain2])
+                domain_distances[(domain1, domain2)] = dist
+                domain_distances[(domain2, domain1)] = dist
+                
+        # Compute average distance for each domain
+        domain_avg_dist = {}
+        for domain in domains:
+            distances = [dist for (d1, d2), dist in domain_distances.items() 
+                         if d1 == domain or d2 == domain]
+            domain_avg_dist[domain] = np.mean(distances) if distances else 0
+
+    # Step 2: Calculate per-sample difficulty using multiple metrics
+    sample_difficulties = []
+    with torch.no_grad():
+        for idx in range(len(train_dataset)):
+            sample = train_dataset[idx]
+            
+            # Extract data based on format
+            if is_graph_data([sample]):
+                inputs = sample[0] if isinstance(sample, tuple) else sample
+                labels = sample[1] if isinstance(sample, tuple) else None
+            else:
+                inputs = sample[0] if isinstance(sample, tuple) else sample
+                labels = sample[1] if isinstance(sample, tuple) else None
+                
+            # Move to device
+            inputs = inputs.to(args.device)
+            if labels is not None:
+                labels = labels.to(args.device).long() if isinstance(labels, torch.Tensor) else labels
+            
+            # Get model predictions
+            outputs = algorithm.predict(inputs)
+            probs = F.softmax(outputs, dim=-1)
+            
+            # Calculate difficulty metrics
+            if labels is not None:
+                # Cross-entropy loss
+                loss = F.cross_entropy(outputs, labels).item()
+                
+                # Accuracy (0-1)
+                _, preds = torch.max(outputs, 1)
+                accuracy = (preds == labels).float().mean().item()
+            else:
+                loss = 0
+                accuracy = 0
+                
+            # Confidence-based metrics
+            max_prob = probs.max().item()
+            entropy = -(probs * torch.log(probs + 1e-9)).sum().item()
+            
+            # Domain-based difficulty
+            domain = to_tensor(get_domain(sample))
+            domain_diff = domain_avg_dist.get(domain, 0)
+            
+            # Combined difficulty score (higher = more difficult)
+            difficulty_score = (
+                0.4 * loss + 
+                0.3 * (1 - accuracy) + 
+                0.1 * domain_diff + 
+                0.1 * entropy + 
+                0.1 * (1 - max_prob)
+            )
+            
+            sample_difficulties.append((idx, difficulty_score))
     
-    # Fallback to full dataset if no samples selected
-    if not selected_indices:
-        selected_indices = list(range(len(train_dataset)))
-        print("Warning: No samples found for selected domains, using full dataset")
+    # Normalize difficulties to [0, 1] range
+    difficulties = [d for _, d in sample_difficulties]
+    min_difficulty = min(difficulties)
+    max_difficulty = max(difficulties) if max(difficulties) > min_difficulty else 1
+    normalized_difficulties = [
+        (d - min_difficulty) / (max_difficulty - min_difficulty) 
+        for d in difficulties
+    ]
     
+    # Update sample difficulties with normalized values
+    sample_difficulties = [(idx, norm_d) for (idx, _), norm_d in 
+                          zip(sample_difficulties, normalized_difficulties)]
+    
+    # ================= DYNAMIC THRESHOLD ADJUSTMENT =================
+    # Adjust threshold based on model performance (easier if model struggling)
+    if stage > 0 and logs['valid_acc'] and logs['valid_acc'][-1] < 50:  # Low accuracy
+        difficulty_threshold = max(0.1, difficulty_threshold * 0.8)
+        print(f"Model struggling (acc={logs['valid_acc'][-1]:.1f}%), "
+              f"lowering threshold to {difficulty_threshold:.2f}")
+    
+    # ================= SAMPLE SELECTION STRATEGY =================
+    # Select samples below difficulty threshold
+    selected_indices = [idx for idx, diff in sample_difficulties if diff <= difficulty_threshold]
+    
+    # If too few samples, expand threshold
+    min_samples = int(0.2 * len(train_dataset))  # At least 20% of dataset
+    if len(selected_indices) < min_samples:
+        # Find the easiest min_samples
+        sample_difficulties.sort(key=lambda x: x[1])
+        selected_indices = [idx for idx, _ in sample_difficulties[:min_samples]]
+        print(f"Expanding curriculum to {len(selected_indices)} easiest samples")
+    
+    # Confidence-based filtering (remove highly uncertain samples)
+    confidence_threshold = 0.7 - (stage * 0.1)  # Decreases with stages
+    high_confidence_indices = []
+    for idx in selected_indices:
+        sample = train_dataset[idx]
+        inputs = sample[0] if isinstance(sample, tuple) else sample
+        inputs = inputs.to(args.device)
+        outputs = algorithm.predict(inputs)
+        probs = F.softmax(outputs, dim=-1)
+        max_prob = probs.max().item()
+        
+        if max_prob >= confidence_threshold:
+            high_confidence_indices.append(idx)
+    
+    if high_confidence_indices:
+        selected_indices = high_confidence_indices
+        print(f"Filtered to {len(selected_indices)} high-confidence samples "
+              f"(confidence ≥ {confidence_threshold:.2f})")
+    
+    # ================= DOMAIN BALANCING =================
+    # Ensure we have representation from all domains
+    domain_counts = defaultdict(int)
+    domain_indices = defaultdict(list)
+    
+    for idx in selected_indices:
+        sample = train_dataset[idx]
+        domain = to_tensor(get_domain(sample))
+        domain_counts[domain] += 1
+        domain_indices[domain].append(idx)
+    
+    # Redistribute to balance domains
+    if domain_counts:
+        min_domain_count = min(domain_counts.values())
+        balanced_indices = []
+        
+        for domain, indices in domain_indices.items():
+            # If domain has more than min, randomly select min samples
+            if len(indices) > min_domain_count:
+                balanced_indices.extend(np.random.choice(
+                    indices, min_domain_count, replace=False))
+            else:
+                balanced_indices.extend(indices)
+        
+        # Only use balanced set if it has sufficient size
+        if len(balanced_indices) >= min_samples:
+            selected_indices = balanced_indices
+            print(f"Balanced curriculum: {len(domain_counts)} domains, "
+                  f"{len(selected_indices)} samples ({min_domain_count} per domain)")
+    
+    # ================= FINAL SELECTION =================
     # Create curriculum subset
     curriculum_subset = SafeSubset(train_dataset, selected_indices)
     
-    print(f"Curriculum Stage {stage+1}: Selected {len(selected_domains)} domains "
-          f"(threshold: {difficulty_threshold:.2f}, "
-          f"domains: {selected_domains}, "
-          f"samples: {len(selected_indices)})")
+    # Calculate average difficulty of selected samples
+    avg_difficulty = np.mean([diff for idx, diff in sample_difficulties 
+                             if idx in selected_indices])
+    
+    print(f"Curriculum Stage {stage+1}: "
+          f"Threshold={difficulty_threshold:.2f}, "
+          f"Samples={len(selected_indices)}/{len(train_dataset)} "
+          f"({len(selected_indices)/len(train_dataset):.1%}), "
+          f"Avg Difficulty={avg_difficulty:.3f}")
     
     return curriculum_subset
 

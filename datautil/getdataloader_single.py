@@ -321,24 +321,39 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         for idx in range(len(train_dataset)):
             sample = train_dataset[idx]
             
-            # Extract data based on format
+            # Extract data based on format - handle 3-element tuple from ConsistentFormatWrapper
             if is_graph_data([sample]):
                 if isinstance(sample, tuple):
-                    inputs, labels = sample[0], sample[1]
+                    # Unpack all three elements: graph, label, domain
+                    inputs, labels, domain_val = sample
                 else:
                     inputs = sample
                     labels = sample.y if hasattr(sample, 'y') else None
+                    domain_val = sample.domain if hasattr(sample, 'domain') else 0
             else:
-                if isinstance(sample, tuple) and len(sample) >= 2:
+                if isinstance(sample, tuple) and len(sample) >= 3:
+                    inputs, labels, domain_val = sample[0], sample[1], sample[2]
+                elif isinstance(sample, tuple) and len(sample) >= 2:
                     inputs, labels = sample[0], sample[1]
+                    domain_val = 0
                 else:
                     inputs = sample
                     labels = None
+                    domain_val = 0
     
             # Move to device
             inputs = inputs.to(args.device)
-            if labels is not None and isinstance(labels, torch.Tensor):
-                labels = labels.to(args.device).long()
+            
+            # Properly handle labels - convert to tensor if needed
+            if labels is not None:
+                if not isinstance(labels, torch.Tensor):
+                    # Convert scalar or tuple to tensor
+                    labels = torch.tensor(labels, dtype=torch.long, device=args.device)
+                else:
+                    labels = labels.to(args.device).long()
+            else:
+                # Create empty tensor if no labels
+                labels = torch.tensor([], dtype=torch.long, device=args.device)
             
             # Initialize target_sim with default value
             target_sim = 0.0
@@ -354,9 +369,17 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             
             # Calculate difficulty metrics
             probs = F.softmax(outputs, dim=-1)
-            valid_labels = labels is not None and isinstance(labels, torch.Tensor) and labels.numel() > 0
+            valid_labels = labels is not None and labels.numel() > 0
     
-            if valid_labels and outputs.shape[0] == labels.shape[0]:
+            if valid_labels:
+                # Ensure outputs have batch dimension
+                if outputs.dim() == 1:
+                    outputs = outputs.unsqueeze(0)
+                
+                # Ensure labels match outputs dimension
+                if labels.dim() == 0:
+                    labels = labels.unsqueeze(0)
+                    
                 loss = F.cross_entropy(outputs, labels).item()
                 _, preds = torch.max(outputs, 1)
                 accuracy = (preds == labels).float().mean().item()
@@ -368,7 +391,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             entropy = -(probs * torch.log(probs + 1e-9)).sum().item()
             
             # Domain-based difficulty
-            domain = to_tensor(get_domain(sample))
+            domain = to_tensor(domain_val)
             domain_diff = domain_avg_dist.get(domain, 0)
             
             # Revised difficulty score

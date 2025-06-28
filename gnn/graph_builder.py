@@ -192,3 +192,23 @@ class GraphBuilder:
                     edges.append([mid, i])
         
         return torch.tensor(edges, dtype=torch.long).t().contiguous()
+    
+    def build_graph_for_batch(self, batch_data: torch.Tensor) -> List[torch.LongTensor]:
+        """
+        Build graphs for each sample in a batch
+        
+        Args:
+            batch_data: Tensor of shape (batch, time_steps, features)
+            
+        Returns:
+            List of edge_index tensors for each sample
+        """
+        if batch_data.ndim != 3:
+            raise ValueError(f"Batch input must be 3D, got shape {batch_data.shape}")
+            
+        edge_indices = []
+        for i in range(batch_data.size(0)):
+            edge_index = self._build_single_graph(batch_data[i])
+            edge_indices.append(edge_index)
+            
+        return edge_indices

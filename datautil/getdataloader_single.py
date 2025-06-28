@@ -11,6 +11,7 @@ from torch_geometric.utils import to_dense_batch
 import datautil.graph_utils as graph_utils
 from typing import List, Tuple, Dict, Any, Optional
 import collections
+import torch.nn.functional as F
 
 # Task mapping for activity recognition
 task_act = {'cross_people': cross_people}

@@ -134,6 +134,12 @@ def get_dataloader(args, tr, val, tar):
     # Handle empty datasets
     if len(tr) == 0:
         raise ValueError("Training dataset is empty")
+    if len(val) == 0:
+        print("Warning: Validation dataset is empty - using training set for validation")
+        val = tr
+    if len(tar) == 0:
+        print("Warning: Target dataset is empty - using validation set as target")
+        tar = val
     
     # Ensure we have datasets, not loaders
     for i, ds in enumerate([tr, val, tar]):
@@ -208,12 +214,20 @@ def get_act_dataloader(args):
     indices = np.arange(l)
     np.random.seed(args.seed)
     np.random.shuffle(indices)
-    split_point = int(l * 0.8)
-    train_indices = indices[:split_point]  # First 80% for training
-    val_indices = indices[split_point:]    # Last 20% for validation
+    
+    # Ensure validation set has sufficient size (at least 10% of data)
+    split_point = max(1, int(l * 0.8))
+    if l - split_point < max(1, l // 10):
+        split_point = l - max(1, l // 10)  # Ensure at least 10% validation
+    
+    train_indices = indices[:split_point]
+    val_indices = indices[split_point:]
     
     train_set = SafeSubset(source_data, train_indices)
     val_set = SafeSubset(source_data, val_indices)
+    
+    # Check dataset sizes
+    print(f"Dataset sizes: Train={len(train_set)}, Val={len(val_set)}, Target={len(target_data)}")
     
     # Create data loaders
     loaders = get_dataloader(args, train_set, val_set, target_data)

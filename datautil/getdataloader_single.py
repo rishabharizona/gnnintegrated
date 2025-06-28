@@ -284,8 +284,10 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
 
         # Move to device and get features
         inputs = inputs.to(args.device)
-        features = algorithm.featurizer(inputs).detach().cpu().numpy()
-        domain = to_tensor(get_domain(sample))
+        if labels is not None and isinstance(labels, torch.Tensor):
+            labels = labels.to(args.device).long()
+        #features = algorithm.featurizer(inputs).detach().cpu().numpy()
+        #domain = to_tensor(get_domain(sample))
         
         if domain not in domain_features:
             domain_features[domain] = []
@@ -316,6 +318,8 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     sample_difficulties = []
     algorithm.eval()
     with torch.no_grad():
+        features = algorithm.featurizer(inputs).detach().cpu().numpy().reshape(-1)
+        outputs = algorithm.predict(inputs)
         for idx in range(len(train_dataset)):
             sample = train_dataset[idx]
             
@@ -377,14 +381,15 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             # Revised difficulty score: Focus on uncertain/diverse samples
             difficulty_score = (
                 0.4 * (1 - max_prob) +          # Model uncertainty
-                0.3 * target_similarity +        # Similarity to target domain
+                0.3 * target_sim +        # Similarity to target domain
                 0.2 * domain_diff +              # Domain diversity
                 0.1 * loss                       # Traditional loss
             )
             
             # Add target similarity calculation:
             if hasattr(args, 'target_centroid'):
-                target_sim = np.exp(-np.linalg.norm(features - args.target_centroid))
+                target_centroid = args.target_centroid.reshape(-1)
+                target_sim = np.exp(-np.linalg.norm(features - target_centroid))
             else:
                 target_sim = 0
             sample_difficulties.append((idx, difficulty_score))

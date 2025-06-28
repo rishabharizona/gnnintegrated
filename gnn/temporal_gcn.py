@@ -40,7 +40,7 @@ class TemporalGCN(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, output_dim)
-        
+        )
         # Reconstruction decoder (optional)
         self.recon_decoder = nn.Sequential(
             nn.Linear(output_dim, hidden_dim),

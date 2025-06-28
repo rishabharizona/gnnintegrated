@@ -1247,14 +1247,14 @@ if __name__ == '__main__':
     args.lr = 0.01  # Increased learning rate
 
     # Augmentation enabled for contrastive learning
-    args.jitter_scale = 0.1
-    args.scaling_std = 0.1
-    args.warp_ratio = 0.1
-    args.aug_prob = 0.5
+    args.jitter_scale = 0.0
+    args.scaling_std = 0.0
+    args.warp_ratio = 0.0
+    args.aug_prob = 0.0
 
     # Training schedule minimized
     args.max_epoch = getattr(args, 'max_epoch', 100)  # INCREASED
-    args.early_stopping_patience = 20  # INCREASED
+    args.early_stopping_patience = 5  # INCREASED
 
     # Domain adaptation minimized
     if not hasattr(args, 'adv_weight'):

@@ -465,15 +465,12 @@ def main(args):
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
                     domains = batch[2].to(args.device)
-                    x = inputs
+                    x = transform_for_gnn(inputs)
                 else:
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                     domains = batch[2].to(args.device).long()
                     x = inputs
-                
-                if args.use_gnn and GNN_AVAILABLE:
-                    x = transform_for_gnn(x)
                 
                 features = temp_model(x)
                 feature_list.append(features.detach().cpu().numpy())
@@ -706,7 +703,7 @@ def main(args):
             
             transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
     
-    # NEW: Create evaluator with transform capability
+            # Create evaluator with transform capability
             class CurriculumEvaluator:
                 def __init__(self, algorithm, transform_fn=None):
                     self.algorithm = algorithm
@@ -750,6 +747,8 @@ def main(args):
             algorithm.train()
         else:
             current_epochs = args.local_epoch
+            print(f"\nStandard Training Stage")
+            print(f"Epochs: {current_epochs}")
         
         print('\n==== Feature update ====')
         print_row(['epoch', 'class_loss'], colwidth=15)
@@ -847,70 +846,56 @@ def main(args):
                 step_vals = algorithm.update(data, opt)
                 torch.nn.utils.clip_grad_norm_(algorithm.parameters(), MAX_GRAD_NORM)
             
-            # REMOVED EVALUATION FROM HERE - CAUSED DUPLICATE VALUES
+            transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
+            def evaluate_accuracy(loader):
+                correct = 0
+                total = 0
+                algorithm.eval()
+                with torch.no_grad():
+                    for batch in loader:
+                        if args.use_gnn and GNN_AVAILABLE:
+                            inputs = batch[0].to(args.device)
+                            labels = batch[1].to(args.device)
+                            domains = batch[2].to(args.device)
+                            if transform_fn:
+                                inputs = transform_fn(inputs)
+                        else:
+                            inputs = batch[0].to(args.device).float()
+                            labels = batch[1].to(args.device).long()
+                            domains = batch[2].to(args.device).long()
+                        
+                        outputs = algorithm.predict(inputs)
+                        _, predicted = torch.max(outputs.data, 1)
+                        total += labels.size(0)
+                        correct += (predicted == labels).sum().item()
+                algorithm.train()
+                return 100 * correct / total
+            results = {
+                'epoch': global_step,
+                'train_acc': evaluate_accuracy(train_loader_noshuffle),
+                'valid_acc': evaluate_accuracy(valid_loader),
+                'target_acc': evaluate_accuracy(target_loader),
+                'total_cost_time': time.time() - step_start_time
+            }
             
-        # MOVED EVALUATION TO HERE - ONLY EVALUATE ONCE PER ROUND
-        transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
-        
-        def evaluate_accuracy(loader):
-            correct = 0
-            total = 0
-            algorithm.eval()  # ENSURE EVAL MODE
-            with torch.no_grad():
-                for batch in loader:
-                    if args.use_gnn and GNN_AVAILABLE:
-                        inputs = batch[0].to(args.device)
-                        labels = batch[1].to(args.device)
-                        domains = batch[2].to(args.device)
-                        if transform_fn:
-                            inputs = transform_fn(inputs)
-                    else:
-                        inputs = batch[0].to(args.device).float()
-                        labels = batch[1].to(args.device).long()
-                        domains = batch[2].to(args.device).long()
-                    
-                    # CONSISTENT TRANSFORMATION FOR ALL MODELS
-                    if transform_fn:
-                        inputs = transform_fn(inputs)
-                    
-                    outputs = algorithm.predict(inputs)
-                    _, predicted = torch.max(outputs.data, 1)
-                    total += labels.size(0)
-                    correct += (predicted == labels).sum().item()
-            algorithm.train()
-            return 100 * correct / total
-        
-        # ACTUAL EVALUATION CALL
-        train_acc = evaluate_accuracy(train_loader_noshuffle)
-        valid_acc = evaluate_accuracy(valid_loader)
-        target_acc_val = evaluate_accuracy(target_loader)
-        
-        results = {
-            'epoch': global_step,
-            'train_acc': train_acc,
-            'valid_acc': valid_acc,
-            'target_acc': target_acc_val,
-            'total_cost_time': time.time() - round_start_time
-        }
-        
-        for key in loss_list:
-            results[f"{key}_loss"] = step_vals[key]
-            logs[f"{key}_loss"].append(step_vals[key])
-        
-        for metric in ['train_acc', 'valid_acc', 'target_acc']:
-            logs[metric].append(results[metric])
-        
-        if results['valid_acc'] > best_valid_acc:
-            best_valid_acc = results['valid_acc']
-            target_acc = results['target_acc']
-            epochs_without_improvement = 0
-            torch.save(algorithm.state_dict(), os.path.join(args.output, 'best_model.pth'))
-        else:
-            epochs_without_improvement += 1
+            for key in loss_list:
+                results[f"{key}_loss"] = step_vals[key]
+                logs[f"{key}_loss"].append(step_vals[key])
             
-        print_row([results[key] for key in print_key], colwidth=15)
-        global_step += 1
-        
+            for metric in ['train_acc', 'valid_acc', 'target_acc']:
+                logs[metric].append(results[metric])
+            
+            if results['valid_acc'] > best_valid_acc:
+                best_valid_acc = results['valid_acc']
+                target_acc = results['target_acc']
+                epochs_without_improvement = 0
+                torch.save(algorithm.state_dict(), os.path.join(args.output, 'best_model.pth'))
+            else:
+                epochs_without_improvement += 1
+                
+            print_row([results[key] for key in print_key], colwidth=15)
+            global_step += 1
+            
         logs['total_cost_time'].append(time.time() - round_start_time)
         
         if round_idx % 5 == 0:
@@ -1158,6 +1143,9 @@ if __name__ == '__main__':
     args.label_smoothing = 0.0  # DISABLED
     args.max_grad_norm = 1.0  # Loosened gradient clipping
     args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)  # Enabled with 5 epochs
+    
+    # CRITICAL FIX: Add local_epoch parameter
+    args.local_epoch = getattr(args, 'local_epoch', 5)  # Default to 5 epochs per phase
 
     # GNN parameters minimized
     if not hasattr(args, 'use_gnn'):

@@ -698,18 +698,30 @@ def main(args):
             print(f"\nCurriculum Stage {round_idx+1}/{len(args.CL_PHASE_EPOCHS)}")
             print(f"Difficulty: {current_difficulty:.1f}, Epochs: {current_epochs}")
             
-            algorithm.eval()
+            if hasattr(algorithm, 'eval'):
+                algorithm.eval()
             
-            def curriculum_predict(x):
-                if args.use_gnn and GNN_AVAILABLE:
-                    x = transform_for_gnn(x)
-                return algorithm.predict(x)
-            
+            transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
+    
+    # NEW: Create evaluator with transform capability
             class CurriculumEvaluator:
+                def __init__(self, algorithm, transform_fn=None):
+                    self.algorithm = algorithm
+                    self.transform_fn = transform_fn
+                    
+                def eval(self):
+                    self.algorithm.eval()
+                    
                 def predict(self, x):
-                    return curriculum_predict(x)
+                    if self.transform_fn:
+                        x = self.transform_fn(x)
+                    return self.algorithm.predict(x)
+                    
+                @property
+                def featurizer(self):
+                    return self.algorithm.featurizer
             
-            evaluator = CurriculumEvaluator()
+            evaluator = CurriculumEvaluator(algorithm, transform_fn)
             
             curriculum_dataset = get_curriculum_loader(
                 args,

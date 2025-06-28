@@ -15,7 +15,7 @@ class DomainAlignLayer(nn.Module):
         # Domain adversarial loss
         combined = torch.cat([source, target], dim=0)
         domains = torch.cat([
-            torch.zeros(source.size(0), 
+            torch.zeros(source.size(0)), 
             torch.ones(target.size(0))
         ], dim=0).to(source.device)
         

@@ -606,21 +606,36 @@ def main(args):
                 layers = []
                 current_dim = input_dim
                 
+                # If only one layer, directly map to output dimension
+                if num_layers == 1:
+                    return nn.Sequential(
+                        nn.Linear(input_dim, output_dim),
+                        nn.BatchNorm1d(output_dim),
+                        nn.ReLU(inplace=True)
+                    )
+                
+                # For multiple layers, reduce dimensions gradually
                 for i in range(num_layers - 1):
-                    # Only reduce dimension in the last layer
-                    if i == num_layers - 2:
-                        out_dim = output_dim
-                    else:
-                        out_dim = current_dim
-                    
-                    layers.append(nn.Linear(current_dim, out_dim))
-                    layers.append(nn.BatchNorm1d(out_dim))
+                    # Calculate intermediate dimension size
+                    inter_dim = max(output_dim, current_dim // 2)
+                    layers.append(nn.Linear(current_dim, inter_dim))
+                    layers.append(nn.BatchNorm1d(inter_dim))
                     layers.append(nn.ReLU(inplace=True))
-                    current_dim = out_dim
+                    current_dim = inter_dim
+                
+                # Final layer reduces to output dimension
+                layers.append(nn.Linear(current_dim, output_dim))
+                layers.append(nn.BatchNorm1d(output_dim))
+                layers.append(nn.ReLU(inplace=True))
                 
                 return nn.Sequential(*layers)
             except ValueError:
-                return nn.Sequential(nn.Linear(input_dim, output_dim))
+                # Fallback to simple linear layer
+                return nn.Sequential(
+                    nn.Linear(input_dim, output_dim),
+                    nn.BatchNorm1d(output_dim),
+                    nn.ReLU(inplace=True)
+                )
         
         input_dim = args.gnn_output_dim
         output_dim = int(args.bottleneck)
@@ -629,7 +644,29 @@ def main(args):
         algorithm.abottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
         algorithm.dbottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
         
-        # Initialize projection head with correct dimension
+        # Verify bottleneck output dimension
+        test_input = torch.randn(2, input_dim).cuda()
+        test_output = algorithm.bottleneck(test_input)
+        if test_output.shape[1] != output_dim:
+            print(f"⚠️ Bottleneck output dimension mismatch! Expected {output_dim}, got {test_output.shape[1]}")
+            print("Forcing bottleneck to output correct dimension")
+            algorithm.bottleneck = nn.Sequential(
+                nn.Linear(input_dim, output_dim),
+                nn.BatchNorm1d(output_dim),
+                nn.ReLU(inplace=True)
+            ).cuda()
+            algorithm.abottleneck = nn.Sequential(
+                nn.Linear(input_dim, output_dim),
+                nn.BatchNorm1d(output_dim),
+                nn.ReLU(inplace=True)
+            ).cuda()
+            algorithm.dbottleneck = nn.Sequential(
+                nn.Linear(input_dim, output_dim),
+                nn.BatchNorm1d(output_dim),
+                nn.ReLU(inplace=True)
+            ).cuda()
+        
+        # Initialize projection head
         algorithm.projection_head = nn.Sequential(
             nn.Linear(output_dim, 256),
             nn.BatchNorm1d(256),

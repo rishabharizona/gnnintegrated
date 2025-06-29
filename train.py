@@ -1216,7 +1216,7 @@ if __name__ == '__main__':
     # ====================== OPTIMIZED PARAMETER SETTINGS ======================
     # All regularization removed
     args.lambda_cls = getattr(args, 'lambda_cls', 1.0)
-    args.lambda_dis = getattr(args, 'lambda_dis', 0.1)  # MINIMAL
+    args.lambda_dis = getattr(args, 'lambda_dis', 0.0001)  # MINIMAL
     args.label_smoothing = 0.0  # DISABLED
     args.max_grad_norm = 1.0  # Loosened gradient clipping
     args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)  # Enabled with 5 epochs
@@ -1241,7 +1241,7 @@ if __name__ == '__main__':
             
             args.use_tcn = getattr(args, 'use_tcn', True)
             args.lstm_hidden_size = 128  # Increased
-            args.lstm_layers = 1
+            args.lstm_layers = 5
             args.bidirectional = True  # ENABLED
             args.lstm_dropout = 0.0  # DISABLED
 
@@ -1252,10 +1252,10 @@ if __name__ == '__main__':
     args.lr = 0.01  # Increased learning rate
 
     # Augmentation enabled for contrastive learning
-    args.jitter_scale = 1.5
-    args.scaling_std = 1.5
-    args.warp_ratio = 1.5
-    args.aug_prob = 1.9
+    args.jitter_scale = 0.5
+    args.scaling_std = 0.5
+    args.warp_ratio = 0.5
+    args.aug_prob = 0.9
 
     # Training schedule minimized
     args.max_epoch = getattr(args, 'max_epoch', 100)  # INCREASED
@@ -1263,6 +1263,6 @@ if __name__ == '__main__':
 
     # Domain adaptation minimized
     if not hasattr(args, 'adv_weight'):
-        args.adv_weight = 0.0  # DISABLED
+        args.adv_weight = 0.1  # DISABLED
 
     main(args)

@@ -104,7 +104,7 @@ def calculate_h_divergence(features_source, features_target):
     X = X[indices]
     y = y[indices]
     
-    split = int(0.6 * len(X))
+    split = int(0.8 * len(X))
     X_train, X_test = X[:split], X[split:]
     y_train, y_test = y[:split], y[split:]
     

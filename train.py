@@ -778,7 +778,7 @@ def main(args):
             
             transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
     
-            # Create evaluator with transform capability
+            
             class CurriculumEvaluator:
                 def __init__(self, algorithm, transform_fn=None):
                     self.algorithm = algorithm
@@ -790,6 +790,12 @@ def main(args):
                 def predict(self, x):
                     if self.transform_fn:
                         x = self.transform_fn(x)
+                    # Ensure whitening layer is initialized
+                    if self.algorithm.whiten is None:
+                        with torch.no_grad():
+                            test_features = self.algorithm.featurizer(x)
+                            test_bottleneck = self.algorithm.bottleneck(test_features)
+                            self.algorithm.init_whitening(test_bottleneck.size(1))
                     return self.algorithm.predict(x)
                     
                 @property

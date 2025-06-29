@@ -1,3 +1,4 @@
+# alg/algs/base.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -27,7 +28,8 @@ class Algorithm(nn.Module):
 
     def predict(self, x):
         """Make predictions on input data"""
-        raise NotImplementedError("Subclasses must implement predict method")
+        # Default implementation that subclasses can override
+        return self.classifier(self.featurizer(x))
     
     def train(self, mode=True):
         """Set the model to training mode"""

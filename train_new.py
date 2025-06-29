@@ -448,16 +448,27 @@ def compute_dataset_mean_std(dataloader, device):
     total_elements = 0
     
     for batch in dataloader:
-        if hasattr(batch, 'x'):  # PyG Batch object
-            # Access the node features directly
+        # Handle PyG DataBatch object
+        if hasattr(batch, 'x'):  
             inputs = batch.x.to(device)
             # Reshape to [num_nodes, n_channels]
             inputs = inputs.view(-1, n_channels)
-        else:
-            # Regular tensor
+        # Handle regular tuple (tensor, labels, ...)
+        elif isinstance(batch, (list, tuple)) and torch.is_tensor(batch[0]):
             inputs = batch[0].to(device).float()
             # CNN input: [batch, channels, 1, time]
             inputs = inputs.permute(0, 2, 3, 1).reshape(-1, n_channels)
+        # Handle single tensor
+        elif torch.is_tensor(batch):
+            inputs = batch.to(device).float()
+            # Handle CNN input: [batch, channels, 1, time]
+            if inputs.dim() == 4:
+                inputs = inputs.permute(0, 2, 3, 1).reshape(-1, n_channels)
+            # Handle other formats
+            else:
+                inputs = inputs.reshape(-1, n_channels)
+        else:
+            raise ValueError(f"Unsupported batch type: {type(batch)}")
         
         # Update accumulators
         channel_sums += inputs.sum(dim=0)

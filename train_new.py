@@ -747,8 +747,6 @@ def main(args):
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                 
-                # Ensure consistent input dimensions
-                if not isinstance(inputs, (Data, Batch)):
                     inputs = inputs.reshape(inputs.size(0), -1)
                     if hasattr(algorithm, 'ensure_correct_dimensions'):
                         inputs = algorithm.ensure_correct_dimensions(inputs)

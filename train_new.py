@@ -758,7 +758,7 @@ def main(args):
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
-                    domains = batch[2].to(args.dev极
+                    domains = batch[2].to(args.device)
                     data = [inputs, labels, domains]
                 else:
                     inputs = batch[0].to(args.device).float()

@@ -447,44 +447,71 @@ def compute_dataset_mean_std(dataloader, device):
     channel_sq_sums = torch.zeros(n_channels, device=device)
     total_elements = 0
     
-    for batch in dataloader:
+    for i, batch in enumerate(dataloader):
+        # Debugging: print batch type and structure
+        print(f"Batch {i+1} type: {type(batch)}")
+        
         # Handle PyG DataBatch object
         if hasattr(batch, 'x'):  
+            print("Processing PyG Batch object")
             inputs = batch.x.to(device)
             # Reshape to [num_nodes, n_channels]
             inputs = inputs.view(-1, n_channels)
-        # Handle list of tensors [inputs, labels, domains]
-        elif isinstance(batch, list) and torch.is_tensor(batch[0]):
+        # Handle PyG Data object (single graph)
+        elif hasattr(batch, 'x') and isinstance(batch.x, torch.Tensor):
+            print("Processing PyG Data object")
+            inputs = batch.x.to(device)
+            inputs = inputs.view(-1, n_channels)
+        # Handle list of PyG Data objects
+        elif isinstance(batch, list) and all(hasattr(item, 'x') for item in batch):
+            print("Processing list of PyG Data objects")
+            # Combine into a single batch
+            from torch_geometric.data import Batch
+            pyg_batch = Batch.from_data_list(batch)
+            inputs = pyg_batch.x.to(device)
+            inputs = inputs.view(-1, n_channels)
+        # Handle standard tuple (inputs, labels, domains)
+        elif isinstance(batch, (list, tuple)) and torch.is_tensor(batch[0]):
+            print("Processing standard tuple batch")
             inputs = batch[0].to(device).float()
             # CNN input: [batch, channels, 1, time]
             if inputs.dim() == 4:
                 inputs = inputs.permute(0, 2, 3, 1).reshape(-1, n_channels)
             else:
                 inputs = inputs.reshape(-1, n_channels)
-        # Handle tuple of tensors (inputs, labels, domains)
-        elif isinstance(batch, tuple) and torch.is_tensor(batch[0]):
-            inputs = batch[0].to(device).float()
-            if inputs.dim() == 4:
-                inputs = inputs.permute(0, 2, 3, 1).reshape(-1, n_channels)
-            else:
-                inputs = inputs.reshape(-1, n_channels)
         # Handle single tensor
         elif torch.is_tensor(batch):
+            print("Processing single tensor")
             inputs = batch.to(device).float()
             if inputs.dim() == 4:
                 inputs = inputs.permute(0, 2, 3, 1).reshape(-1, n_channels)
             else:
                 inputs = inputs.reshape(-1, n_channels)
         else:
-            # Try to extract the first element if it's a list of unknown type
+            # Try to extract the first element if it's a tensor
             try:
-                inputs = batch[0].to(device).float()
+                print("Attempting fallback extraction")
+                if hasattr(batch, 'x'):
+                    inputs = batch.x
+                elif hasattr(batch, 'features'):
+                    inputs = batch.features
+                elif hasattr(batch, 'input'):
+                    inputs = batch.input
+                else:
+                    inputs = batch[0] if isinstance(batch, (list, tuple)) else batch
+                    
+                inputs = inputs.to(device).float()
                 if inputs.dim() == 4:
                     inputs = inputs.permute(0, 2, 3, 1).reshape(-1, n_channels)
                 else:
                     inputs = inputs.reshape(-1, n_channels)
             except Exception as e:
-                raise ValueError(f"Unsupported batch type: {type(batch)} - {str(e)}")
+                print(f"Error processing batch: {str(e)}")
+                print(f"Batch structure: {dir(batch)}")
+                raise ValueError(f"Unsupported batch type: {type(batch)}")
+        
+        # Debugging: print input shape
+        print(f"Input shape: {inputs.shape}")
         
         # Update accumulators
         channel_sums += inputs.sum(dim=0)
@@ -500,7 +527,6 @@ def compute_dataset_mean_std(dataloader, device):
     
     print(f"Computed normalization: mean={mean.cpu().numpy()}, std={std.cpu().numpy()}")
     return mean, std
-
 # ======================= SAFE LOSS FUNCTIONS =======================
 def safe_cross_entropy(logits, targets, eps=1e-6):
     """Numerically stable cross entropy with label smoothing"""

@@ -629,8 +629,18 @@ def main(args):
         algorithm.abottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
         algorithm.dbottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
         
+        # Initialize projection head with correct dimension
+        algorithm.projection_head = nn.Sequential(
+            nn.Linear(output_dim, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.BatchNorm1d(128)
+        ).cuda()
+        
         print(f"Created bottlenecks: {input_dim} -> {output_dim}")
         print(f"Bottleneck architecture: {algorithm.bottleneck}")
+        print(f"Projection head input: {output_dim}")
         
         # Enhanced GNN pretraining
         if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:

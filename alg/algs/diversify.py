@@ -8,6 +8,7 @@ from torch.utils.data import ConcatDataset, Subset
 from torch_geometric.nn import GCNConv, GATConv
 from torch_geometric.data import Data, Batch
 from sklearn.cluster import KMeans
+from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
 
 from alg.modelopera import get_fea
 from network import Adver_network, common_network
@@ -17,12 +18,42 @@ from torch_geometric.utils import to_dense_batch
 
 GNN_AVAILABLE = True  # Flag indicating GNN availability
 
-# ======================= CONTRASTIVE LOSS =======================
-class SupConLoss(nn.Module):
-    """Supervised Contrastive Loss"""
-    def __init__(self, temperature=0.1):
-        super(SupConLoss, self).__init__()
+# ======================= ADVANCED LOSSES =======================
+class FocalLoss(nn.Module):
+    """Focal Loss for class imbalance with label smoothing"""
+    def __init__(self, alpha=0.25, gamma=2.0, smoothing=0.1, reduction='mean'):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.smoothing = smoothing
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        # Handle class imbalance
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1-pt)**self.gamma * ce_loss
+        
+        # Label smoothing regularization
+        if self.smoothing > 0:
+            log_probs = F.log_softmax(inputs, dim=-1)
+            nll_loss = -log_probs.gather(dim=-1, index=targets.unsqueeze(1)).squeeze(1)
+            smooth_loss = -log_probs.mean(dim=-1)
+            loss = (1 - self.smoothing) * nll_loss + self.smoothing * smooth_loss
+            focal_loss += loss
+        
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        return focal_loss
+
+class EnhancedSupConLoss(nn.Module):
+    """Enhanced Supervised Contrastive Loss with hard negative mining"""
+    def __init__(self, temperature=0.1, margin=0.3):
+        super().__init__()
         self.temperature = temperature
+        self.margin = margin
 
     def forward(self, features, labels):
         device = features.device
@@ -42,18 +73,70 @@ class SupConLoss(nn.Module):
         logits_mask = torch.ones_like(mask) - torch.eye(batch_size, device=device)
         mask = mask * logits_mask
         
+        # Hard negative mining
+        neg_mask = 1 - mask
+        hardest_negatives = (similarity_matrix * neg_mask).max(dim=1, keepdim=True)[0]
+        
         # Compute log probabilities
         exp_logits = torch.exp(similarity_matrix) * logits_mask
         log_prob = similarity_matrix - torch.log(exp_logits.sum(dim=1, keepdim=True))
         
+        # Apply margin for hard negatives
+        margin_matrix = torch.zeros_like(similarity_matrix)
+        margin_matrix[neg_mask.bool()] = self.margin
+        log_prob -= margin_matrix
+        
         # Compute mean log-likelihood over positive pairs
-        mean_log_prob_pos = (mask * log_prob).sum(dim=1) / mask.sum(dim=1)
+        mean_log_prob_pos = (mask * log_prob).sum(dim=1) / (mask.sum(dim=1) + 1e-12)
         
         # Loss
         loss = -mean_log_prob_pos.mean()
         return loss
-# ======================= END CONTRASTIVE LOSS =======================
+# ======================= END ADVANCED LOSSES =======================
+
+# ======================= ADVANCED MODULES =======================
+class StochasticDepth(nn.Module):
+    """Stochastic Depth for regularization"""
+    def __init__(self, drop_prob=0.2):
+        super().__init__()
+        self.drop_prob = drop_prob
         
+    def forward(self, x):
+        if not self.training or self.drop_prob == 0:
+            return x
+        keep_prob = 1 - self.drop_prob
+        mask = torch.zeros(x.size(0), 1, 1, device=x.device).bernoulli_(keep_prob)
+        return x * mask / keep_prob
+
+class SpatialAttention(nn.Module):
+    """Spatial Attention Module"""
+    def __init__(self, in_channels):
+        super().__init__()
+        self.conv = nn.Conv2d(in_channels, 1, kernel_size=1)
+        self.sigmoid = nn.Sigmoid()
+        
+    def forward(self, x):
+        # x: [batch, channels, height, width]
+        attn = self.conv(x)
+        attn = self.sigmoid(attn)
+        return x * attn
+
+class TemporalAttention(nn.Module):
+    """Temporal Attention Module"""
+    def __init__(self, seq_len):
+        super().__init__()
+        self.attn = nn.Sequential(
+            nn.Linear(seq_len, seq_len),
+            nn.Softmax(dim=-1)
+        )
+        
+    def forward(self, x):
+        # x: [batch, seq_len, features]
+        # Compute attention weights based on feature importance
+        attn_weights = self.attn(x.mean(dim=-1))
+        return x * attn_weights.unsqueeze(-1)
+# ======================= END ADVANCED MODULES =======================
+
 def transform_for_gnn(x):
     """Robust transformation for GNN input handling various formats"""
     if not GNN_AVAILABLE:
@@ -95,62 +178,6 @@ def transform_for_gnn(x):
         f"or 3D formats [B, C, T] or [B, T, C] where C is 8 or 200."
     )
 
-# Standard CrossEntropyLoss without focal weighting
-class StandardLoss(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, inputs, targets):
-        return F.cross_entropy(inputs, targets)
-        
-class GNNModel(nn.Module):
-    """GNN model for activity recognition"""
-    def __init__(self, input_dim, hidden_dim, num_classes, gnn_type='gcn'):
-        super().__init__()
-        self.gnn_type = gnn_type
-        
-        if gnn_type == 'gcn':
-            self.conv1 = GCNConv(input_dim, hidden_dim)
-            self.conv2 = GCNConv(hidden_dim, hidden_dim)
-        elif gnn_type == 'gat':
-            self.conv1 = GATConv(input_dim, hidden_dim, heads=4)
-            self.conv2 = GATConv(hidden_dim*4, hidden_dim, heads=1)
-        else:
-            raise ValueError(f"Unsupported GNN type: {gnn_type}")
-        
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            # Removed dropout layer
-            nn.Linear(hidden_dim, num_classes)
-        )
-    
-    def forward(self, data):
-        x, edge_index, batch = data.x, data.edge_index, data.batch
-        
-        # First GNN layer
-        x = self.conv1(x, edge_index)
-        x = F.relu(x)
-        # Removed dropout
-        
-        # Second GNN layer
-        x = self.conv2(x, edge_index)
-        x = F.relu(x)
-        
-        # Global pooling
-        x = torch.stack([x[batch == i].mean(0) for i in torch.unique(batch)])
-        
-        return self.classifier(x)
-
-def init_gnn_model(args, input_dim, num_classes):
-    """Initialize GNN model based on configuration"""
-    return GNNModel(
-        input_dim=input_dim,
-        hidden_dim=args.gnn_hidden_dim,
-        num_classes=num_classes,
-        gnn_type=args.gnn_arch
-    )
-
 class Diversify(Algorithm):
     def __init__(self, args):
         if not hasattr(args, 'bottleneck_dim'):
@@ -167,22 +194,91 @@ class Diversify(Algorithm):
         self.discriminator = Adver_network.Discriminator(args.bottleneck, args.dis_hidden, args.latent_domain_num)
         self.args = args
         
-        # Standard cross-entropy loss without focal weighting
-        self.criterion = StandardLoss()
+        # Advanced focal loss with label smoothing
+        self.criterion = FocalLoss(alpha=0.25, gamma=2.0, smoothing=0.1)
         self.explain_mode = False
         self.patch_skip_connection()
         
-        # ======================= CONTRASTIVE COMPONENTS =======================
-        # Projection heads for contrastive learning
+        # ======================= EXPONENTIAL ACCURACY ENHANCEMENTS =======================
+        # Enhanced projection head for contrastive learning
         self.projection_head = nn.Sequential(
             nn.Linear(args.bottleneck, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Linear(256, 128)
+            nn.Linear(256, 128),
+            nn.BatchNorm1d(128)
         )
-        self.supcon_loss = SupConLoss(temperature=0.1)
-        self.contrast_weight = 0.5  # Weight for contrastive loss
-        # ======================= END CONTRASTIVE COMPONENTS =======================
+        self.supcon_loss = EnhancedSupConLoss(temperature=0.1, margin=0.3)
+        self.contrast_weight = 0.7  # Increased weight for contrastive loss
         
+        # Regularization techniques
+        self.stochastic_depth = StochasticDepth(drop_prob=0.2)
+        
+        # Attention mechanisms (only for non-GNN models)
+        if not args.use_gnn:
+            # Determine input dimensions
+            if args.input_shape[1] == 1:  # [C, T] format
+                self.spatial_attn = SpatialAttention(args.input_shape[0])
+                self.temporal_attn = TemporalAttention(args.input_shape[2])
+            else:  # [T, C] format
+                self.spatial_attn = SpatialAttention(args.input_shape[1])
+                self.temporal_attn = TemporalAttention(args.input_shape[0])
+        
+        # Feature whitening for domain invariance
+        self.whiten = nn.BatchNorm1d(args.bottleneck, affine=False)
+        
+        # Knowledge distillation components
+        self.teacher_model = None
+        self.distill_temp = 3.0
+        self.distill_weight = 0.3
+        
+        # Adaptive learning rate scheduling
+        self.scheduler = None
+        self.cosine_scheduler = None
+        # ======================= END ENHANCEMENTS =======================
+        
+    def configure_optimizers(self, args):
+        """Enhanced optimizer configuration with adaptive scheduling"""
+        params = [
+            {'params': self.featurizer.parameters(), 'lr': args.lr},
+            {'params': self.bottleneck.parameters(), 'lr': args.lr},
+            {'params': self.classifier.parameters(), 'lr': args.lr * 0.1},
+            {'params': self.projection_head.parameters(), 'lr': args.lr},
+            {'params': self.abottleneck.parameters(), 'lr': args.lr},
+            {'params': self.aclassifier.parameters(), 'lr': args.lr * 0.1},
+            {'params': self.discriminator.parameters(), 'lr': args.lr},
+        ]
+        
+        # Add attention parameters if they exist
+        if hasattr(self, 'spatial_attn'):
+            params.append({'params': self.spatial_attn.parameters(), 'lr': args.lr})
+        if hasattr(self, 'temporal_attn'):
+            params.append({'params': self.temporal_attn.parameters(), 'lr': args.lr})
+        
+        optimizer = torch.optim.AdamW(
+            params, 
+            lr=args.lr,
+            weight_decay=args.weight_decay if hasattr(args, 'weight_decay') else 1e-4
+        )
+        
+        # Adaptive learning rate scheduling
+        self.scheduler = ReduceLROnPlateau(
+            optimizer, 
+            mode='max', 
+            factor=0.5, 
+            patience=5,
+            verbose=True
+        )
+        
+        # Cosine annealing for fine-tuning
+        self.cosine_scheduler = CosineAnnealingLR(
+            optimizer, 
+            T_max=args.steps if hasattr(args, 'steps') else 100,
+            eta_min=args.lr * 0.01
+        )
+        
+        return optimizer
+
     def patch_skip_connection(self):
         """Dynamically adjust skip connection based on actual input shape"""
         # Get device from model parameters
@@ -265,6 +361,14 @@ class Diversify(Algorithm):
         if not isinstance(all_x1, (Data, Batch)):
             all_x1 = self.ensure_correct_dimensions(all_x1)
         
+        # Apply attention if not using GNN
+        if not self.args.use_gnn:
+            if all_x1.dim() == 3:
+                all_x1 = all_x1.permute(0, 2, 1).unsqueeze(2)
+            all_x1 = self.spatial_attn(all_x1)
+            all_x1 = self.temporal_attn(all_x1.squeeze(2).permute(0, 2, 1))
+            all_x1 = all_x1.unsqueeze(2)
+        
         z1 = self.dbottleneck(self.featurizer(all_x1))
         if self.explain_mode:
             z1 = z1.clone()
@@ -325,6 +429,14 @@ class Diversify(Algorithm):
                 if not isinstance(inputs, (Data, Batch)):
                     inputs = self.ensure_correct_dimensions(inputs)
                 
+                # Apply attention if not using GNN
+                if not self.args.use_gnn:
+                    if inputs.dim() == 3:
+                        inputs = inputs.permute(0, 2, 1).unsqueeze(2)
+                    inputs = self.spatial_attn(inputs)
+                    inputs = self.temporal_attn(inputs.squeeze(2).permute(0, 2, 1))
+                    inputs = inputs.unsqueeze(2)
+                
                 feas = self.dbottleneck(self.featurizer(inputs))
                 
                 # Check for NaN in features
@@ -352,11 +464,14 @@ class Diversify(Algorithm):
         
         # Normalize features safely
         norms = np.linalg.norm(all_fea_np, axis=1, keepdims=True)
-        zero_norms = (norms == 0)
-        norms[zero_norms] = 1  # Avoid division by zero
+        zero_norms = (norms == 0).flatten()  # Flatten to 1D for indexing
+        norms[zero_norms.reshape(-1,1)] = 1  # Avoid division by zero
         
         all_fea_norm = all_fea_np / norms
-        all_fea_norm[zero_norms.flatten()] = 0  # Set zero vectors to zero
+        all_fea_norm[zero_norms] = 0  # Set zero vectors to zero
+        
+        # Feature whitening before clustering
+        all_fea_norm = (all_fea_norm - all_fea_norm.mean(0)) / (all_fea_norm.std(0) + 1e-8)
         
         # Clustering for pseudo-domain labels
         K = self.args.latent_domain_num
@@ -420,7 +535,7 @@ class Diversify(Algorithm):
         return inputs
 
     def update(self, data, opt):
-        """Main update method with PyG data support"""
+        """Main update method with PyG data support and exponential enhancements"""
         # Handle PyG Data objects
         if isinstance(data[0], (Data, Batch)):
             batch_data = data[0].to('cuda')
@@ -450,10 +565,21 @@ class Diversify(Algorithm):
         if not isinstance(all_x, (Data, Batch)):
             all_x = self.ensure_correct_dimensions(all_x)
         
-        # Forward pass
-        all_z = self.bottleneck(self.featurizer(all_x))
-        if self.explain_mode:
-            all_z = all_z.clone()
+        # Apply attention if not using GNN
+        if not self.args.use_gnn:
+            if all_x.dim() == 3:
+                all_x = all_x.permute(0, 2, 1).unsqueeze(2)
+            all_x = self.spatial_attn(all_x)
+            all_x = self.temporal_attn(all_x.squeeze(2).permute(0, 2, 1))
+            all_x = all_x.unsqueeze(2)
+        
+        # Forward pass with stochastic depth
+        features = self.featurizer(all_x)
+        features = self.stochastic_depth(features)
+        all_z = self.bottleneck(features)
+        
+        # Feature whitening for domain invariance
+        all_z = self.whiten(all_z)
             
         # ======================= CONTRASTIVE LEARNING =======================
         # Project features for contrastive loss
@@ -461,7 +587,7 @@ class Diversify(Algorithm):
         contrastive_loss = self.supcon_loss(projections, all_y) * self.contrast_weight
         # ======================= END CONTRASTIVE LEARNING =======================
             
-        # Constant alpha
+        # Domain discrimination
         disc_input = Adver_network.ReverseLayerF.apply(all_z, 1.0)
         disc_out = self.discriminator(disc_input)
         
@@ -472,7 +598,31 @@ class Diversify(Algorithm):
         disc_loss = F.cross_entropy(disc_out, disc_labels)
         all_preds = self.classifier(all_z)
         classifier_loss = self.criterion(all_preds, all_y)
-        loss = classifier_loss + 0.01 * disc_loss + contrastive_loss  # Include contrastive loss
+        
+        # ======================= KNOWLEDGE DISTILLATION =======================
+        # Teacher-student distillation if available
+        distill_loss = 0
+        if self.teacher_model is not None:
+            with torch.no_grad():
+                teacher_logits = self.teacher_model.predict(all_x)
+            
+            teacher_probs = F.softmax(teacher_logits / self.distill_temp, dim=-1)
+            student_logits = all_preds / self.distill_temp
+            
+            distill_loss = F.kl_div(
+                F.log_softmax(student_logits, dim=-1),
+                teacher_probs,
+                reduction='batchmean'
+            ) * (self.distill_temp ** 2)
+        # ======================= END DISTILLATION =======================
+        
+        # Combined loss
+        loss = (
+            classifier_loss + 
+            0.01 * disc_loss + 
+            contrastive_loss +
+            self.distill_weight * distill_loss
+        )
         
         # Check for NaN/inf loss
         if not torch.isfinite(loss):
@@ -481,22 +631,29 @@ class Diversify(Algorithm):
                 'total': 0,
                 'class': classifier_loss.item() if torch.isfinite(classifier_loss) else 0,
                 'dis': disc_loss.item() if torch.isfinite(disc_loss) else 0,
-                'contrast': contrastive_loss.item() if torch.isfinite(contrastive_loss) else 0
+                'contrast': contrastive_loss.item() if torch.isfinite(contrastive_loss) else 0,
+                'distill': distill_loss.item() if torch.isfinite(distill_loss) else 0
             }
         
         # Optimization
         opt.zero_grad()
         loss.backward()
         
-        # Gradient clipping with reduced max_norm
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        # Adaptive gradient clipping
+        max_norm = 1.0 + 0.1 * (1 - opt.param_groups[0]['lr'] / self.args.lr)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=max_norm)
         opt.step()
+        
+        # Update learning rate
+        if self.cosine_scheduler:
+            self.cosine_scheduler.step()
         
         return {
             'total': loss.item(), 
             'class': classifier_loss.item(), 
             'dis': disc_loss.item(),
-            'contrast': contrastive_loss.item()
+            'contrast': contrastive_loss.item(),
+            'distill': distill_loss.item() if self.teacher_model else 0
         }
 
     def update_a(self, minibatches, opt):
@@ -557,6 +714,14 @@ class Diversify(Algorithm):
         if not isinstance(inputs, (Data, Batch)):
             inputs = self.ensure_correct_dimensions(inputs)
         
+        # Apply attention if not using GNN
+        if not self.args.use_gnn:
+            if inputs.dim() == 3:
+                inputs = inputs.permute(0, 2, 1).unsqueeze(2)
+            inputs = self.spatial_attn(inputs)
+            inputs = self.temporal_attn(inputs.squeeze(2).permute(0, 2, 1))
+            inputs = inputs.unsqueeze(2)
+        
         # Forward pass
         all_z = self.abottleneck(self.featurizer(inputs))
         all_preds = self.aclassifier(all_z)
@@ -576,13 +741,21 @@ class Diversify(Algorithm):
         return {'class': classifier_loss.item()}
 
     def predict(self, x):
-        """Main prediction method"""
+        """Enhanced prediction with attention and feature whitening"""
         if not isinstance(x, (Data, Batch)):
             x = self.ensure_correct_dimensions(x)
+        
+        # Apply attention if not using GNN
+        if not self.args.use_gnn:
+            if x.dim() == 3:
+                x = x.permute(0, 2, 1).unsqueeze(2)
+            x = self.spatial_attn(x)
+            x = self.temporal_attn(x.squeeze(2).permute(0, 2, 1))
+            x = x.unsqueeze(2)
+        
         features = self.featurizer(x)
         bottleneck_out = self.bottleneck(features)
-        if self.explain_mode:
-            bottleneck_out = bottleneck_out.clone()
+        bottleneck_out = self.whiten(bottleneck_out)
         return self.classifier(bottleneck_out)
     
     def forward(self, batch):
@@ -609,3 +782,22 @@ class Diversify(Algorithm):
                 return self.predict(x)
         finally:
             self.explain_mode = original_mode
+            
+    def update_teacher(self, exponential_moving_average=0.999):
+        """EMA update for teacher model"""
+        if self.teacher_model is None:
+            # Initialize teacher with current weights
+            self.teacher_model = self.__class__(self.args)
+            self.teacher_model.load_state_dict(self.state_dict())
+            self.teacher_model.eval()
+            return
+        
+        # Update teacher with EMA
+        teacher_params = dict(self.teacher_model.named_parameters())
+        student_params = dict(self.named_parameters())
+        
+        for name in student_params:
+            if name in teacher_params:
+                teacher_params[name].data.mul_(exponential_moving_average).add_(
+                    student_params[name].data, alpha=1 - exponential_moving_average
+                )

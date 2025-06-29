@@ -730,20 +730,14 @@ def main(args):
         algorithm.eval()
         with torch.no_grad():
             for batch in loader:
-                # Handle different data formats consistently
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
-                    # Always apply transformation for GNN
-                    inputs = transform_for_gnn(inputs)
+                    inputs = transform_for_gnn(inputs)  # Consistent transformation
                 else:
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
-                
-                
-                    inputs = inputs.reshape(inputs.size(0), -1)
-                    if hasattr(algorithm, 'ensure_correct_dimensions'):
-                        inputs = algorithm.ensure_correct_dimensions(inputs)
+                    # NO RESHAPING - preserve original dimensions
                 
                 outputs = algorithm.predict(inputs)
                 _, predicted = torch.max(outputs.data, 1)

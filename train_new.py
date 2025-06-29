@@ -441,8 +441,7 @@ class EnhancedTemporalGCN(nn.Module):
 
 # ======================= DATA NORMALIZATION =======================
 def compute_dataset_mean_std(dataloader, device):
-    """Compute mean and std for dataset normalization with PyG support"""
-    n_channels = 8  # EMG channels
+    n_channels = 8
     channel_sums = torch.zeros(n_channels, device=device)
     channel_sq_sums = torch.zeros(n_channels, device=device)
     total_elements = 0
@@ -450,18 +449,25 @@ def compute_dataset_mean_std(dataloader, device):
     for i, batch in enumerate(dataloader):
         inputs = None
         
-        # Handle PyG Batch objects
+        # Existing handling for PyG batches
         if hasattr(batch, 'x'):  
             inputs = batch.x.to(device)
-        # Handle list of PyG Data objects
         elif isinstance(batch, list) and all(hasattr(item, 'x') for item in batch):
             from torch_geometric.data import Batch
             pyg_batch = Batch.from_data_list(batch)
             inputs = pyg_batch.x.to(device)
-        # Handle standard tuple (inputs, labels, domains)
+        
+        # NEW: Handle list of standard samples
+        elif isinstance(batch, list) and len(batch) > 0 and isinstance(batch[0], (tuple, list)):
+            try:
+                inputs = torch.stack([item[0] for item in batch], dim=0).to(device).float()
+            except Exception as e:
+                print(f"Error processing list batch: {str(e)}")
+                continue
+                
+        # Existing tensor handling
         elif isinstance(batch, (list, tuple)) and torch.is_tensor(batch[0]):
             inputs = batch[0].to(device).float()
-        # Handle single tensor
         elif torch.is_tensor(batch):
             inputs = batch.to(device).float()
         else:

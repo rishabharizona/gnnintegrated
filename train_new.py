@@ -439,6 +439,44 @@ class EnhancedTemporalGCN(nn.Module):
         
         return output
 
+# ======================= DATA NORMALIZATION =======================
+def compute_dataset_mean_std(dataloader, device):
+    """Compute mean and std for dataset normalization"""
+    mean = torch.zeros(1).to(device)
+    std = torch.zeros(1).to(device)
+    total_samples = 0
+    
+    for batch in dataloader:
+        if args.use_gnn and GNN_AVAILABLE:
+            inputs = batch[0].to(device)
+        else:
+            inputs = batch[0].to(device).float()
+            
+        # Flatten all dimensions except batch
+        b = inputs.size(0)
+        inputs = inputs.view(b, -1)
+        
+        total_samples += b
+        mean += inputs.mean(dim=1).sum()
+        std += inputs.std(dim=1).sum()
+    
+    mean /= total_samples
+    std /= total_samples
+    
+    # Add epsilon to avoid division by zero
+    std = torch.clamp(std, min=1e-6)
+    
+    print(f"Computed normalization: mean={mean.item():.4f}, std={std.item():.4f}")
+    return mean, std
+
+# ======================= SAFE LOSS FUNCTIONS =======================
+def safe_cross_entropy(logits, targets, eps=1e-6):
+    """Numerically stable cross entropy with label smoothing"""
+    log_probs = F.log_softmax(logits, dim=1)
+    targets = torch.zeros_like(log_probs).scatter(1, targets.unsqueeze(1), 1)
+    targets = (1 - eps) * targets + eps / logits.size(1)
+    return -(targets * log_probs).sum(dim=1).mean()
+
 # ======================= MAIN TRAINING FUNCTION =======================
 def main(args):
     s = print_args(args, [])
@@ -572,8 +610,38 @@ def main(args):
         shuffle=False
     )
     
+    # ==================== COMPUTE DATASET STATS FOR NORMALIZATION ====================
+    print("\nComputing dataset statistics for normalization...")
+    train_mean, train_std = compute_dataset_mean_std(train_loader_noshuffle, args.device)
+    
+    # ==================== MODEL INITIALIZATION ====================
     algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).to(args.device)
+    
+    # Add normalization buffers to model
+    algorithm.register_buffer('data_mean', train_mean)
+    algorithm.register_buffer('data_std', train_std)
+    
+    # ==================== ARCHITECTURE ENHANCEMENTS ====================
+    # Enhance CNN architecture if not using GNN
+    if not args.use_gnn or not GNN_AVAILABLE:
+        print("\nEnhancing CNN architecture...")
+        # Increase CNN capacity
+        algorithm.featurizer.conv1 = nn.Conv2d(
+            8, 128, kernel_size=(1, 5), 
+            stride=(1, 1), padding=(0, 2)
+        algorithm.featurizer.conv2 = nn.Conv2d(
+            128, 256, kernel_size=(1, 5), 
+            stride=(1, 1), padding=(0, 2))
+        
+        # Adjust linear layer for new dimensions
+        with torch.no_grad():
+            dummy_input = torch.randn(2, 8, 1, 200).to(args.device)
+            dummy_features = algorithm.featurizer(dummy_input)
+            new_feature_dim = dummy_features.shape[1]
+            
+        algorithm.classifier = nn.Linear(new_feature_dim, args.num_classes).to(args.device)
+        print(f"Enhanced CNN: new feature dim={new_feature_dim}")
     
     if args.use_gnn and GNN_AVAILABLE:
         print("\n===== Initializing GNN Feature Extractor =====")
@@ -588,6 +656,10 @@ def main(args):
         
         args.gnn_layers = getattr(args, 'gnn_layers', 1)
         args.use_tcn = getattr(args, 'use_tcn', True)
+        
+        # Increase GNN capacity
+        args.gnn_hidden_dim = 256
+        args.gnn_output_dim = 512
         
         gnn_model = EnhancedTemporalGCN(
             input_dim=8,
@@ -633,6 +705,10 @@ def main(args):
     opt = get_optimizer(algorithm, args, nettype='Diversify-cls')
     opta = get_optimizer(algorithm, args, nettype='Diversify-all')
     
+    # Add learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        opt, mode='max', factor=0.5, patience=5, verbose=True)
+    
     logs = {k: [] for k in ['epoch', 'class_loss', 'dis_loss', 'ent_loss',
                             'total_loss', 'train_acc', 'valid_acc', 'target_acc',
                             'total_cost_time', 'h_divergence', 'domain_acc', 'contrast_loss']}
@@ -661,16 +737,19 @@ def main(args):
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
+                    # Apply normalization
+                    inputs = (inputs - algorithm.data_mean) / algorithm.data_std
                     # Always apply transformation for GNN
                     inputs = transform_for_gnn(inputs)
                 else:
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
+                    # Apply normalization
+                    inputs = (inputs - algorithm.data_mean) / algorithm.data_std
                 
-            
-                    inputs = inputs.reshape(inputs.size(0), -1)
-                    if hasattr(algorithm, 'ensure_correct_dimensions'):
-                        inputs = algorithm.ensure_correct_dimensions(inputs)
+                # Ensure correct dimensions
+                if hasattr(algorithm, 'ensure_correct_dimensions'):
+                    inputs = algorithm.ensure_correct_dimensions(inputs)
                 
                 outputs = algorithm.predict(inputs)
                 _, predicted = torch.max(outputs.data, 1)
@@ -711,6 +790,8 @@ def main(args):
                     self.algorithm.eval()
                     
                 def predict(self, x):
+                    # Apply normalization
+                    x = (x - self.algorithm.data_mean) / self.algorithm.data_std
                     if self.transform_fn:
                         x = self.transform_fn(x)
                     return self.algorithm.predict(x)
@@ -759,12 +840,19 @@ def main(args):
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
                     domains = batch[2].to(args.device)
+                    # Apply normalization
+                    inputs = (inputs - algorithm.data_mean) / algorithm.data_std
                     data = [inputs, labels, domains]
                 else:
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                     domains = batch[2].to(args.device).long()
+                    # Apply normalization
+                    inputs = (inputs - algorithm.data_mean) / algorithm.data_std
                     data = [inputs, labels, domains]
+                
+                # Use safe cross entropy
+                algorithm.criterion = safe_cross_entropy
                 
                 loss_result_dict = algorithm.update_a(data, opta)
                 
@@ -794,11 +882,15 @@ def main(args):
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
                     domains = batch[2].to(args.device)
+                    # Apply normalization
+                    inputs = (inputs - algorithm.data_mean) / algorithm.data_std
                     data = [inputs, labels, domains]
                 else:
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                     domains = batch[2].to(args.device).long()
+                    # Apply normalization
+                    inputs = (inputs - algorithm.data_mean) / algorithm.data_std
                     data = [inputs, labels, domains]
                 
                 loss_result_dict = algorithm.update_d(data, optd)
@@ -836,17 +928,24 @@ def main(args):
             
             # Train for one epoch
             algorithm.train()  # Ensure training mode
-            for batch in train_loader:
+            for batch_idx, batch in enumerate(train_loader):
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
                     domains = batch[2].to(args.device)
+                    # Apply normalization
+                    inputs = (inputs - algorithm.data_mean) / algorithm.data_std
                     data = [inputs, labels, domains]
                 else:
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                     domains = batch[2].to(args.device).long()
+                    # Apply normalization
+                    inputs = (inputs - algorithm.data_mean) / algorithm.data_std
                     data = [inputs, labels, domains]
+                
+                # Use safe cross entropy
+                algorithm.criterion = safe_cross_entropy
                 
                 step_vals = algorithm.update(data, opt)
                 torch.nn.utils.clip_grad_norm_(algorithm.parameters(), MAX_GRAD_NORM)
@@ -856,6 +955,9 @@ def main(args):
             train_acc = evaluate_accuracy(train_loader_noshuffle)
             valid_acc = evaluate_accuracy(valid_loader)
             target_acc = evaluate_accuracy(target_loader)
+            
+            # Update learning rate
+            scheduler.step(valid_acc)
             
             results = {
                 'epoch': global_step,
@@ -910,11 +1012,13 @@ def main(args):
             source_features = []
             with torch.no_grad():
                 for data in entire_source_loader:
-                    if args.use_极n and GNN_AVAILABLE:
+                    if args.use_gnn and GNN_AVAILABLE:
                         inputs = data[0].to(args.device)
+                        inputs = (inputs - algorithm.data_mean) / algorithm.data_std
                         inputs = transform_for_gnn(inputs)
                     else:
                         inputs = data[0].to(args.device).float()
+                        inputs = (inputs - algorithm.data_mean) / algorithm.data_std
                     
                     features = algorithm.featurizer(inputs).detach().cpu().numpy()
                     source_features.append(features)
@@ -925,9 +1029,11 @@ def main(args):
                 for data in target_loader:
                     if args.use_gnn and GNN_AVAILABLE:
                         inputs = data[0].to(args.device)
+                        inputs = (inputs - algorithm.data_mean) / algorithm.data_std
                         inputs = transform_for_gnn(inputs)
                     else:
                         inputs = data[0].to(args.device).float()
+                        inputs = (inputs - algorithm.data_mean) / algorithm.data_std
                     
                     features = algorithm.featurizer(inputs).detach().cpu().numpy()
                     target_features.append(features)
@@ -959,7 +1065,7 @@ def main(args):
             else:
                 # Standard tensor handling for CNN
                 background = get_background_batch(valid_loader, size=64).cuda()
-                X极val = background[:10]
+                X_eval = background[:10]
             
             # Disable inplace operations in the model
             disable_inplace_relu(algorithm)
@@ -971,6 +1077,10 @@ def main(args):
             if transform_fn is not None:
                 background = transform_fn(background)
                 X_eval = transform_fn(X_eval)
+            
+            # Apply normalization
+            background = (background - algorithm.data_mean) / algorithm.data_std
+            X_eval = (X_eval - algorithm.data_mean) / algorithm.data_std
             
             # Compute SHAP values safely
             shap_explanation = safe_compute_shap_values(algorithm, background, X_eval)
@@ -1067,14 +1177,16 @@ def main(args):
                 if args.use_gnn and GNN_AVAILABLE:
                     x = data[0].to(args.device)
                     y = data[1]
+                    # Apply normalization
+                    x = (x - algorithm.data_mean) / algorithm.data_std
+                    x = transform_for_gnn(x)
                 else:
                     x = data[0].to(args.device).float()
                     y = data[1]
+                    # Apply normalization
+                    x = (x - algorithm.data_mean) / algorithm.data_std
                 
                 with torch.no_grad():
-                    # Apply transform for GNN if needed
-                    if args.use_gnn and GNN_AVAILABLE:
-                        x = transform_for_gnn(x)
                     preds = algorithm.predict(x).cpu()
                     true_labels.extend(y.cpu().numpy())
                     pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
@@ -1143,8 +1255,8 @@ if __name__ == '__main__':
     args = get_args()
     # ====================== STABLE PARAMETER SETTINGS ======================
     args.lambda_cls = getattr(args, 'lambda_cls', 1.0)
-    args.lambda_dis = getattr(args, 'lambda_dis', 0.01)
-    args.label_smoothing = 0.0
+    args.lambda_dis = getattr(args, 'lambda_dis', 0.001)  # Reduced for stability
+    args.label_smoothing = 0.1  # Added label smoothing
     args.max_grad_norm = 1.0
     args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)
     
@@ -1186,7 +1298,7 @@ if __name__ == '__main__':
 
     # Training schedule optimized
     args.max_epoch = getattr(args, 'max_epoch', 100)
-    args.early_stopping_patience = 10
+    args.early_stopping_patience = 15  # Increased patience
 
     # Domain adaptation minimized
     if not hasattr(args, 'adv_weight'):

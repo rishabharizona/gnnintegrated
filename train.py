@@ -440,7 +440,19 @@ def main(args):
     args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {args.device}")
     os.makedirs(args.output, exist_ok=True)
+    # In training loop:
+    optimizer = algorithm.configure_optimizers(args)
     
+    for epoch in range(epochs):
+        for batch in dataloader:
+            losses = algorithm.update(batch, optimizer)
+        
+        # Update teacher model after epoch
+        algorithm.update_teacher()
+        
+        # Update learning rate based on validation performance
+        val_acc = evaluate(algorithm, val_loader)
+        algorithm.scheduler.step(val_acc)
     # Handle curriculum parameters
     if getattr(args, 'curriculum', False):
         # Handle CL_PHASE_EPOCHS: if it's an integer, convert to a list of that integer for 3 phases

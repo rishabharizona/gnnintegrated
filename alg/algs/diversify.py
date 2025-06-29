@@ -201,13 +201,7 @@ class Diversify(Algorithm):
         
         # ======================= EXPONENTIAL ACCURACY ENHANCEMENTS =======================
         # Enhanced projection head for contrastive learning
-        self.projection_head = nn.Sequential(
-            nn.Linear(args.bottleneck, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128)
-        )
+        self.projection_head = None
         self.supcon_loss = EnhancedSupConLoss(temperature=0.1, margin=0.3)
         self.contrast_weight = 0.7  # Increased weight for contrastive loss
         
@@ -582,6 +576,17 @@ class Diversify(Algorithm):
             all_z = (all_z - z_mean) / z_std
             
         # ======================= CONTRASTIVE LEARNING =======================
+        # Initialize projection head if needed
+        if self.projection_head is None:
+            feature_dim = all_z.size(1)
+            print(f"Initializing projection head for {feature_dim} features")
+            self.projection_head = nn.Sequential(
+                nn.Linear(feature_dim, 256),
+                nn.BatchNorm1d(256),
+                nn.ReLU(),
+                nn.Linear(256, 128),
+                nn.BatchNorm1d(128)
+            ).to(all_z.device)
         # Project features for contrastive loss
         projections = self.projection_head(all_z)
         contrastive_loss = self.supcon_loss(projections, all_y) * self.contrast_weight

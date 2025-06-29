@@ -104,7 +104,7 @@ def calculate_h_divergence(features_source, features_target):
     X = X[indices]
     y = y[indices]
     
-    split = int(0.8 * len(X))
+    split = int(0.6 * len(X))
     X_train, X_test = X[:split], X[split:]
     y_train, y_test = y[:split], y[split:]
     
@@ -1216,7 +1216,7 @@ if __name__ == '__main__':
     # ====================== OPTIMIZED PARAMETER SETTINGS ======================
     # All regularization removed
     args.lambda_cls = getattr(args, 'lambda_cls', 1.0)
-    args.lambda_dis = getattr(args, 'lambda_dis', 0.01)  # MINIMAL
+    args.lambda_dis = getattr(args, 'lambda_dis', 0.1)  # MINIMAL
     args.label_smoothing = 0.0  # DISABLED
     args.max_grad_norm = 1.0  # Loosened gradient clipping
     args.gnn_pretrain_epochs = getattr(args, 'gnn_pretrain_epochs', 5)  # Enabled with 5 epochs
@@ -1236,7 +1236,7 @@ if __name__ == '__main__':
             args.gnn_hidden_dim = getattr(args, 'gnn_hidden_dim', 128)  # Increased
             args.gnn_output_dim = getattr(args, 'gnn_output_dim', 256)  # Increased
             args.gnn_layers = 1  # MINIMAL LAYERS
-            args.gnn_lr = getattr(args, 'gnn_lr', 0.0001)  # Increased
+            args.gnn_lr = getattr(args, 'gnn_lr', 0.01)  # Increased
             args.gnn_weight_decay = 0.0  # DISABLED
             
             args.use_tcn = getattr(args, 'use_tcn', True)
@@ -1249,17 +1249,17 @@ if __name__ == '__main__':
     args.optimizer = getattr(args, 'optimizer', 'adam')
     args.weight_decay = 1e-4  # Enable weight decay
     args.domain_adv_weight = 0.1  # Enable domain adaptation
-    args.lr = 0.001  # Increased learning rate
+    args.lr = 0.01  # Increased learning rate
 
     # Augmentation enabled for contrastive learning
-    args.jitter_scale = 0.5
-    args.scaling_std = 0.5
-    args.warp_ratio = 0.5
-    args.aug_prob = 0.9
+    args.jitter_scale = 1.5
+    args.scaling_std = 1.5
+    args.warp_ratio = 1.5
+    args.aug_prob = 1.9
 
     # Training schedule minimized
     args.max_epoch = getattr(args, 'max_epoch', 100)  # INCREASED
-    args.early_stopping_patience = 20  # INCREASED
+    args.early_stopping_patience = 30  # INCREASED
 
     # Domain adaptation minimized
     if not hasattr(args, 'adv_weight'):

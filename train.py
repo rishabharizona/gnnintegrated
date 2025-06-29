@@ -601,31 +601,29 @@ def main(args):
         algorithm.featurizer = gnn_model
         
         def create_bottleneck(input_dim, output_dim, layer_spec):
+            """Create a bottleneck layer that guarantees output dimension"""
             try:
                 num_layers = int(layer_spec)
                 layers = []
                 current_dim = input_dim
                 
-                # If only one layer, directly map to output dimension
+                # For single layer, directly map to output dimension
                 if num_layers == 1:
                     return nn.Sequential(
                         nn.Linear(input_dim, output_dim),
-                        nn.BatchNorm1d(output_dim),
                         nn.ReLU(inplace=True)
                     )
                 
                 # For multiple layers, reduce dimensions gradually
                 for i in range(num_layers - 1):
-                    # Calculate intermediate dimension size
-                    inter_dim = max(output_dim, current_dim // 2)
-                    layers.append(nn.Linear(current_dim, inter_dim))
-                    layers.append(nn.BatchNorm1d(inter_dim))
+                    # Reduce dimension by half each layer, but not below output_dim
+                    next_dim = max(output_dim, current_dim // 2)
+                    layers.append(nn.Linear(current_dim, next_dim))
                     layers.append(nn.ReLU(inplace=True))
-                    current_dim = inter_dim
+                    current_dim = next_dim
                 
-                # Final layer reduces to output dimension
+                # Final layer to output dimension
                 layers.append(nn.Linear(current_dim, output_dim))
-                layers.append(nn.BatchNorm1d(output_dim))
                 layers.append(nn.ReLU(inplace=True))
                 
                 return nn.Sequential(*layers)
@@ -633,51 +631,35 @@ def main(args):
                 # Fallback to simple linear layer
                 return nn.Sequential(
                     nn.Linear(input_dim, output_dim),
-                    nn.BatchNorm1d(output_dim),
                     nn.ReLU(inplace=True)
                 )
-        
+
         input_dim = args.gnn_output_dim
         output_dim = int(args.bottleneck)
         
+        # Create simpler bottlenecks without batch normalization
         algorithm.bottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
         algorithm.abottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
         algorithm.dbottleneck = create_bottleneck(input_dim, output_dim, args.layer).cuda()
         
-        # Verify bottleneck output dimension
+        # Test the bottleneck
         test_input = torch.randn(2, input_dim).cuda()
         test_output = algorithm.bottleneck(test_input)
-        if test_output.shape[1] != output_dim:
-            print(f"⚠️ Bottleneck output dimension mismatch! Expected {output_dim}, got {test_output.shape[1]}")
-            print("Forcing bottleneck to output correct dimension")
-            algorithm.bottleneck = nn.Sequential(
-                nn.Linear(input_dim, output_dim),
-                nn.BatchNorm1d(output_dim),
-                nn.ReLU(inplace=True)
-            ).cuda()
-            algorithm.abottleneck = nn.Sequential(
-                nn.Linear(input_dim, output_dim),
-                nn.BatchNorm1d(output_dim),
-                nn.ReLU(inplace=True)
-            ).cuda()
-            algorithm.dbottleneck = nn.Sequential(
-                nn.Linear(input_dim, output_dim),
-                nn.BatchNorm1d(output_dim),
-                nn.ReLU(inplace=True)
-            ).cuda()
+        actual_output_dim = test_output.shape[1]
         
-        # Initialize projection head
+        print(f"Created bottlenecks: {input_dim} -> {actual_output_dim} (expected: {output_dim})")
+        print(f"Bottleneck architecture: {algorithm.bottleneck}")
+        
+        # Update projection head to match actual output dimension
         algorithm.projection_head = nn.Sequential(
-            nn.Linear(output_dim, 256),
+            nn.Linear(actual_output_dim, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.BatchNorm1d(128)
         ).cuda()
         
-        print(f"Created bottlenecks: {input_dim} -> {output_dim}")
-        print(f"Bottleneck architecture: {algorithm.bottleneck}")
-        print(f"Projection head input: {output_dim}")
+        print(f"Projection head input: {actual_output_dim}")
         
         # Enhanced GNN pretraining
         if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:

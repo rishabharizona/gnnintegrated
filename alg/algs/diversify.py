@@ -225,7 +225,7 @@ class Diversify(Algorithm):
                 self.temporal_attn = TemporalAttention(args.input_shape[0])
         
         # Feature whitening for domain invariance
-        self.whiten = nn.BatchNorm1d(args.bottleneck, affine=False)
+        self.whiten = None
         
         # Knowledge distillation components
         self.teacher_model = None
@@ -236,7 +236,13 @@ class Diversify(Algorithm):
         self.scheduler = None
         self.cosine_scheduler = None
         # ======================= END ENHANCEMENTS =======================
-        
+    def init_whitening(self, feature_dim):
+        """Initialize whitening layer with the correct feature dimension"""
+        if self.whiten is None or self.whiten.num_features != feature_dim:
+            self.whiten = nn.BatchNorm1d(feature_dim, affine=False)
+            print(f"Initialized whitening layer for {feature_dim} features")
+        return self.whiten
+   
     def configure_optimizers(self, args):
         """Enhanced optimizer configuration with adaptive scheduling"""
         params = [
@@ -577,7 +583,9 @@ class Diversify(Algorithm):
         features = self.featurizer(all_x)
         features = self.stochastic_depth(features)
         all_z = self.bottleneck(features)
-        
+        # Initialize whitening if needed
+        if self.whiten is None:
+            self.init_whitening(all_z.size(1))
         # Feature whitening for domain invariance
         all_z = self.whiten(all_z)
             

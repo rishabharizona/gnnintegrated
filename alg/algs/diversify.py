@@ -237,27 +237,33 @@ class Diversify(Algorithm):
         self.cosine_scheduler = None
         # ======================= END ENHANCEMENTS =======================
         
-    def _ensure_whitening(self, feature_dim):
-        """Ensure whitening layer matches current feature dimension"""
-        # Get device from model parameters
-        device = next(self.parameters()).device
-        
-        if self.whiten is None:
-            # Initialize for the first time on correct device
-            self.whiten = nn.BatchNorm1d(feature_dim, affine=False).to(device)
-            print(f"Initialized whitening layer for {feature_dim} features")
-        elif self.whiten.num_features != feature_dim:
-            # Reinitialize if dimension changed
-            print(f"Reinitializing whitening layer from {self.whiten.num_features} to {feature_dim} features")
-            self.whiten = nn.BatchNorm1d(feature_dim, affine=False).to(device)
-        else:
-            # Ensure existing layer is on correct device
-            current_device = next(self.whiten.parameters()).device if any(self.whiten.parameters()) \
-                             else self.whiten.running_mean.device
-            if current_device != device:
-                print(f"Moving whitening layer to {device}")
-                self.whiten = self.whiten.to(device)
+        def _ensure_whitening(self, feature_dim):
+            """Ensure whitening layer matches current feature dimension"""
+            # Get device from model parameters
+            device = next(self.parameters()).device
+            
+            if self.whiten is None:
+                # Initialize for the first time on correct device
+                self.whiten = nn.BatchNorm1d(feature_dim, affine=False).to(device)
+                print(f"Initialized whitening layer for {feature_dim} features")
+            elif self.whiten.num_features != feature_dim:
+                # Reinitialize if dimension changed
+                print(f"Reinitializing whitening layer from {self.whiten.num_features} to {feature_dim} features")
+                self.whiten = nn.BatchNorm1d(feature_dim, affine=False).to(device)
+            else:
+                # Ensure existing layer is on correct device
+                current_device = next(self.whiten.parameters()).device if any(self.whiten.parameters()) \
+                                 else self.whiten.running_mean.device
+                if current_device != device:
+                    print(f"Moving whitening layer to {device}")
+                    self.whiten = self.whiten.to(device)
 
+    def init_whitening(self, feature_dim):
+        """Initialize whitening layer with specified dimension"""
+        device = next(self.parameters()).device
+        self.whiten = nn.BatchNorm1d(feature_dim, affine=False).to(device)
+        print(f"Manually initialized whitening layer for {feature_dim} features")
+        
     def configure_optimizers(self, args):
         """Enhanced optimizer configuration with adaptive scheduling"""
         params = [

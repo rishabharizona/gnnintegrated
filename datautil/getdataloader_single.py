@@ -216,7 +216,7 @@ def get_act_dataloader(args):
     np.random.shuffle(indices)
     
     # Ensure validation set has sufficient size (at least 10% of data)
-    split_point = max(1, int(l * 0.6))
+    split_point = max(1, int(l * 0.8))
     if l - split_point < max(1, l // 10):
         split_point = l - max(1, l // 10)  # Ensure at least 10% validation
     

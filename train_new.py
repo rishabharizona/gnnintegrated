@@ -449,29 +449,39 @@ def compute_dataset_mean_std(dataloader, device):
     for i, batch in enumerate(dataloader):
         inputs = None
         
-        # Existing handling for PyG batches
-        if hasattr(batch, 'x'):  
-            inputs = batch.x.to(device)
-        elif isinstance(batch, list) and all(hasattr(item, 'x') for item in batch):
-            from torch_geometric.data import Batch
-            pyg_batch = Batch.from_data_list(batch)
-            inputs = pyg_batch.x.to(device)
+        # Case 1: Batch is a tuple of tensors (standard format)
+        if isinstance(batch, (tuple, list)) and len(batch) >= 1 and torch.is_tensor(batch[0]):
+            inputs = batch[0].to(device).float()
         
-        # NEW: Handle list of standard samples
+        # Case 2: Batch is a list of samples where each sample is tuple (data, label, domain)
         elif isinstance(batch, list) and len(batch) > 0 and isinstance(batch[0], (tuple, list)):
             try:
+                # Stack the input data from all samples
                 inputs = torch.stack([item[0] for item in batch], dim=0).to(device).float()
             except Exception as e:
                 print(f"Error processing list batch: {str(e)}")
                 continue
                 
-        # Existing tensor handling
-        elif isinstance(batch, (list, tuple)) and torch.is_tensor(batch[0]):
-            inputs = batch[0].to(device).float()
-        elif torch.is_tensor(batch):
-            inputs = batch.to(device).float()
+        # Case 3: PyG batch format
+        elif hasattr(batch, 'x'):  
+            inputs = batch.x.to(device)
+        
+        # Case 4: List of PyG Data objects
+        elif isinstance(batch, list) and len(batch) > 0 and hasattr(batch[0], 'x'):
+            try:
+                from torch_geometric.data import Batch
+                pyg_batch = Batch.from_data_list(batch)
+                inputs = pyg_batch.x.to(device)
+            except Exception as e:
+                print(f"Error processing PyG list batch: {str(e)}")
+                continue
         else:
-            print(f"Warning: Unsupported batch type {type(batch)}, skipping")
+            print(f"Warning: Unsupported batch type {type(batch)}, content: {type(batch[0]) if isinstance(batch, list) else 'N/A'}")
+            continue
+
+        # Handle case where we failed to get inputs
+        if inputs is None:
+            print(f"Warning: Failed to extract inputs from batch type {type(batch)}")
             continue
 
         # Reshape inputs to [num_elements, n_channels]
@@ -482,7 +492,7 @@ def compute_dataset_mean_std(dataloader, device):
         elif inputs.dim() == 2:  # [num_nodes, n_channels] (PyG)
             pass  # Already in correct format
         else:
-            print(f"Warning: Unsupported input dimension {inputs.dim()}, skipping")
+            print(f"Warning: Unsupported input dimension {inputs.dim()}, shape: {inputs.shape}")
             continue
 
         # Update accumulators

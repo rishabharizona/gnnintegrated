@@ -749,31 +749,31 @@ class Diversify(Algorithm):
         return {'class': classifier_loss.item()}
 
     # In alg/algs/diversify.py, modify the predict method
-def predict(self, x):
-    """Enhanced prediction with attention and feature whitening"""
-    if not isinstance(x, (Data, Batch)):
-        x = self.ensure_correct_dimensions(x)
-    
-    # Apply attention if not using GNN
-    if not self.args.use_gnn:
-        if x.dim() == 3:
-            x = x.permute(0, 2, 1).unsqueeze(2)
-        x = self.spatial_attn(x)
-        x = self.temporal_attn(x.squeeze(2).permute(0, 2, 1))
-        x = x.unsqueeze(2)
-    
-    features = self.featurizer(x)
-    bottleneck_out = self.bottleneck(features)
-    
-    # Initialize whitening if needed
-    if self.whiten is None:
-        # Create whitening layer with correct dimension
-        feature_dim = bottleneck_out.size(1)
-        self.whiten = nn.BatchNorm1d(feature_dim, affine=False).to(bottleneck_out.device)
-        print(f"Initialized whitening layer for {feature_dim} features during prediction")
-    
-    bottleneck_out = self.whiten(bottleneck_out)
-    return self.classifier(bottleneck_out)
+    def predict(self, x):
+        """Enhanced prediction with attention and feature whitening"""
+        if not isinstance(x, (Data, Batch)):
+            x = self.ensure_correct_dimensions(x)
+        
+        # Apply attention if not using GNN
+        if not self.args.use_gnn:
+            if x.dim() == 3:
+                x = x.permute(0, 2, 1).unsqueeze(2)
+            x = self.spatial_attn(x)
+            x = self.temporal_attn(x.squeeze(2).permute(0, 2, 1))
+            x = x.unsqueeze(2)
+        
+        features = self.featurizer(x)
+        bottleneck_out = self.bottleneck(features)
+        
+        # Initialize whitening if needed
+        if self.whiten is None:
+            # Create whitening layer with correct dimension
+            feature_dim = bottleneck_out.size(1)
+            self.whiten = nn.BatchNorm1d(feature_dim, affine=False).to(bottleneck_out.device)
+            print(f"Initialized whitening layer for {feature_dim} features during prediction")
+        
+        bottleneck_out = self.whiten(bottleneck_out)
+        return self.classifier(bottleneck_out)
     
     def forward(self, batch):
         inputs = batch[0]

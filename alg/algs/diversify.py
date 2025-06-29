@@ -224,7 +224,7 @@ class Diversify(Algorithm):
                 self.spatial_attn = SpatialAttention(args.input_shape[1])
                 self.temporal_attn = TemporalAttention(args.input_shape[0])
         
-        # Feature whitening for domain invariance
+        # Feature whitening for domain invariance (will be initialized dynamically)
         self.whiten = None
         
         # Knowledge distillation components
@@ -236,13 +236,23 @@ class Diversify(Algorithm):
         self.scheduler = None
         self.cosine_scheduler = None
         # ======================= END ENHANCEMENTS =======================
-    def init_whitening(self, feature_dim):
-        """Initialize whitening layer with the correct feature dimension"""
-        if self.whiten is None or self.whiten.num_features != feature_dim:
+        
+    def _ensure_whitening(self, feature_dim):
+        """Ensure whitening layer matches current feature dimension"""
+        if self.whiten is None:
+            # Initialize for the first time
             self.whiten = nn.BatchNorm1d(feature_dim, affine=False)
             print(f"Initialized whitening layer for {feature_dim} features")
-        return self.whiten
-   
+        elif self.whiten.num_features != feature_dim:
+            # Reinitialize if dimension changed
+            print(f"Reinitializing whitening layer from {self.whiten.num_features} to {feature_dim} features")
+            self.whiten = nn.BatchNorm1d(feature_dim, affine=False)
+        
+        # Ensure whitening layer is on correct device
+        device = next(self.parameters()).device
+        if self.whiten.weight.device != device:
+            self.whiten = self.whiten.to(device)
+
     def configure_optimizers(self, args):
         """Enhanced optimizer configuration with adaptive scheduling"""
         params = [
@@ -583,9 +593,10 @@ class Diversify(Algorithm):
         features = self.featurizer(all_x)
         features = self.stochastic_depth(features)
         all_z = self.bottleneck(features)
-        # Initialize whitening if needed
-        if self.whiten is None:
-            self.init_whitening(all_z.size(1))
+        
+        # Ensure whitening layer matches current feature dimension
+        self._ensure_whitening(all_z.size(1))
+            
         # Feature whitening for domain invariance
         all_z = self.whiten(all_z)
             
@@ -748,7 +759,6 @@ class Diversify(Algorithm):
         
         return {'class': classifier_loss.item()}
 
-    # In alg/algs/diversify.py, modify the predict method
     def predict(self, x):
         """Enhanced prediction with attention and feature whitening"""
         if not isinstance(x, (Data, Batch)):
@@ -765,12 +775,8 @@ class Diversify(Algorithm):
         features = self.featurizer(x)
         bottleneck_out = self.bottleneck(features)
         
-        # Initialize whitening if needed
-        if self.whiten is None:
-            # Create whitening layer with correct dimension
-            feature_dim = bottleneck_out.size(1)
-            self.whiten = nn.BatchNorm1d(feature_dim, affine=False).to(bottleneck_out.device)
-            print(f"Initialized whitening layer for {feature_dim} features during prediction")
+        # Ensure whitening layer matches current feature dimension
+        self._ensure_whitening(bottleneck_out.size(1))
         
         # Handle small batches during curriculum phase
         if bottleneck_out.size(0) == 1:

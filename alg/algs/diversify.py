@@ -356,7 +356,7 @@ class Diversify(Algorithm):
         norms[zero_norms] = 1  # Avoid division by zero
         
         all_fea_norm = all_fea_np / norms
-        all_fea_norm[zero_norms] = 0  # Set zero vectors to zero
+        all_fea_norm[zero_norms.flatten()] = 0  # Set zero vectors to zero
         
         # Clustering for pseudo-domain labels
         K = self.args.latent_domain_num

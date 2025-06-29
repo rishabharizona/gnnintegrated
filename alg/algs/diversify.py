@@ -91,7 +91,7 @@ def transform_for_gnn(x):
     # Unsupported format
     raise ValueError(
         f"Cannot transform input of shape {x.shape if hasattr(x, 'shape') else type(x)} for GNN. "
-        f"Expected formats: PyG Data object, [B, C, 1, T], [B, 1, C, T], [B, T, 1, C], [B, T, C, 1], "
+        f"Expected formats: PyG Data object, [B, C, 1, T], [B, 1, C, T], [B, T, 1, C], "
         f"or 3D formats [B, C, T] or [B, T, C] where C is 8 or 200."
     )
 
@@ -281,6 +281,15 @@ class Diversify(Algorithm):
         ent_loss = Entropylogits(cd1) * self.args.lam + self.criterion(cd1, all_c1)
         loss = ent_loss + 0.01 * disc_loss  # Reduced domain loss weight
         
+        # Check for NaN/inf loss
+        if not torch.isfinite(loss):
+            print(f"Warning: non-finite loss detected in update_d: {loss.item()}. Skipping step.")
+            return {
+                'total': 0,
+                'dis': 0,
+                'ent': 0
+            }
+        
         # Optimization
         opt.zero_grad()
         loss.backward()
@@ -318,6 +327,11 @@ class Diversify(Algorithm):
                 
                 feas = self.dbottleneck(self.featurizer(inputs))
                 
+                # Check for NaN in features
+                if torch.isnan(feas).any():
+                    print("Warning: NaN detected in features. Replacing with zeros.")
+                    feas = torch.nan_to_num(feas, nan=0.0)
+                
                 all_fea.append(feas.float().cpu())
                 
                 batch_size = inputs.size(0) if not isinstance(inputs, (Data, Batch)) else inputs.num_graphs
@@ -329,14 +343,25 @@ class Diversify(Algorithm):
         all_fea = torch.cat(all_fea, dim=0)
         all_index = np.concatenate(all_index, axis=0)
         
-        # Normalize features
-        all_fea = all_fea / torch.norm(all_fea, p=2, dim=1, keepdim=True)
-        all_fea = all_fea.float().cpu().numpy()
-    
+        # Convert to numpy and check for NaN
+        all_fea_np = all_fea.float().cpu().numpy()
+        nan_mask = np.isnan(all_fea_np).any(axis=1)
+        if np.any(nan_mask):
+            print(f"Warning: Found {nan_mask.sum()} samples with NaN features. Replacing with 0.")
+            all_fea_np[nan_mask] = 0
+        
+        # Normalize features safely
+        norms = np.linalg.norm(all_fea_np, axis=1, keepdims=True)
+        zero_norms = (norms == 0)
+        norms[zero_norms] = 1  # Avoid division by zero
+        
+        all_fea_norm = all_fea_np / norms
+        all_fea_norm[zero_norms] = 0  # Set zero vectors to zero
+        
         # Clustering for pseudo-domain labels
         K = self.args.latent_domain_num
         kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
-        pred_label = kmeans.fit_predict(all_fea)
+        pred_label = kmeans.fit_predict(all_fea_norm)
         pred_label = np.clip(pred_label, 0, K-1)
     
         # Handle dataset types
@@ -449,6 +474,16 @@ class Diversify(Algorithm):
         classifier_loss = self.criterion(all_preds, all_y)
         loss = classifier_loss + 0.01 * disc_loss + contrastive_loss  # Include contrastive loss
         
+        # Check for NaN/inf loss
+        if not torch.isfinite(loss):
+            print(f"Warning: non-finite loss detected: {loss.item()}. Skipping step.")
+            return {
+                'total': 0,
+                'class': classifier_loss.item() if torch.isfinite(classifier_loss) else 0,
+                'dis': disc_loss.item() if torch.isfinite(disc_loss) else 0,
+                'contrast': contrastive_loss.item() if torch.isfinite(contrastive_loss) else 0
+            }
+        
         # Optimization
         opt.zero_grad()
         loss.backward()
@@ -528,6 +563,12 @@ class Diversify(Algorithm):
         
         # Loss calculation and optimization
         classifier_loss = F.cross_entropy(all_preds, all_y)
+        
+        # Check for NaN/inf loss
+        if not torch.isfinite(classifier_loss):
+            print(f"Warning: non-finite loss detected in update_a: {classifier_loss.item()}. Skipping step.")
+            return {'class': 0}
+        
         opt.zero_grad()
         classifier_loss.backward()
         opt.step()

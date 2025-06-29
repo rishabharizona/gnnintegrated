@@ -224,9 +224,6 @@ class Diversify(Algorithm):
                 self.spatial_attn = SpatialAttention(args.input_shape[1])
                 self.temporal_attn = TemporalAttention(args.input_shape[0])
         
-        # Feature whitening for domain invariance (will be initialized dynamically)
-        self.whiten = None
-        
         # Knowledge distillation components
         self.teacher_model = None
         self.distill_temp = 3.0
@@ -237,67 +234,6 @@ class Diversify(Algorithm):
         self.cosine_scheduler = None
         # ======================= END ENHANCEMENTS =======================
         
-    def _ensure_whitening(self, feature_dim):
-        """Ensure whitening layer matches current feature dimension"""
-        device = next(self.parameters()).device
-        
-        if self.whiten is None:
-            self.whiten = nn.BatchNorm1d(256, affine=False).to(device)
-            print(f"Initialized whitening layer for 256 features")
-        elif self.whiten.num_features != 256:
-            self.whiten = nn.BatchNorm1d(256, affine=False).to(device)
-            print(f"Resetting whitening layer to 256 features")
-        elif self.whiten.running_mean.device != device:
-            self.whiten = self.whiten.to(device)
-    
-    def init_whitening(self, feature_dim):
-        """Initialize whitening layer"""
-        device = next(self.parameters()).device
-        self.whiten = nn.BatchNorm1d(256, affine=False).to(device)
-        print(f"Manually initialized whitening layer for 256 features")
-        
-    def configure_optimizers(self, args):
-        """Enhanced optimizer configuration with adaptive scheduling"""
-        params = [
-            {'params': self.featurizer.parameters(), 'lr': args.lr},
-            {'params': self.bottleneck.parameters(), 'lr': args.lr},
-            {'params': self.classifier.parameters(), 'lr': args.lr * 0.1},
-            {'params': self.projection_head.parameters(), 'lr': args.lr},
-            {'params': self.abottleneck.parameters(), 'lr': args.lr},
-            {'params': self.aclassifier.parameters(), 'lr': args.lr * 0.1},
-            {'params': self.discriminator.parameters(), 'lr': args.lr},
-        ]
-        
-        # Add attention parameters if they exist
-        if hasattr(self, 'spatial_attn'):
-            params.append({'params': self.spatial_attn.parameters(), 'lr': args.lr})
-        if hasattr(self, 'temporal_attn'):
-            params.append({'params': self.temporal_attn.parameters(), 'lr': args.lr})
-        
-        optimizer = torch.optim.AdamW(
-            params, 
-            lr=args.lr,
-            weight_decay=args.weight_decay if hasattr(args, 'weight_decay') else 1e-4
-        )
-        
-        # Adaptive learning rate scheduling
-        self.scheduler = ReduceLROnPlateau(
-            optimizer, 
-            mode='max', 
-            factor=0.5, 
-            patience=5,
-            verbose=True
-        )
-        
-        # Cosine annealing for fine-tuning
-        self.cosine_scheduler = CosineAnnealingLR(
-            optimizer, 
-            T_max=args.steps if hasattr(args, 'steps') else 100,
-            eta_min=args.lr * 0.01
-        )
-        
-        return optimizer
-
     def patch_skip_connection(self):
         """Dynamically adjust skip connection based on actual input shape"""
         # Get device from model parameters
@@ -340,6 +276,48 @@ class Diversify(Algorithm):
         # If we reach here, no skip connection was found
         print("Warning: No skip connection layer found in featurizer")
         self.actual_features = actual_features
+
+    def configure_optimizers(self, args):
+        """Enhanced optimizer configuration with adaptive scheduling"""
+        params = [
+            {'params': self.featurizer.parameters(), 'lr': args.lr},
+            {'params': self.bottleneck.parameters(), 'lr': args.lr},
+            {'params': self.classifier.parameters(), 'lr': args.lr * 0.1},
+            {'params': self.projection_head.parameters(), 'lr': args.lr},
+            {'params': self.abottleneck.parameters(), 'lr': args.lr},
+            {'params': self.aclassifier.parameters(), 'lr': args.lr * 0.1},
+            {'params': self.discriminator.parameters(), 'lr': args.lr},
+        ]
+        
+        # Add attention parameters if they exist
+        if hasattr(self, 'spatial_attn'):
+            params.append({'params': self.spatial_attn.parameters(), 'lr': args.lr})
+        if hasattr(self, 'temporal_attn'):
+            params.append({'params': self.temporal_attn.parameters(), 'lr': args.lr})
+        
+        optimizer = torch.optim.AdamW(
+            params, 
+            lr=args.lr,
+            weight_decay=args.weight_decay if hasattr(args, 'weight_decay') else 1e-4
+        )
+        
+        # Adaptive learning rate scheduling
+        self.scheduler = ReduceLROnPlateau(
+            optimizer, 
+            mode='max', 
+            factor=0.5, 
+            patience=5,
+            verbose=True
+        )
+        
+        # Cosine annealing for fine-tuning
+        self.cosine_scheduler = CosineAnnealingLR(
+            optimizer, 
+            T_max=args.steps if hasattr(args, 'steps') else 100,
+            eta_min=args.lr * 0.01
+        )
+        
+        return optimizer
 
     def update_d(self, minibatch, opt):
         """Update domain discriminator and classifier"""
@@ -597,11 +575,11 @@ class Diversify(Algorithm):
         features = self.stochastic_depth(features)
         all_z = self.bottleneck(features)
         
-        # Ensure whitening layer matches current feature dimension
-        self._ensure_whitening(all_z.size(1))
-            
-        # Feature whitening for domain invariance
-        all_z = self.whiten(all_z)
+        # Dynamic per-batch normalization - no fixed whitening layer
+        if all_z.size(0) > 1:  # Only normalize if batch size > 1
+            z_mean = all_z.mean(dim=0, keepdim=True)
+            z_std = all_z.std(dim=0, keepdim=True) + 1e-5
+            all_z = (all_z - z_mean) / z_std
             
         # ======================= CONTRASTIVE LEARNING =======================
         # Project features for contrastive loss
@@ -746,6 +724,13 @@ class Diversify(Algorithm):
         
         # Forward pass
         all_z = self.abottleneck(self.featurizer(inputs))
+        
+        # Dynamic per-batch normalization
+        if all_z.size(0) > 1:
+            z_mean = all_z.mean(dim=0, keepdim=True)
+            z_std = all_z.std(dim=0, keepdim=True) + 1e-5
+            all_z = (all_z - z_mean) / z_std
+            
         all_preds = self.aclassifier(all_z)
         
         # Loss calculation and optimization
@@ -763,7 +748,7 @@ class Diversify(Algorithm):
         return {'class': classifier_loss.item()}
 
     def predict(self, x):
-        """Enhanced prediction with attention and feature whitening"""
+        """Enhanced prediction with dynamic normalization"""
         if not isinstance(x, (Data, Batch)):
             x = self.ensure_correct_dimensions(x)
         
@@ -778,17 +763,13 @@ class Diversify(Algorithm):
         features = self.featurizer(x)
         bottleneck_out = self.bottleneck(features)
         
-        # Ensure whitening layer exists and matches current feature dimension
-        self._ensure_whitening(bottleneck_out.size(1))
-        
-        # Handle small batches during curriculum phase
-        if bottleneck_out.size(0) == 1:
-            # Use instance normalization for single-sample batches
-            whitened = (bottleneck_out - bottleneck_out.mean(dim=1, keepdim=True)) / (
-                bottleneck_out.std(dim=1, keepdim=True) + 1e-5)
+        # Dynamic per-batch normalization
+        if bottleneck_out.size(0) > 1:  # Only normalize if batch size > 1
+            z_mean = bottleneck_out.mean(dim=0, keepdim=True)
+            z_std = bottleneck_out.std(dim=0, keepdim=True) + 1e-5
+            whitened = (bottleneck_out - z_mean) / z_std
         else:
-            # Use batch norm for larger batches
-            whitened = self.whiten(bottleneck_out)
+            whitened = bottleneck_out
         
         return self.classifier(whitened)
     

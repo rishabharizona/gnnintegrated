@@ -448,47 +448,49 @@ def compute_dataset_mean_std(dataloader, device):
     total_elements = 0
     
     for i, batch in enumerate(dataloader):
+        inputs = None
+        
+        # Handle PyG Batch objects
+        if hasattr(batch, 'x'):  
+            inputs = batch.x.to(device)
         # Handle list of PyG Data objects
-        if isinstance(batch, list) and all(hasattr(item, 'x') for item in batch):
-            # Combine into a single PyG Batch
+        elif isinstance(batch, list) and all(hasattr(item, 'x') for item in batch):
             from torch_geometric.data import Batch
             pyg_batch = Batch.from_data_list(batch)
             inputs = pyg_batch.x.to(device)
-            # Reshape to [num_nodes, n_channels]
-            inputs = inputs.view(-1, n_channels)
-        # Handle PyG DataBatch object (already batched)
-        elif hasattr(batch, 'x'):  
-            inputs = batch.x.to(device)
-            inputs = inputs.view(-1, n_channels)
         # Handle standard tuple (inputs, labels, domains)
         elif isinstance(batch, (list, tuple)) and torch.is_tensor(batch[0]):
             inputs = batch[0].to(device).float()
-            # CNN input: [batch, channels, 1, time]
-            if inputs.dim() == 4:
-                inputs = inputs.permute(0, 2, 3, 1).reshape(-1, n_channels)
-            else:
-                inputs = inputs.reshape(-1, n_channels)
         # Handle single tensor
         elif torch.is_tensor(batch):
             inputs = batch.to(device).float()
-            if inputs.dim() == 4:
-                inputs = inputs.permute(0, 2, 3, 1).reshape(-1, n_channels)
-            else:
-                inputs = inputs.reshape(-1, n_channels)
         else:
-            raise ValueError(f"Unsupported batch type: {type(batch)}")
-        
+            print(f"Warning: Unsupported batch type {type(batch)}, skipping")
+            continue
+
+        # Reshape inputs to [num_elements, n_channels]
+        if inputs.dim() == 4:  # [batch, channels, 1, time]
+            inputs = inputs.permute(0, 2, 3, 1).reshape(-1, n_channels)
+        elif inputs.dim() == 3:  # [batch, channels, time]
+            inputs = inputs.permute(0, 2, 1).reshape(-1, n_channels)
+        elif inputs.dim() == 2:  # [num_nodes, n_channels] (PyG)
+            pass  # Already in correct format
+        else:
+            print(f"Warning: Unsupported input dimension {inputs.dim()}, skipping")
+            continue
+
         # Update accumulators
         channel_sums += inputs.sum(dim=0)
         channel_sq_sums += (inputs ** 2).sum(dim=0)
         total_elements += inputs.shape[0]
     
-    # Compute mean and std for each channel
+    if total_elements == 0:
+        raise RuntimeError("No valid elements found for normalization")
+    
+    # Compute mean and std
     mean = channel_sums / total_elements
     std = torch.sqrt(channel_sq_sums / total_elements - mean ** 2)
-    
-    # Add epsilon to avoid division by zero
-    std = torch.clamp(std, min=1e-6)
+    std = torch.clamp(std, min=1e-6)  # Avoid division by zero
     
     print(f"Computed normalization: mean={mean.cpu().numpy()}, std={std.cpu().numpy()}")
     return mean, std

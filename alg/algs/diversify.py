@@ -277,7 +277,6 @@ class Diversify(Algorithm):
             {'params': self.featurizer.parameters(), 'lr': args.lr},
             {'params': self.bottleneck.parameters(), 'lr': args.lr},
             {'params': self.classifier.parameters(), 'lr': args.lr * 0.1},
-            {'params': self.projection_head.parameters(), 'lr': args.lr},
             {'params': self.abottleneck.parameters(), 'lr': args.lr},
             {'params': self.aclassifier.parameters(), 'lr': args.lr * 0.1},
             {'params': self.discriminator.parameters(), 'lr': args.lr},

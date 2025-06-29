@@ -449,8 +449,9 @@ def compute_dataset_mean_std(dataloader, device):
     
     for batch in dataloader:
         if hasattr(batch, 'x'):  # PyG Batch object
+            # Access the node features directly
             inputs = batch.x.to(device)
-            # PyG batch: [num_nodes, features]
+            # Reshape to [num_nodes, n_channels]
             inputs = inputs.view(-1, n_channels)
         else:
             # Regular tensor

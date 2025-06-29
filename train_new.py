@@ -476,56 +476,13 @@ def main(args):
         LoaderClass = TorchDataLoader
         print("Using TorchDataLoader for CNN data")
     
-    # First create loaders with a small batch size for debugging
-    debug_loader = LoaderClass(
-        dataset=tr,
-        batch_size=min(4, args.batch_size),
-        shuffle=True,
-        num_workers=0
-    )
-    
-    # Debug: Test a single forward pass
-    print("\n===== Running debug forward pass =====")
-    algorithm_class = alg.get_algorithm_class(args.algorithm)
-    algorithm = algorithm_class(args).to(args.device)
-    
-    for batch in debug_loader:
-        if args.use_gnn and GNN_AVAILABLE:
-            inputs = batch[0].to(args.device)
-            labels = batch[1].to(args.device)
-            domains = batch[2].to(args.device)
-            data = [inputs, labels, domains]
-        else:
-            inputs = batch[0].to(args.device).float()
-            labels = batch[1].to(args.device).long()
-            domains = batch[2].to(args.device).long()
-            data = [inputs, labels, domains]
-        
-        # Forward pass
-        try:
-            outputs = algorithm.predict(inputs)
-            print("Forward pass successful!")
-            print(f"Output shape: {outputs.shape}, Output min: {outputs.min().item()}, Output max: {outputs.max().item()}")
-            
-            # Check for NaNs
-            if torch.isnan(outputs).any():
-                print("ERROR: NaNs in model output!")
-            else:
-                print("No NaNs in model output")
-            break
-        except Exception as e:
-            print(f"Forward pass failed: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return
-    
-    # Now proceed with actual training
     temp_train_loader = LoaderClass(
         dataset=tr,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=min(2, args.N_WORKERS))
     
+    # CRITICAL FIX: Ensure latent_domain_num is set before algorithm creation
     if getattr(args, 'automated_k', False):
         print("\nRunning automated K estimation...")
         
@@ -572,6 +529,11 @@ def main(args):
         del temp_model
         torch.cuda.empty_cache()
     
+    # Ensure latent_domain_num is set
+    if not hasattr(args, 'latent_domain_num') or args.latent_domain_num is None:
+        args.latent_domain_num = 3  # Default value
+        print(f"Using default latent_domain_num: {args.latent_domain_num}")
+    
     if args.latent_domain_num < 6:
         args.batch_size = 32 * args.latent_domain_num
     else:
@@ -610,6 +572,7 @@ def main(args):
         shuffle=False
     )
     
+    algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).to(args.device)
     
     if args.use_gnn and GNN_AVAILABLE:
@@ -704,7 +667,7 @@ def main(args):
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                 
-                
+            
                     inputs = inputs.reshape(inputs.size(0), -1)
                     if hasattr(algorithm, 'ensure_correct_dimensions'):
                         inputs = algorithm.ensure_correct_dimensions(inputs)
@@ -795,7 +758,7 @@ def main(args):
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
-                    domains = batch[2].to(args.device)
+                    domains = batch[2].to(args.dev极
                     data = [inputs, labels, domains]
                 else:
                     inputs = batch[0].to(args.device).float()
@@ -852,7 +815,7 @@ def main(args):
             if batch_count > 0:
                 epoch_total /= batch_count
                 epoch_dis /= batch_count
-                epoch_ent /= epoch_ent
+                epoch_ent /= batch_count
                 print_row([step, epoch_total, epoch_dis, epoch_ent], colwidth=15)
                 logs['dis_loss'].append(epoch_dis)
                 logs['ent_loss'].append(epoch_ent)
@@ -947,7 +910,7 @@ def main(args):
             source_features = []
             with torch.no_grad():
                 for data in entire_source_loader:
-                    if args.use_gnn and GNN_AVAILABLE:
+                    if args.use_极n and GNN_AVAILABLE:
                         inputs = data[0].to(args.device)
                         inputs = transform_for_gnn(inputs)
                     else:
@@ -996,7 +959,7 @@ def main(args):
             else:
                 # Standard tensor handling for CNN
                 background = get_background_batch(valid_loader, size=64).cuda()
-                X_eval = background[:10]
+                X极val = background[:10]
             
             # Disable inplace operations in the model
             disable_inplace_relu(algorithm)

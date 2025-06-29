@@ -18,6 +18,7 @@ from datautil.getdataloader_single import get_act_dataloader, get_curriculum_loa
 from torch_geometric.loader import DataLoader as PyGDataLoader 
 from torch.utils.data import ConcatDataset, DataLoader as TorchDataLoader
 from network.act_network import ActNetwork
+import random  # Added for data augmentation
 
 # Suppress TensorFlow and SHAP warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -440,19 +441,7 @@ def main(args):
     args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {args.device}")
     os.makedirs(args.output, exist_ok=True)
-    # In training loop:
-    optimizer = algorithm.configure_optimizers(args)
     
-    for epoch in range(epochs):
-        for batch in dataloader:
-            losses = algorithm.update(batch, optimizer)
-        
-        # Update teacher model after epoch
-        algorithm.update_teacher()
-        
-        # Update learning rate based on validation performance
-        val_acc = evaluate(algorithm, val_loader)
-        algorithm.scheduler.step(val_acc)
     # Handle curriculum parameters
     if getattr(args, 'curriculum', False):
         # Handle CL_PHASE_EPOCHS: if it's an integer, convert to a list of that integer for 3 phases
@@ -578,6 +567,10 @@ def main(args):
     
     algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).to(args.device)
+    
+    # ======================= ENHANCED OPTIMIZER CONFIGURATION =======================
+    optimizer = algorithm.configure_optimizers(args)
+    # ======================= END ENHANCED OPTIMIZER CONFIGURATION =======================
     
     if args.use_gnn and GNN_AVAILABLE:
         print("\n===== Initializing GNN Feature Extractor =====")
@@ -707,7 +700,6 @@ def main(args):
     algorithm.train()
     
     optd = get_optimizer(algorithm, args, nettype='Diversify-adv')
-    opt = get_optimizer(algorithm, args, nettype='Diversify-cls')
     opta = get_optimizer(algorithm, args, nettype='Diversify-all')
     
     augmenter = EMGDataAugmentation(args).cuda()
@@ -926,7 +918,8 @@ def main(args):
                     domains = batch[2].to(args.device).long()
                     data = [inputs, labels, domains]
                 
-                step_vals = algorithm.update(data, opt)
+                # Use the new optimizer for the main update
+                step_vals = algorithm.update(data, optimizer)
                 torch.nn.utils.clip_grad_norm_(algorithm.parameters(), MAX_GRAD_NORM)
             
             # Evaluate after each epoch
@@ -956,6 +949,15 @@ def main(args):
             
             for metric in ['train_acc', 'valid_acc', 'target_acc']:
                 logs[metric].append(results[metric])
+            
+            # ======================= KEY ENHANCEMENTS =======================
+            # Update teacher model after each epoch
+            algorithm.update_teacher()
+            
+            # Update learning rate based on validation performance
+            if algorithm.scheduler is not None:
+                algorithm.scheduler.step(valid_acc)
+            # ======================= END ENHANCEMENTS =======================
             
             if results['valid_acc'] > best_valid_acc:
                 best_valid_acc = results['valid_acc']

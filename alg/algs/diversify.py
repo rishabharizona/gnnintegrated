@@ -238,10 +238,22 @@ class Diversify(Algorithm):
         # ======================= END ENHANCEMENTS =======================
         
     def _ensure_whitening(self, feature_dim):
-        """Ensure whitening layer matches current feature dimension"""
+        """Ensure whitening layer matches current feature dimension and update projection head"""
         # Get device from model parameters
         device = next(self.parameters()).device
         
+        # Update projection head if needed
+        if hasattr(self, 'projection_head') and self.projection_head[0].in_features != feature_dim:
+            print(f"Updating projection head from {self.projection_head[0].in_features} to {feature_dim} features")
+            self.projection_head = nn.Sequential(
+                nn.Linear(feature_dim, 256),
+                nn.BatchNorm1d(256),
+                nn.ReLU(),
+                nn.Linear(256, 128),
+                nn.BatchNorm1d(128)
+            ).to(device)
+        
+        # Update whitening layer
         if self.whiten is None:
             # Initialize for the first time on correct device
             self.whiten = nn.BatchNorm1d(feature_dim, affine=False).to(device)

@@ -917,7 +917,13 @@ def main(args):
                     labels = batch[1].to(args.device).long()
                     domains = batch[2].to(args.device).long()
                     data = [inputs, labels, domains]
-                
+
+                # Initialize whitening layer on first batch
+                if algorithm.whiten is None:
+                    with torch.no_grad():
+                        test_features = algorithm.featurizer(inputs)
+                        test_bottleneck = algorithm.bottleneck(test_features)
+                        algorithm.init_whitening(test_bottleneck.size(1))
                 # Use the new optimizer for the main update
                 step_vals = algorithm.update(data, optimizer)
                 torch.nn.utils.clip_grad_norm_(algorithm.parameters(), MAX_GRAD_NORM)

@@ -249,7 +249,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         return (
             (isinstance(sample, tuple) and len(sample) >= 3 and isinstance(sample[0], Data)) or
             isinstance(sample, Data) or
-            (isinstance(sample, dict) and 'graph' in sample)
+            (isinstance(sample, dict) and 'graph' in sample
         )
     
     # Ensure we have datasets, not loaders
@@ -404,13 +404,6 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     # Update sample difficulties with normalized values
     sample_difficulties = [(idx, norm_d) for (idx, _), norm_d in 
                           zip(sample_difficulties, normalized_difficulties)]
-    
-    # ================= DYNAMIC THRESHOLD ADJUSTMENT =================
-    # Adjust threshold based on model performance (easier if model struggling)
-    if stage > 0 and logs['valid_acc'] and logs['valid_acc'][-1] < 50:  # Low accuracy
-        difficulty_threshold = max(0.1, difficulty_threshold * 0.8)
-        print(f"Model struggling (acc={logs['valid_acc'][-1]:.1f}%), "
-              f"lowering threshold to {difficulty_threshold:.2f}")
     
     # ================= SAMPLE SELECTION STRATEGY =================
     # Select samples below difficulty threshold

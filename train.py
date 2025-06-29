@@ -621,18 +621,7 @@ def main(args):
             nn.ReLU(inplace=True)
         ).cuda()
         
-        # Consistent projection head
-        algorithm.projection_head = nn.Sequential(
-            nn.Linear(256, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128)
-        ).cuda()
-        
-        print("Fixed architecture: All dimensions set to 256")
         print(f"Bottleneck: 256 -> 256")
-        print(f"Projection head: 256 -> 256 -> 128")
         
         # Enhanced GNN pretraining
         if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:

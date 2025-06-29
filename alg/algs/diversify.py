@@ -772,8 +772,16 @@ class Diversify(Algorithm):
             self.whiten = nn.BatchNorm1d(feature_dim, affine=False).to(bottleneck_out.device)
             print(f"Initialized whitening layer for {feature_dim} features during prediction")
         
-        bottleneck_out = self.whiten(bottleneck_out)
-        return self.classifier(bottleneck_out)
+        # Handle small batches during curriculum phase
+        if bottleneck_out.size(0) == 1:
+            # Use instance normalization for single-sample batches
+            whitened = (bottleneck_out - bottleneck_out.mean(dim=1, keepdim=True)) / (
+                bottleneck_out.std(dim=1, keepdim=True) + 1e-5)
+        else:
+            # Use batch norm for larger batches
+            whitened = self.whiten(bottleneck_out)
+        
+        return self.classifier(whitened)
     
     def forward(self, batch):
         inputs = batch[0]

@@ -792,9 +792,7 @@ def main(args):
                 def predict(self, x):
                     if self.transform_fn:
                         x = self.transform_fn(x)
-                    # Initialize whitening to fixed 256 dimensions
-                    if self.algorithm.whiten is None:
-                        self.algorithm.init_whitening(256)
+                    # No whitening initialization needed
                     return self.algorithm.predict(x)
                     
                 @property

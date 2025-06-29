@@ -249,7 +249,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         return (
             (isinstance(sample, tuple) and len(sample) >= 3 and isinstance(sample[0], Data)) or
             isinstance(sample, Data) or
-            (isinstance(sample, dict) and 'graph' in sample
+            (isinstance(sample, dict)) and 'graph' in sample
         )
     
     # Ensure we have datasets, not loaders

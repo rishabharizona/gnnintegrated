@@ -629,7 +629,7 @@ def main(args):
         # Increase CNN capacity
         algorithm.featurizer.conv1 = nn.Conv2d(
             8, 128, kernel_size=(1, 5), 
-            stride=(1, 1), padding=(0, 2)
+            stride=(1, 1), padding=(0, 2))
         algorithm.featurizer.conv2 = nn.Conv2d(
             128, 256, kernel_size=(1, 5), 
             stride=(1, 1), padding=(0, 2))

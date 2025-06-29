@@ -94,6 +94,17 @@ def automated_k_estimation(features, k_min=2, k_max=10):
 
 def calculate_h_divergence(features_source, features_target):
     """Minimal domain discrepancy calculation"""
+    # Filter out NaN values
+    mask_source = ~np.isnan(features_source).any(axis=1)
+    mask_target = ~np.isnan(features_target).any(axis=1)
+    
+    features_source = features_source[mask_source]
+    features_target = features_target[mask_target]
+    
+    if len(features_source) == 0 or len(features_target) == 0:
+        print("Warning: No valid features for h-divergence calculation")
+        return 0.0, 0.5
+    
     labels_source = np.zeros(features_source.shape[0])
     labels_target = np.ones(features_target.shape[0])
     
@@ -147,7 +158,7 @@ def transform_for_gnn(x):
 
 # ======================= TEMPORAL CONVOLUTION BLOCK =======================
 class TemporalBlock(nn.Module):
-    def __init__(self, n_inputs, n_outputs, kernel_size, stride, dilation, dropout=0.2):  # INCREASED DROPOUT
+    def __init__(self, n_inputs, n_outputs, kernel_size, stride, dilation, dropout=0.1):
         super().__init__()
         padding = (kernel_size - 1) * dilation
         
@@ -155,8 +166,9 @@ class TemporalBlock(nn.Module):
             n_inputs, n_outputs, kernel_size,
             stride=stride, padding=padding, dilation=dilation
         ))
+        self.bn = nn.BatchNorm1d(n_outputs)
         self.activation = nn.ReLU()
-        self.dropout = nn.Dropout(dropout)  # ADDED DROPOUT
+        self.dropout = nn.Dropout(dropout)
         self.downsample = nn.Conv1d(n_inputs, n_outputs, 1) if n_inputs != n_outputs else None
         self.init_weights()
         self.padding = padding
@@ -171,8 +183,9 @@ class TemporalBlock(nn.Module):
         out = self.conv1(x)
         if self.padding != 0:
             out = out[:, :, :-self.padding]
+        out = self.bn(out)
         out = self.activation(out)
-        out = self.dropout(out)  # APPLIED DROPOUT
+        out = self.dropout(out)
         
         if self.downsample is not None:
             residual = self.downsample(residual)
@@ -254,8 +267,9 @@ class TemporalGCNLayer(nn.Module):
         super().__init__()
         self.graph_builder = graph_builder
         self.linear = nn.Linear(input_dim, output_dim)
+        self.bn = nn.BatchNorm1d(output_dim)
         self.activation = nn.ReLU()
-        self.dropout = nn.Dropout(0.2)  # ADDED DROPOUT
+        self.dropout = nn.Dropout(0.1)
         
     def forward(self, x):
         batch_size, seq_len, n_features = x.shape
@@ -270,7 +284,7 @@ class TemporalGCNLayer(nn.Module):
             if edge_index.numel() > 0:
                 adj_matrix = torch.sparse_coo_tensor(
                     edge_index,
-                    torch.ones(edge_index.size(1), device=x.device),
+                    torch.ones(edge_index.size(1), device=x.device,
                     size=(seq_len, seq_len)
                 ).to_dense()
             else:
@@ -281,8 +295,9 @@ class TemporalGCNLayer(nn.Module):
         
         x = torch.stack(outputs, dim=0)
         x = self.linear(x)
+        x = self.bn(x.permute(0, 2, 1)).permute(0, 2, 1)
         x = self.activation(x)
-        x = self.dropout(x)  # APPLIED DROPOUT
+        x = self.dropout(x)
         return x
 
 # ======================= ENHANCED GNN ARCHITECTURE =======================
@@ -314,7 +329,7 @@ class EnhancedTemporalGCN(TemporalGCN):
         self.attention = nn.MultiheadAttention(
             embed_dim=self.hidden_dim,
             num_heads=2,
-            dropout=0.1,  # ADDED DROPOUT
+            dropout=0.1,
             batch_first=True
         )
         
@@ -328,7 +343,7 @@ class EnhancedTemporalGCN(TemporalGCN):
                 out_channels = num_channels[i]
                 tcn_layers += [TemporalBlock(
                     in_channels, out_channels, kernel_size,
-                    stride=1, dilation=dilation, dropout=0.1  # INCREASED DROPOUT
+                    stride=1, dilation=dilation, dropout=0.1
                 )]
             self.tcn = nn.Sequential(*tcn_layers)
             self.tcn_proj = nn.Linear(num_channels[-1], self.output_dim)
@@ -339,7 +354,7 @@ class EnhancedTemporalGCN(TemporalGCN):
                 num_layers=lstm_layers,
                 batch_first=True,
                 bidirectional=bidirectional,
-                dropout=0.1  # INCREASED DROPOUT
+                dropout=0.1
             )
             lstm_output_dim = lstm_hidden_size * (2 if bidirectional else 1)
             self.lstm_proj = nn.Linear(lstm_output_dim, self.output_dim)
@@ -350,7 +365,7 @@ class EnhancedTemporalGCN(TemporalGCN):
         self.projection_head = nn.Sequential(
             nn.Linear(self.output_dim, self.output_dim),
             nn.ReLU(),
-            nn.Dropout(0.2),  # ADDED DROPOUT
+            nn.Dropout(0.1),
             nn.Linear(self.output_dim, self.output_dim)
         )
         self._init_weights()
@@ -398,7 +413,7 @@ class EnhancedTemporalGCN(TemporalGCN):
         
         attn_out, _ = self.attention(gnn_features, gnn_features, gnn_features)
         x = gnn_features + attn_out
-        x = F.dropout(x, p=0.2, training=self.training)  # ADDED DROPOUT
+        x = F.dropout(x, p=0.1, training=self.training)
         
         if self.use_tcn:
             tcn_in = x.permute(0, 2, 1)
@@ -429,7 +444,7 @@ class DomainAdversarialLoss(nn.Module):
         self.domain_classifier = nn.Sequential(
             nn.Linear(bottleneck_dim, 32),
             nn.ReLU(),
-            nn.Dropout(0.2),  # ADDED DROPOUT
+            nn.Dropout(0.1),
             nn.Linear(32, 1)
         )
         self.loss_fn = nn.BCEWithLogitsLoss()
@@ -610,7 +625,7 @@ def main(args):
                     layers.append(nn.Linear(current_dim, current_dim))
                     layers.append(nn.BatchNorm1d(current_dim))
                     layers.append(nn.ReLU(inplace=True))
-                    layers.append(nn.Dropout(0.2))  # ADDED DROPOUT
+                    layers.append(nn.Dropout(0.1))
                 
                 layers.append(nn.Linear(current_dim, output_dim))
                 return nn.Sequential(*layers)
@@ -675,7 +690,7 @@ def main(args):
                         gnn_model.reconstruction_head = nn.Sequential(
                             nn.Linear(args.gnn_output_dim, 64),
                             nn.ReLU(),
-                            nn.Dropout(0.2),  # ADDED DROPOUT
+                            nn.Dropout(0.1),
                             nn.Linear(64, target_dim)
                         ).to(args.device)
                         print(f"Created reconstruction head with output dim: {target_dim}")
@@ -726,7 +741,7 @@ def main(args):
     
     best_valid_acc = 0
     epochs_without_improvement = 0
-    early_stopping_patience = getattr(args, 'early_stopping_patience', 10)  # REDUCED PATIENCE
+    early_stopping_patience = getattr(args, 'early_stopping_patience', 10)
     
     MAX_GRAD_NORM = 1.0
     
@@ -747,6 +762,7 @@ def main(args):
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                 
+                
                     inputs = inputs.reshape(inputs.size(0), -1)
                     if hasattr(algorithm, 'ensure_correct_dimensions'):
                         inputs = algorithm.ensure_correct_dimensions(inputs)
@@ -761,7 +777,7 @@ def main(args):
     global_step = 0
     for round_idx in range(args.max_epoch):
         if hasattr(algorithm.featurizer, 'dropout'):
-            algorithm.featurizer.dropout.p = 0.2  # ENABLED DROPOUT
+            algorithm.featurizer.dropout.p = 0.1
         
         print(f'\n======== ROUND {round_idx} ========')
         
@@ -847,7 +863,8 @@ def main(args):
                 
                 loss_result_dict = algorithm.update_a(data, opta)
                 
-                if not np.isfinite(loss_result_dict['class']):
+                if 'class' not in loss_result_dict or not np.isfinite(loss_result_dict['class']):
+                    print("Skipping batch due to NaN/inf loss in update_a")
                     continue
                 
                 epoch_class_loss += loss_result_dict['class']
@@ -881,7 +898,8 @@ def main(args):
                 
                 loss_result_dict = algorithm.update_d(data, optd)
                 
-                if any(not np.isfinite(v) for v in loss_result_dict.values()):
+                if any(key not in loss_result_dict or not np.isfinite(loss_result_dict[key]) for key in ['total', 'dis', 'ent']):
+                    print("Skipping batch due to NaN/inf loss in update_d")
                     continue
                     
                 epoch_total += loss_result_dict['total']
@@ -903,7 +921,6 @@ def main(args):
         print('\n==== Domain-invariant feature learning ====')
         loss_list = alg_loss_dict(args)
         eval_dict = train_valid_target_eval_names(args)
-        # Updated print_key to include contrast_loss
         print_key = ['epoch', 'class_loss', 'dis_loss', 'contrast_loss', 
                      'train_acc', 'valid_acc', 'target_acc', 'total_cost_time']
         print_row(print_key, colwidth=15)
@@ -1219,8 +1236,7 @@ def main(args):
 
 if __name__ == '__main__':
     args = get_args()
-    # ====================== OPTIMIZED PARAMETER SETTINGS ======================
-    # Regularization enhanced
+    # ====================== STABLE PARAMETER SETTINGS ======================
     args.lambda_cls = getattr(args, 'lambda_cls', 1.0)
     args.lambda_dis = getattr(args, 'lambda_dis', 0.01)
     args.label_smoothing = 0.0
@@ -1253,19 +1269,19 @@ if __name__ == '__main__':
 
     # Optimizer settings optimized
     args.optimizer = getattr(args, 'optimizer', 'adam')
-    args.weight_decay = 1e-3  # INCREASED WEIGHT DECAY
+    args.weight_decay = 1e-4
     args.domain_adv_weight = 0.1
-    args.lr = 0.0005  # REDUCED LEARNING RATE
+    args.lr = 0.0005  # Lower learning rate for stability
 
     # Augmentation enabled
-    args.jitter_scale = 0.5
-    args.scaling_std = 0.5
-    args.warp_ratio = 0.5
-    args.aug_prob = 0.9
+    args.jitter_scale = 0.1
+    args.scaling_std = 0.1
+    args.warp_ratio = 0.1
+    args.aug_prob = 0.5
 
     # Training schedule optimized
     args.max_epoch = getattr(args, 'max_epoch', 100)
-    args.early_stopping_patience = 10  # REDUCED PATIENCE
+    args.early_stopping_patience = 10
 
     # Domain adaptation minimized
     if not hasattr(args, 'adv_weight'):

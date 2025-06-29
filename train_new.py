@@ -284,7 +284,7 @@ class TemporalGCNLayer(nn.Module):
             if edge_index.numel() > 0:
                 adj_matrix = torch.sparse_coo_tensor(
                     edge_index,
-                    torch.ones(edge_index.size(1)), device=x.device,
+                    torch.ones(edge_index.size(1), device=x.device),
                     size=(seq_len, seq_len)
                 ).to_dense()
             else:
@@ -301,55 +301,57 @@ class TemporalGCNLayer(nn.Module):
         return x
 
 # ======================= ENHANCED GNN ARCHITECTURE =======================
-class EnhancedTemporalGCN(TemporalGCN):
-    def __init__(self, *args, **kwargs):
-        self.n_layers = kwargs.pop('n_layers', 1)
-        self.use_tcn = kwargs.pop('use_tcn', False)
+class EnhancedTemporalGCN(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, graph_builder, 
+                 n_layers=1, use_tcn=True, lstm_hidden_size=64, 
+                 lstm_layers=1, bidirectional=False):
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.graph_builder = graph_builder
+        self.n_layers = n_layers
+        self.use_tcn = use_tcn
         
-        lstm_hidden_size = kwargs.pop('lstm_hidden_size', 64)
-        lstm_layers = kwargs.pop('lstm_layers', 1)
-        bidirectional = kwargs.pop('bidirectional', False)
+        # Feature projection if needed
+        self.feature_projection = None
         
-        super().__init__(*args, **kwargs)
-        
-        self.skip_conn = nn.Linear(self.hidden_dim, self.output_dim)
-        
+        # GNN layers
         self.gnn_layers = nn.ModuleList()
-        self.norms = nn.ModuleList()
-        
-        for i in range(self.n_layers):
+        for i in range(n_layers):
             layer = TemporalGCNLayer(
-                input_dim=self.input_dim if i == 0 else self.hidden_dim,
-                output_dim=self.hidden_dim,
-                graph_builder=self.graph_builder
+                input_dim=input_dim if i == 0 else hidden_dim,
+                output_dim=hidden_dim,
+                graph_builder=graph_builder
             )
             self.gnn_layers.append(layer)
-            self.norms.append(nn.LayerNorm(self.hidden_dim))
         
+        # Attention layer
         self.attention = nn.MultiheadAttention(
-            embed_dim=self.hidden_dim,
+            embed_dim=hidden_dim,
             num_heads=2,
             dropout=0.1,
             batch_first=True
         )
         
-        if self.use_tcn:
+        # Temporal processing
+        if use_tcn:
             tcn_layers = []
-            num_channels = [self.hidden_dim] * 2
+            num_channels = [hidden_dim] * 2
             kernel_size = 3
             for i in range(len(num_channels)):
                 dilation = 2 ** i
-                in_channels = self.hidden_dim if i == 0 else num_channels[i-1]
+                in_channels = hidden_dim if i == 0 else num_channels[i-1]
                 out_channels = num_channels[i]
                 tcn_layers += [TemporalBlock(
                     in_channels, out_channels, kernel_size,
                     stride=1, dilation=dilation, dropout=0.1
                 )]
             self.tcn = nn.Sequential(*tcn_layers)
-            self.tcn_proj = nn.Linear(num_channels[-1], self.output_dim)
+            self.tcn_proj = nn.Linear(num_channels[-1], output_dim)
         else:
             self.lstm = nn.LSTM(
-                input_size=self.hidden_dim,
+                input_size=hidden_dim,
                 hidden_size=lstm_hidden_size,
                 num_layers=lstm_layers,
                 batch_first=True,
@@ -357,101 +359,85 @@ class EnhancedTemporalGCN(TemporalGCN):
                 dropout=0.1
             )
             lstm_output_dim = lstm_hidden_size * (2 if bidirectional else 1)
-            self.lstm_proj = nn.Linear(lstm_output_dim, self.output_dim)
-            self.lstm_norm = nn.LayerNorm(lstm_output_dim)
+            self.lstm_proj = nn.Linear(lstm_output_dim, output_dim)
         
-        self.temporal_norm = nn.LayerNorm(self.output_dim)
+        # Skip connection
+        self.skip_conn = nn.Linear(hidden_dim, output_dim)
         
+        # Projection head
         self.projection_head = nn.Sequential(
-            nn.Linear(self.output_dim, self.output_dim),
+            nn.Linear(output_dim, output_dim),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(self.output_dim, self.output_dim)
+            nn.Linear(output_dim, output_dim)
         )
+        
+        # Initialize weights
         self._init_weights()
         
     def _init_weights(self):
         for layer in self.gnn_layers:
-            if hasattr(layer, 'weight'):
-                nn.init.xavier_uniform_(layer.weight)
-        for layer in self.norms:
-            if hasattr(layer, 'weight'):
-                nn.init.constant_(layer.weight, 1.0)
-                nn.init.constant_(layer.bias, 0.0)
-        if hasattr(self, 'lstm'):
-            for name, param in self.lstm.named_parameters():
-                if 'weight_ih' in name:
-                    nn.init.xavier_uniform_(param.data)
-                elif 'weight_hh' in name:
-                    nn.init.orthogonal_(param.data)
-                elif 'bias' in name:
-                    param.data.fill_(0)
-
+            if hasattr(layer.linear, 'weight'):
+                nn.init.xavier_uniform_(layer.linear.weight)
+        for name, param in self.named_parameters():
+            if 'weight' in name and 'bn' not in name:
+                nn.init.xavier_uniform_(param)
+            elif 'bias' in name:
+                nn.init.constant_(param, 0.0)
+                
     def forward(self, x):
-        if hasattr(x, 'x') and hasattr(x, 'batch'):
+        # Handle input types and dimensions
+        if isinstance(x, (Data, Batch)):
             from torch_geometric.utils import to_dense_batch
             x, mask = to_dense_batch(x.x, x.batch)
         
         if x.dim() == 4:
+            # [batch, channels, 1, time] -> [batch, time, channels]
             x = x.squeeze(2).permute(0, 2, 1)
+        elif x.dim() == 3:
+            if x.size(1) == 8 or x.size(1) == 200:
+                # [batch, channels, time] -> [batch, time, channels]
+                x = x.permute(0, 2, 1)
+            elif x.size(2) == 8 or x.size(2) == 200:
+                # Already [batch, time, channels]
+                pass
         
-        if x.size(-1) not in [8, 200]:
-            raise ValueError(f"Input features dim mismatch! Expected 8 or 200, got {x.size(-1)}")
-        
+        # Feature projection if needed
         if x.size(-1) == 200 and self.input_dim == 8:
-            if not hasattr(self, 'feature_projection'):
+            if self.feature_projection is None:
                 self.feature_projection = nn.Linear(200, 8).to(x.device)
             x = self.feature_projection(x)
         
-        original_x = x.clone()
+        # GNN processing
+        for layer in self.gnn_layers:
+            x = layer(x)
+            x = F.relu(x)
         
-        gnn_features = x
-        for layer, norm in zip(self.gnn_layers, self.norms):
-            gnn_features = layer(gnn_features)
-            gnn_features = norm(gnn_features)
-            gnn_features = F.relu(gnn_features)
+        # Attention
+        attn_out, _ = self.attention(x, x, x)
+        x = x + attn_out
         
-        attn_out, _ = self.attention(gnn_features, gnn_features, gnn_features)
-        x = gnn_features + attn_out
-        x = F.dropout(x, p=0.1, training=self.training)
-        
+        # Temporal processing
         if self.use_tcn:
+            # [batch, time, channels] -> [batch, channels, time]
             tcn_in = x.permute(0, 2, 1)
             tcn_out = self.tcn(tcn_in)
+            # [batch, channels, time] -> [batch, time, channels]
             tcn_out = tcn_out.permute(0, 2, 1)
             temporal_out = self.tcn_proj(tcn_out)
         else:
             lstm_out, _ = self.lstm(x)
-            lstm_out = self.lstm_norm(lstm_out)
             temporal_out = self.lstm_proj(lstm_out)
         
+        # Pooling
         gnn_out = temporal_out.mean(dim=1)
-        gnn_out = self.temporal_norm(gnn_out)
+        skip_out = self.skip_conn(x.mean(dim=1))
         
-        skip_out = gnn_features
-        skip_out = skip_out.mean(dim=1)
-        skip_out = self.skip_conn(skip_out)
-        
-        gate = torch.sigmoid(0.1 * gnn_out + 0.1 * skip_out)
+        # Gated fusion
+        gate = torch.sigmoid(0.5 * gnn_out + 0.5 * skip_out)
         output = gate * gnn_out + (1 - gate) * skip_out
         
         return output
-
-# ======================= DOMAIN ADVERSARIAL LOSS =======================
-class DomainAdversarialLoss(nn.Module):
-    def __init__(self, bottleneck_dim):
-        super().__init__()
-        self.domain_classifier = nn.Sequential(
-            nn.Linear(bottleneck_dim, 32),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(32, 1)
-        )
-        self.loss_fn = nn.BCEWithLogitsLoss()
-    
-    def forward(self, features, domain_labels):
-        domain_pred = self.domain_classifier(features)
-        return self.loss_fn(domain_pred.squeeze(), domain_labels.float())
 
 # ======================= MAIN TRAINING FUNCTION =======================
 def main(args):
@@ -490,6 +476,50 @@ def main(args):
         LoaderClass = TorchDataLoader
         print("Using TorchDataLoader for CNN data")
     
+    # First create loaders with a small batch size for debugging
+    debug_loader = LoaderClass(
+        dataset=tr,
+        batch_size=min(4, args.batch_size),
+        shuffle=True,
+        num_workers=0
+    )
+    
+    # Debug: Test a single forward pass
+    print("\n===== Running debug forward pass =====")
+    algorithm_class = alg.get_algorithm_class(args.algorithm)
+    algorithm = algorithm_class(args).to(args.device)
+    
+    for batch in debug_loader:
+        if args.use_gnn and GNN_AVAILABLE:
+            inputs = batch[0].to(args.device)
+            labels = batch[1].to(args.device)
+            domains = batch[2].to(args.device)
+            data = [inputs, labels, domains]
+        else:
+            inputs = batch[0].to(args.device).float()
+            labels = batch[1].to(args.device).long()
+            domains = batch[2].to(args.device).long()
+            data = [inputs, labels, domains]
+        
+        # Forward pass
+        try:
+            outputs = algorithm.predict(inputs)
+            print("Forward pass successful!")
+            print(f"Output shape: {outputs.shape}, Output min: {outputs.min().item()}, Output max: {outputs.max().item()}")
+            
+            # Check for NaNs
+            if torch.isnan(outputs).any():
+                print("ERROR: NaNs in model output!")
+            else:
+                print("No NaNs in model output")
+            break
+        except Exception as e:
+            print(f"Forward pass failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return
+    
+    # Now proceed with actual training
     temp_train_loader = LoaderClass(
         dataset=tr,
         batch_size=args.batch_size,
@@ -526,13 +556,9 @@ def main(args):
             for batch in temp_train_loader:
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
-                    labels = batch[1].to(args.device)
-                    domains = batch[2].to(args.device)
                     x = transform_for_gnn(inputs)
                 else:
                     inputs = batch[0].to(args.device).float()
-                    labels = batch[1].to(args.device).long()
-                    domains = batch[2].to(args.device).long()
                     x = inputs
                 
                 features = temp_model(x)
@@ -584,7 +610,6 @@ def main(args):
         shuffle=False
     )
     
-    algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).to(args.device)
     
     if args.use_gnn and GNN_AVAILABLE:
@@ -606,9 +631,6 @@ def main(args):
             hidden_dim=args.gnn_hidden_dim,
             output_dim=args.gnn_output_dim,
             graph_builder=graph_builder,
-            lstm_hidden_size=args.lstm_hidden_size,
-            lstm_layers=args.lstm_layers,
-            bidirectional=args.bidirectional,
             n_layers=args.gnn_layers,
             use_tcn=args.use_tcn
         ).to(args.device)
@@ -641,92 +663,12 @@ def main(args):
         
         print(f"Created bottlenecks: {input_dim} -> {output_dim}")
         print(f"Bottleneck architecture: {algorithm.bottleneck}")
-        
-        # Enhanced GNN pretraining
-        if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:
-            print(f"\n==== GNN Pretraining ({args.gnn_pretrain_epochs} epochs) ====")
-            gnn_optimizer = torch.optim.Adam(
-                algorithm.featurizer.parameters(),
-                lr=args.gnn_lr,
-                weight_decay=0.0
-            )
-            
-            for epoch in range(args.gnn_pretrain_epochs):
-                gnn_model.train()
-                total_loss = 0
-                batch_count = 0
-                for batch in train_loader:
-                    if args.use_gnn and GNN_AVAILABLE:
-                        inputs = batch[0].to(args.device)
-                        labels = batch[1].to(args.device)
-                        domains = batch[2].to(args.device)
-                        x = inputs
-                    else:
-                        inputs = batch[0].to(args.device).float()
-                        labels = batch[1].to(args.device).long()
-                        domains = batch[2].to(args.device).long()
-                        x = inputs
-                    
-                    if args.use_gnn and GNN_AVAILABLE:
-                        x = transform_for_gnn(x)
-                    
-                    # Compute target: mean along time dimension
-                    if x.dim() == 3:  # [batch, time, features]
-                        target = torch.mean(x, dim=1)
-                    elif x.dim() == 4:  # [batch, channels, 1, time]
-                        # Convert to [batch, channels, time] and then average
-                        x_processed = x.squeeze(2).permute(0, 2, 1)
-                        target = torch.mean(x_processed, dim=1)
-                    else:
-                        target = torch.mean(x, dim=1)
-
-                    features = gnn_model(x)
-
-                    # For reconstruction, we need to match the target shape
-                    # Add reconstruction head if not exists
-                    if not hasattr(gnn_model, 'reconstruction_head'):
-                        # Create a reconstruction head that matches the target dimension
-                        target_dim = target.shape[1]
-                        gnn_model.reconstruction_head = nn.Sequential(
-                            nn.Linear(args.gnn_output_dim, 64),
-                            nn.ReLU(),
-                            nn.Dropout(0.1),
-                            nn.Linear(64, target_dim)
-                        ).to(args.device)
-                        print(f"Created reconstruction head with output dim: {target_dim}")
-
-                    reconstructed = gnn_model.reconstruction_head(features)
-                    loss = torch.nn.functional.mse_loss(reconstructed, target)
-                    
-                    if torch.isnan(loss):
-                        continue
-                    
-                    gnn_optimizer.zero_grad()
-                    loss.backward()
-                    gnn_optimizer.step()
-                    
-                    total_loss += loss.item()
-                    batch_count += 1
-                
-                if batch_count > 0:
-                    avg_loss = total_loss / batch_count
-                    print(f'GNN Pretrain Epoch {epoch+1}/{args.gnn_pretrain_epochs}: Loss {avg_loss:.4f}')
-            
-            print("GNN pretraining complete")
     
     algorithm.train()
     
     optd = get_optimizer(algorithm, args, nettype='Diversify-adv')
     opt = get_optimizer(algorithm, args, nettype='Diversify-cls')
     opta = get_optimizer(algorithm, args, nettype='Diversify-all')
-    
-    augmenter = EMGDataAugmentation(args).cuda()
-    
-    if getattr(args, 'domain_adv_weight', 0.0) > 0:
-        algorithm.domain_adv_loss = DomainAdversarialLoss(
-            bottleneck_dim=int(args.bottleneck)
-        ).cuda()
-        print(f"Added domain adversarial training (weight: {args.domain_adv_weight})")
     
     logs = {k: [] for k in ['epoch', 'class_loss', 'dis_loss', 'ent_loss',
                             'total_loss', 'train_acc', 'valid_acc', 'target_acc',
@@ -910,7 +852,7 @@ def main(args):
             if batch_count > 0:
                 epoch_total /= batch_count
                 epoch_dis /= batch_count
-                epoch_ent /= batch_count
+                epoch_ent /= epoch_ent
                 print_row([step, epoch_total, epoch_dis, epoch_ent], colwidth=15)
                 logs['dis_loss'].append(epoch_dis)
                 logs['ent_loss'].append(epoch_ent)

@@ -239,7 +239,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     if stage < len(args.CL_DIFFICULTY):
         difficulty_threshold = args.CL_DIFFICULTY[stage]
     else:
-        difficulty_threshold = 1.0  # Use all samples if stage exceeds threshold list
+        difficulty_threshold = 0.1  # Use all samples if stage exceeds threshold list
     
     # Helper function to detect graph data format
     def is_graph_data(dataset):
@@ -383,8 +383,8 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             
             # Combined difficulty score (higher = more difficult)
             difficulty_score = (
-                0.4 * loss + 
-                0.3 * (1 - accuracy) + 
+                0.2 * loss + 
+                0.1 * (1 - accuracy) + 
                 0.1 * domain_diff + 
                 0.1 * entropy + 
                 0.1 * (1 - max_prob)

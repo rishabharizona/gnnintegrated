@@ -284,7 +284,7 @@ class TemporalGCNLayer(nn.Module):
             if edge_index.numel() > 0:
                 adj_matrix = torch.sparse_coo_tensor(
                     edge_index,
-                    torch.ones(edge_index.size(1), device=x.device,
+                    torch.ones(edge_index.size(1)), device=x.device,
                     size=(seq_len, seq_len)
                 ).to_dense()
             else:

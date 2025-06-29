@@ -606,12 +606,18 @@ def main(args):
                 layers = []
                 current_dim = input_dim
                 
-                for _ in range(num_layers - 1):
-                    layers.append(nn.Linear(current_dim, current_dim))
-                    layers.append(nn.BatchNorm1d(current_dim))
+                for i in range(num_layers - 1):
+                    # Only reduce dimension in the last layer
+                    if i == num_layers - 2:
+                        out_dim = output_dim
+                    else:
+                        out_dim = current_dim
+                    
+                    layers.append(nn.Linear(current_dim, out_dim))
+                    layers.append(nn.BatchNorm1d(out_dim))
                     layers.append(nn.ReLU(inplace=True))
+                    current_dim = out_dim
                 
-                layers.append(nn.Linear(current_dim, output_dim))
                 return nn.Sequential(*layers)
             except ValueError:
                 return nn.Sequential(nn.Linear(input_dim, output_dim))

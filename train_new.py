@@ -441,32 +441,36 @@ class EnhancedTemporalGCN(nn.Module):
 
 # ======================= DATA NORMALIZATION =======================
 def compute_dataset_mean_std(dataloader, device):
-    """Compute mean and std for dataset normalization"""
-    mean = torch.zeros(1).to(device)
-    std = torch.zeros(1).to(device)
-    total_samples = 0
+    """Compute mean and std for dataset normalization with PyG support"""
+    n_channels = 8  # EMG channels
+    channel_sums = torch.zeros(n_channels, device=device)
+    channel_sq_sums = torch.zeros(n_channels, device=device)
+    total_elements = 0
     
     for batch in dataloader:
-        if args.use_gnn and GNN_AVAILABLE:
-            inputs = batch[0].to(device)
+        if hasattr(batch, 'x'):  # PyG Batch object
+            inputs = batch.x.to(device)
+            # PyG batch: [num_nodes, features]
+            inputs = inputs.view(-1, n_channels)
         else:
+            # Regular tensor
             inputs = batch[0].to(device).float()
-            
-        # Flatten all dimensions except batch
-        b = inputs.size(0)
-        inputs = inputs.view(b, -1)
+            # CNN input: [batch, channels, 1, time]
+            inputs = inputs.permute(0, 2, 3, 1).reshape(-1, n_channels)
         
-        total_samples += b
-        mean += inputs.mean(dim=1).sum()
-        std += inputs.std(dim=1).sum()
+        # Update accumulators
+        channel_sums += inputs.sum(dim=0)
+        channel_sq_sums += (inputs ** 2).sum(dim=0)
+        total_elements += inputs.shape[0]
     
-    mean /= total_samples
-    std /= total_samples
+    # Compute mean and std for each channel
+    mean = channel_sums / total_elements
+    std = torch.sqrt(channel_sq_sums / total_elements - mean ** 2)
     
     # Add epsilon to avoid division by zero
     std = torch.clamp(std, min=1e-6)
     
-    print(f"Computed normalization: mean={mean.item():.4f}, std={std.item():.4f}")
+    print(f"Computed normalization: mean={mean.cpu().numpy()}, std={std.cpu().numpy()}")
     return mean, std
 
 # ======================= SAFE LOSS FUNCTIONS =======================

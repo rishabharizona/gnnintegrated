@@ -448,31 +448,20 @@ def compute_dataset_mean_std(dataloader, device):
     total_elements = 0
     
     for i, batch in enumerate(dataloader):
-        # Debugging: print batch type and structure
-        print(f"Batch {i+1} type: {type(batch)}")
-        
-        # Handle PyG DataBatch object
-        if hasattr(batch, 'x'):  
-            print("Processing PyG Batch object")
-            inputs = batch.x.to(device)
-            # Reshape to [num_nodes, n_channels]
-            inputs = inputs.view(-1, n_channels)
-        # Handle PyG Data object (single graph)
-        elif hasattr(batch, 'x') and isinstance(batch.x, torch.Tensor):
-            print("Processing PyG Data object")
-            inputs = batch.x.to(device)
-            inputs = inputs.view(-1, n_channels)
         # Handle list of PyG Data objects
-        elif isinstance(batch, list) and all(hasattr(item, 'x') for item in batch):
-            print("Processing list of PyG Data objects")
-            # Combine into a single batch
+        if isinstance(batch, list) and all(hasattr(item, 'x') for item in batch):
+            # Combine into a single PyG Batch
             from torch_geometric.data import Batch
             pyg_batch = Batch.from_data_list(batch)
             inputs = pyg_batch.x.to(device)
+            # Reshape to [num_nodes, n_channels]
+            inputs = inputs.view(-1, n_channels)
+        # Handle PyG DataBatch object (already batched)
+        elif hasattr(batch, 'x'):  
+            inputs = batch.x.to(device)
             inputs = inputs.view(-1, n_channels)
         # Handle standard tuple (inputs, labels, domains)
         elif isinstance(batch, (list, tuple)) and torch.is_tensor(batch[0]):
-            print("Processing standard tuple batch")
             inputs = batch[0].to(device).float()
             # CNN input: [batch, channels, 1, time]
             if inputs.dim() == 4:
@@ -481,37 +470,13 @@ def compute_dataset_mean_std(dataloader, device):
                 inputs = inputs.reshape(-1, n_channels)
         # Handle single tensor
         elif torch.is_tensor(batch):
-            print("Processing single tensor")
             inputs = batch.to(device).float()
             if inputs.dim() == 4:
                 inputs = inputs.permute(0, 2, 3, 1).reshape(-1, n_channels)
             else:
                 inputs = inputs.reshape(-1, n_channels)
         else:
-            # Try to extract the first element if it's a tensor
-            try:
-                print("Attempting fallback extraction")
-                if hasattr(batch, 'x'):
-                    inputs = batch.x
-                elif hasattr(batch, 'features'):
-                    inputs = batch.features
-                elif hasattr(batch, 'input'):
-                    inputs = batch.input
-                else:
-                    inputs = batch[0] if isinstance(batch, (list, tuple)) else batch
-                    
-                inputs = inputs.to(device).float()
-                if inputs.dim() == 4:
-                    inputs = inputs.permute(0, 2, 3, 1).reshape(-1, n_channels)
-                else:
-                    inputs = inputs.reshape(-1, n_channels)
-            except Exception as e:
-                print(f"Error processing batch: {str(e)}")
-                print(f"Batch structure: {dir(batch)}")
-                raise ValueError(f"Unsupported batch type: {type(batch)}")
-        
-        # Debugging: print input shape
-        print(f"Input shape: {inputs.shape}")
+            raise ValueError(f"Unsupported batch type: {type(batch)}")
         
         # Update accumulators
         channel_sums += inputs.sum(dim=0)

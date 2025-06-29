@@ -239,19 +239,24 @@ class Diversify(Algorithm):
         
     def _ensure_whitening(self, feature_dim):
         """Ensure whitening layer matches current feature dimension"""
+        # Get device from model parameters
+        device = next(self.parameters()).device
+        
         if self.whiten is None:
-            # Initialize for the first time
-            self.whiten = nn.BatchNorm1d(feature_dim, affine=False)
+            # Initialize for the first time on correct device
+            self.whiten = nn.BatchNorm1d(feature_dim, affine=False).to(device)
             print(f"Initialized whitening layer for {feature_dim} features")
         elif self.whiten.num_features != feature_dim:
             # Reinitialize if dimension changed
             print(f"Reinitializing whitening layer from {self.whiten.num_features} to {feature_dim} features")
-            self.whiten = nn.BatchNorm1d(feature_dim, affine=False)
-        
-        # Ensure whitening layer is on correct device
-        device = next(self.parameters()).device
-        if self.whiten.weight.device != device:
-            self.whiten = self.whiten.to(device)
+            self.whiten = nn.BatchNorm1d(feature_dim, affine=False).to(device)
+        else:
+            # Ensure existing layer is on correct device
+            current_device = next(self.whiten.parameters()).device if any(self.whiten.parameters()) \
+                             else self.whiten.running_mean.device
+            if current_device != device:
+                print(f"Moving whitening layer to {device}")
+                self.whiten = self.whiten.to(device)
 
     def configure_optimizers(self, args):
         """Enhanced optimizer configuration with adaptive scheduling"""
@@ -775,7 +780,7 @@ class Diversify(Algorithm):
         features = self.featurizer(x)
         bottleneck_out = self.bottleneck(features)
         
-        # Ensure whitening layer matches current feature dimension
+        # Ensure whitening layer exists and matches current feature dimension
         self._ensure_whitening(bottleneck_out.size(1))
         
         # Handle small batches during curriculum phase

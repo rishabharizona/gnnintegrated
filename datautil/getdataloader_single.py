@@ -410,7 +410,7 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
     selected_indices = [idx for idx, diff in sample_difficulties if diff <= difficulty_threshold]
     
     # If too few samples, expand threshold
-    min_samples = int(0.2 * len(train_dataset))  # At least 20% of dataset
+    min_samples = max(2, int(0.2 * len(train_dataset)))  # At least 20% of dataset, minimum 2 samples
     if len(selected_indices) < min_samples:
         # Find the easiest min_samples
         sample_difficulties.sort(key=lambda x: x[1])
@@ -452,6 +452,9 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
         min_domain_count = min(domain_counts.values())
         balanced_indices = []
         
+        # Ensure at least 2 samples per domain
+        min_domain_count = max(2, min_domain_count)
+        
         for domain, indices in domain_indices.items():
             # If domain has more than min, randomly select min samples
             if len(indices) > min_domain_count:
@@ -465,6 +468,15 @@ def get_curriculum_loader(args, algorithm, train_dataset, val_dataset, stage):
             selected_indices = balanced_indices
             print(f"Balanced curriculum: {len(domain_counts)} domains, "
                   f"{len(selected_indices)} samples ({min_domain_count} per domain)")
+    
+    # Ensure we have at least 2 samples
+    if len(selected_indices) < 2:
+        # Add the next easiest sample to make at least 2
+        sample_difficulties.sort(key=lambda x: x[1])
+        additional_indices = [idx for idx, _ in sample_difficulties if idx not in selected_indices]
+        if additional_indices:
+            selected_indices.append(additional_indices[0])
+            print(f"Added 1 additional sample to reach minimum batch size of 2")
     
     # ================= FINAL SELECTION =================
     # Create curriculum subset

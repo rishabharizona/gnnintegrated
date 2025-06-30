@@ -509,190 +509,54 @@ def main(args):
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
                     domains = batch[2].to(args.device)
-                    x = transform_for_gnn(inputs)
+                    x = inputs
                 else:
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
                     domains = batch[2].to(args.device).long()
                     x = inputs
                 
-                features = temp_model(x)
-                feature_list.append(features.detach().cpu().numpy())
-        
-        all_features = np.concatenate(feature_list, axis=0)
-        optimal_k = automated_k_estimation(all_features)
-        args.latent_domain_num = optimal_k
-        print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
-        
-        del temp_model
-        torch.cuda.empty_cache()
-    
-    if args.latent_domain_num < 6:
-        args.batch_size = 32 * args.latent_domain_num  # INCREASED FOR CONTRASTIVE LEARNING
-    else:
-        args.batch_size = 16 * args.latent_domain_num  # INCREASED FOR CONTRASTIVE LEARNING
-    print(f"Adjusted batch size: {args.batch_size}")
-    
-    train_loader = LoaderClass(
-        dataset=tr,
-        batch_size=args.batch_size,
-        num_workers=min(2, args.N_WORKERS),  # REDUCED
-        drop_last=False,
-        shuffle=True
-    )
-    
-    train_loader_noshuffle = LoaderClass(
-        dataset=tr,
-        batch_size=args.batch_size,
-        num_workers=min(2, args.N_WORKERS),  # REDUCED
-        drop_last=False,
-        shuffle=False
-    )
-    
-    valid_loader = LoaderClass(
-        dataset=val,
-        batch_size=args.batch_size,
-        num_workers=min(2, args.N_WORKERS),  # REDUCED
-        drop_last=False,
-        shuffle=False
-    )
-    
-    target_loader = LoaderClass(
-        dataset=targetdata,
-        batch_size=args.batch_size,
-        num_workers=min(2, args.N_WORKERS),  # REDUCED
-        drop_last=False,
-        shuffle=False
-    )
-    
-    algorithm_class = alg.get_algorithm_class(args.algorithm)
-    algorithm = algorithm_class(args).to(args.device)
-    
-    # ======================= ENHANCED OPTIMIZER CONFIGURATION =======================
-    optimizer = algorithm.configure_optimizers(args)
-    # ======================= END ENHANCED OPTIMIZER CONFIGURATION =======================
-    
-    # In train.py, replace the entire GNN setup section with:
-    if args.use_gnn and GNN_AVAILABLE:
-        print("\n===== Initializing GNN Feature Extractor =====")
-        
-        graph_builder = GraphBuilder(
-            method='correlation',
-            threshold_type='adaptive',
-            default_threshold=0.3,
-            adaptive_factor=1.5,
-            fully_connected_fallback=True
-        )
-        
-        args.gnn_layers = getattr(args, 'gnn_layers', 1)
-        args.use_tcn = getattr(args, 'use_tcn', True)
-        
-        gnn_model = EnhancedTemporalGCN(
-            input_dim=8,
-            hidden_dim=args.gnn_hidden_dim,
-            output_dim=args.gnn_output_dim,
-            graph_builder=graph_builder,
-            lstm_hidden_size=args.lstm_hidden_size,
-            lstm_layers=args.lstm_layers,
-            bidirectional=args.bidirectional,
-            n_layers=args.gnn_layers,
-            use_tcn=args.use_tcn
-        ).to(args.device)
-        
-        algorithm.featurizer = gnn_model
-        
-        # Set all dimensions to 256 for consistency
-        args.bottleneck = 256
-        args.bottleneck_dim = 256
-        
-        # Create consistent bottlenecks
-        algorithm.bottleneck = nn.Sequential(
-            nn.Linear(256, 256),
-            nn.ReLU(inplace=True)
-        ).cuda()
-        
-        algorithm.abottleneck = nn.Sequential(
-            nn.Linear(256, 256),
-            nn.ReLU(inplace=True)
-        ).cuda()
-        
-        algorithm.dbottleneck = nn.Sequential(
-            nn.Linear(256, 256),
-            nn.ReLU(inplace=True)
-        ).cuda()
-        
-        print(f"Bottleneck: 256 -> 256")
-        
-        # Enhanced GNN pretraining
-        if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:
-            print(f"\n==== GNN Pretraining ({args.gnn_pretrain_epochs} epochs) ====")
-            gnn_optimizer = torch.optim.Adam(
-                algorithm.featurizer.parameters(),
-                lr=args.gnn_lr,
-                weight_decay=0.0
-            )
-            
-            for epoch in range(args.gnn_pretrain_epochs):
-                gnn_model.train()
-                total_loss = 0
-                batch_count = 0
-                for batch in train_loader:
-                    if args.use_gnn and GNN_AVAILABLE:
-                        inputs = batch[0].to(args.device)
-                        labels = batch[1].to(args.device)
-                        domains = batch[2].to(args.device)
-                        x = inputs
-                    else:
-                        inputs = batch[0].to(args.device).float()
-                        labels = batch[1].to(args.device).long()
-                        domains = batch[2].to(args.device).long()
-                        x = inputs
-                    
-                    if args.use_gnn and GNN_AVAILABLE:
-                        x = transform_for_gnn(x)
-                    
-                    # Compute target: mean along time dimension
-                    if x.dim() == 3:  # [batch, time, features]
-                        target = torch.mean(x, dim=1)
-                    elif x.dim() == 4:  # [batch, channels, 1, time]
-                        # Convert to [batch, channels, time] and then average
-                        x_processed = x.squeeze(2).permute(0, 2, 1)
-                        target = torch.mean(x_processed, dim=1)
-                    else:
-                        target = torch.mean(x, dim=1)
-
-                    features = gnn_model(x)
-
-                    # For reconstruction, we need to match the target shape
-                    # Add reconstruction head if not exists
-                    if not hasattr(gnn_model, 'reconstruction_head'):
-                        # Create a reconstruction head that matches the target dimension
-                        target_dim = target.shape[1]
-                        gnn_model.reconstruction_head = nn.Sequential(
-                            nn.Linear(args.gnn_output_dim, 64),
-                            nn.ReLU(),
-                            nn.Linear(64, target_dim)
-                        ).to(args.device)
-                        print(f"Created reconstruction head with output dim: {target_dim}")
-
-                    reconstructed = gnn_model.reconstruction_head(features)
-                    loss = torch.nn.functional.mse_loss(reconstructed, target)
-                    
-                    if torch.isnan(loss):
-                        continue
-                    
-                    gnn_optimizer.zero_grad()
-                    loss.backward()
-                    gnn_optimizer.step()
-                    
-                    total_loss += loss.item()
-                    batch_count += 1
+                if args.use_gnn and GNN_AVAILABLE:
+                    x = transform_for_gnn(x)
                 
-                if batch_count > 0:
-                    avg_loss = total_loss / batch_count
-                    print(f'GNN Pretrain Epoch {epoch+1}/{args.gnn_pretrain_epochs}: Loss {avg_loss:.4f}')
+                # Compute target: mean along time dimension
+                if x.dim() == 3:  # [batch, time, features]
+                    target = torch.mean(x, dim=1)
+                elif x.dim() == 4:  # [batch, channels, 1, time]
+                    # Convert to [batch, channels, time] and then average
+                    x_processed = x.squeeze(2).permute(0, 2, 1)
+                    target = torch.mean(x_processed, dim=1)
+                else:
+                    target = torch.mean(x, dim=1)
+
+                features = temp_model(x)
+
+                # For reconstruction, we need to match the target shape
+                # Add reconstruction head if not exists
+                if not hasattr(temp_model, 'reconstruction_head'):
+                    # Create a reconstruction head that matches the target dimension
+                    target_dim = target.shape[1]
+                    temp_model.reconstruction_head = nn.Sequential(
+                        nn.Linear(args.gnn_output_dim, 64),
+                        nn.ReLU(),
+                        nn.Linear(64, target_dim)
+                    ).to(args.device)
+                    print(f"Created reconstruction head with output dim: {target_dim}")
+
+                reconstructed = temp_model.reconstruction_head(features)
+                loss = torch.nn.functional.mse_loss(reconstructed, target)
+                
+                if torch.isnan(loss):
+                    continue
+                
+                total_loss += loss.item()
+                batch_count += 1
             
-            print("GNN pretraining complete")
+            if batch_count > 0:
+                avg_loss = total_loss / batch_count
+                print(f'GNN Pretrain Epoch {epoch+1}/{args.gnn_pretrain_epochs}: Loss {avg_loss:.4f}')
+        
+        print("GNN pretraining complete")
     
     algorithm.train()
     

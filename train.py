@@ -442,20 +442,27 @@ def main(args):
     print(f"Using device: {args.device}")
     os.makedirs(args.output, exist_ok=True)
     
+    # Initialize critical parameters if not set
+    if not hasattr(args, 'latent_domain_num') or args.latent_domain_num is None:
+        args.latent_domain_num = 5  # Default value
+        print(f"Using default latent_domain_num: {args.latent_domain_num}")
+    
+    if not hasattr(args, 'bottleneck') or args.bottleneck is None:
+        args.bottleneck = 256  # Default value
+        print(f"Using default bottleneck dimension: {args.bottleneck}")
+    
     # Handle curriculum parameters
     if getattr(args, 'curriculum', False):
-        # Handle CL_PHASE_EPOCHS: if it's an integer, convert to a list of that integer for 3 phases
         if hasattr(args, 'CL_PHASE_EPOCHS'):
             if isinstance(args.CL_PHASE_EPOCHS, int):
                 args.CL_PHASE_EPOCHS = [args.CL_PHASE_EPOCHS] * 3
             elif not isinstance(args.CL_PHASE_EPOCHS, list):
-                args.CL_PHASE_EPOCHS = [3, 3, 3]  # default
+                args.CL_PHASE_EPOCHS = [3, 3, 3]
         else:
             args.CL_PHASE_EPOCHS = [3, 3, 3]
         
-        # Similarly for CL_DIFFICULTY
         if not hasattr(args, 'CL_DIFFICULTY') or not isinstance(args.CL_DIFFICULTY, list):
-            args.CL_DIFFICULTY = [0.2, 0.5, 0.8]  # default
+            args.CL_DIFFICULTY = [0.2, 0.5, 0.8]
         
         print(f"Curriculum settings: Phases={len(args.CL_PHASE_EPOCHS)}, Epochs per phase: {args.CL_PHASE_EPOCHS}, Difficulties: {args.CL_DIFFICULTY}")
     
@@ -471,20 +478,112 @@ def main(args):
         LoaderClass = TorchDataLoader
         print("Using TorchDataLoader for CNN data")
     
+    # Create temporary loader for automated K estimation
     temp_train_loader = LoaderClass(
         dataset=tr,
-        batch_size=args.batch_size,
+        batch_size=min(32, len(tr)),  # Use smaller batch size for estimation
         shuffle=True,
-        num_workers=min(2, args.N_WORKERS))  # REDUCED WORKERS
+        num_workers=min(2, args.N_WORKERS))
     
+    # Run automated K estimation if enabled
     if getattr(args, 'automated_k', False):
         print("\nRunning automated K estimation...")
         
-    # Create algorithm instance first
+        if args.use_gnn and GNN_AVAILABLE:
+            print("Using GNN for feature extraction")
+            graph_builder = GraphBuilder(
+                method='correlation',
+                threshold_type='adaptive',
+                default_threshold=0.3,
+                adaptive_factor=1.5
+            )
+            temp_model = EnhancedTemporalGCN(
+                input_dim=8,
+                hidden_dim=args.gnn_hidden_dim,
+                output_dim=args.gnn_output_dim,
+                graph_builder=graph_builder,
+                n_layers=getattr(args, 'gnn_layers', 1),
+                use_tcn=getattr(args, 'use_tcn', True)
+            ).to(args.device)
+        else:
+            print("Using CNN for feature extraction")
+            temp_model = ActNetwork(args.dataset).to(args.device)
+        
+        temp_model.eval()
+        feature_list = []
+        
+        with torch.no_grad():
+            for batch in temp_train_loader:
+                if args.use_gnn and GNN_AVAILABLE:
+                    inputs = batch[0].to(args.device)
+                    labels = batch[1].to(args.device)
+                    domains = batch[2].to(args.device)
+                    x = inputs
+                else:
+                    inputs = batch[0].to(args.device).float()
+                    labels = batch[1].to(args.device).long()
+                    domains = batch[2].to(args.device).long()
+                    x = inputs
+                
+                if args.use_gnn and GNN_AVAILABLE:
+                    x = transform_for_gnn(x)
+                
+                features = temp_model(x)
+                feature_list.append(features.detach().cpu().numpy())
+        
+        all_features = np.concatenate(feature_list, axis=0)
+        optimal_k = automated_k_estimation(all_features)
+        args.latent_domain_num = optimal_k
+        print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
+        
+        del temp_model
+        torch.cuda.empty_cache()
+    
+    # Adjust batch size based on latent domains
+    if args.latent_domain_num < 6:
+        args.batch_size = 32 * args.latent_domain_num
+    else:
+        args.batch_size = 16 * args.latent_domain_num
+    print(f"Adjusted batch size: {args.batch_size}")
+    
+    # Create main data loaders with adjusted batch size
+    train_loader = LoaderClass(
+        dataset=tr,
+        batch_size=args.batch_size,
+        num_workers=min(2, args.N_WORKERS),
+        drop_last=False,
+        shuffle=True
+    )
+    
+    train_loader_noshuffle = LoaderClass(
+        dataset=tr,
+        batch_size=args.batch_size,
+        num_workers=min(2, args.N_WORKERS),
+        drop_last=False,
+        shuffle=False
+    )
+    
+    valid_loader = LoaderClass(
+        dataset=val,
+        batch_size=args.batch_size,
+        num_workers=min(2, args.N_WORKERS),
+        drop_last=False,
+        shuffle=False
+    )
+    
+    target_loader = LoaderClass(
+        dataset=targetdata,
+        batch_size=args.batch_size,
+        num_workers=min(2, args.N_WORKERS),
+        drop_last=False,
+        shuffle=False
+    )
+    
+    # Create algorithm instance AFTER setting latent_domain_num
     algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).to(args.device)
     
-    # Now we can modify its components
+    # Configure GNN components if needed
     if args.use_gnn and GNN_AVAILABLE:
         print("\n===== Initializing GNN Feature Extractor =====")
         
@@ -513,7 +612,7 @@ def main(args):
         
         algorithm.featurizer = gnn_model
         
-        # Set all dimensions to 256 for consistency
+        # Set consistent bottleneck dimensions
         args.bottleneck = 256
         args.bottleneck_dim = 256
         
@@ -538,7 +637,7 @@ def main(args):
         
         print(f"Bottleneck: 256 -> 256")
         
-        # Enhanced GNN pretraining
+        # GNN pretraining
         if hasattr(args, 'gnn_pretrain_epochs') and args.gnn_pretrain_epochs > 0:
             print(f"\n==== GNN Pretraining ({args.gnn_pretrain_epochs} epochs) ====")
             gnn_optimizer = torch.optim.Adam(
@@ -570,7 +669,6 @@ def main(args):
                     if x.dim() == 3:  # [batch, time, features]
                         target = torch.mean(x, dim=1)
                     elif x.dim() == 4:  # [batch, channels, 1, time]
-                        # Convert to [batch, channels, time] and then average
                         x_processed = x.squeeze(2).permute(0, 2, 1)
                         target = torch.mean(x_processed, dim=1)
                     else:
@@ -578,10 +676,8 @@ def main(args):
 
                     features = gnn_model(x)
 
-                    # For reconstruction, we need to match the target shape
-                    # Add reconstruction head if not exists
+                    # Add reconstruction head if needed
                     if not hasattr(gnn_model, 'reconstruction_head'):
-                        # Create a reconstruction head that matches the target dimension
                         target_dim = target.shape[1]
                         gnn_model.reconstruction_head = nn.Sequential(
                             nn.Linear(args.gnn_output_dim, 64),
@@ -611,6 +707,8 @@ def main(args):
     
     algorithm.train()
     
+    # Configure optimizers
+    optimizer = algorithm.configure_optimizers(args)
     optd = get_optimizer(algorithm, args, nettype='Diversify-adv')
     opta = get_optimizer(algorithm, args, nettype='Diversify-all')
     
@@ -631,15 +729,14 @@ def main(args):
         tr,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=min(2, args.N_WORKERS))  # REDUCED
+        num_workers=min(2, args.N_WORKERS))
     
     best_valid_acc = 0
     epochs_without_improvement = 0
-    early_stopping_patience = getattr(args, 'early_stopping_patience', 20)  # INCREASED
+    early_stopping_patience = getattr(args, 'early_stopping_patience', 20)
     
-    MAX_GRAD_NORM = 1.0  # Loosened gradient clipping
+    MAX_GRAD_NORM = 1.0
     
-    # ======================= FIXED EVALUATION FUNCTION =======================
     def evaluate_accuracy(loader):
         correct = 0
         total = 0
@@ -649,23 +746,21 @@ def main(args):
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
                     labels = batch[1].to(args.device)
-                    inputs = transform_for_gnn(inputs)  # Consistent transformation
+                    inputs = transform_for_gnn(inputs)
                 else:
                     inputs = batch[0].to(args.device).float()
                     labels = batch[1].to(args.device).long()
-                    # NO RESHAPING - preserve original dimensions
                 
                 outputs = algorithm.predict(inputs)
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
         return 100 * correct / total
-    # ======================= END FIXED EVALUATION FUNCTION =======================
     
     global_step = 0
     for round_idx in range(args.max_epoch):
         if hasattr(algorithm.featurizer, 'dropout'):
-            algorithm.featurizer.dropout.p = 0.0  # ZERO DROPOUT
+            algorithm.featurizer.dropout.p = 0.0
         
         print(f'\n======== ROUND {round_idx} ========')
         
@@ -673,7 +768,6 @@ def main(args):
             print(f"Early stopping at epoch {round_idx}")
             break
             
-        # Set current_epochs based on curriculum or default
         if getattr(args, 'curriculum', False) and round_idx < len(args.CL_PHASE_EPOCHS):
             current_epochs = args.CL_PHASE_EPOCHS[round_idx]
             current_difficulty = args.CL_DIFFICULTY[round_idx]
@@ -684,7 +778,6 @@ def main(args):
             
             transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
     
-            
             class CurriculumEvaluator:
                 def __init__(self, algorithm, transform_fn=None):
                     self.algorithm = algorithm
@@ -696,7 +789,6 @@ def main(args):
                 def predict(self, x):
                     if self.transform_fn:
                         x = self.transform_fn(x)
-                    # No whitening initialization needed
                     return self.algorithm.predict(x)
                     
                 @property
@@ -737,7 +829,7 @@ def main(args):
         for step in range(current_epochs):
             epoch_class_loss = 0.0
             batch_count = 0
-            algorithm.train()  # Ensure training mode
+            algorithm.train()
             for batch in train_loader:
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
@@ -771,7 +863,7 @@ def main(args):
             epoch_ent = 0.0
             batch_count = 0
             
-            algorithm.train()  # Ensure training mode
+            algorithm.train()
             for batch in train_loader:
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
@@ -808,7 +900,6 @@ def main(args):
         print('\n==== Domain-invariant feature learning ====')
         loss_list = alg_loss_dict(args)
         eval_dict = train_valid_target_eval_names(args)
-        # Updated print_key to include contrast_loss
         print_key = ['epoch', 'class_loss', 'dis_loss', 'contrast_loss', 
                      'train_acc', 'valid_acc', 'target_acc', 'total_cost_time']
         print_row(print_key, colwidth=15)
@@ -817,8 +908,7 @@ def main(args):
         for step in range(current_epochs):
             step_start_time = time.time()
             
-            # Train for one epoch
-            algorithm.train()  # Ensure training mode
+            algorithm.train()
             for batch in train_loader:
                 if args.use_gnn and GNN_AVAILABLE:
                     inputs = batch[0].to(args.device)
@@ -831,12 +921,10 @@ def main(args):
                     domains = batch[2].to(args.device).long()
                     data = [inputs, labels, domains]
 
-                # Use the new optimizer for the main update
                 step_vals = algorithm.update(data, optimizer)
                 torch.nn.utils.clip_grad_norm_(algorithm.parameters(), MAX_GRAD_NORM)
             
-            # Evaluate after each epoch
-            algorithm.eval()  # Ensure evaluation mode
+            algorithm.eval()
             train_acc = evaluate_accuracy(train_loader_noshuffle)
             valid_acc = evaluate_accuracy(valid_loader)
             target_acc = evaluate_accuracy(target_loader)
@@ -849,12 +937,10 @@ def main(args):
                 'total_cost_time': time.time() - step_start_time
             }
             
-            # Include the contrastive loss if available
             if 'contrast' in step_vals:
                 results['contrast_loss'] = step_vals['contrast']
                 logs['contrast_loss'].append(step_vals['contrast'])
             
-            # Log classification and domain losses
             for key in ['class', 'dis']:
                 if key in step_vals:
                     results[f"{key}_loss"] = step_vals[key]
@@ -863,14 +949,10 @@ def main(args):
             for metric in ['train_acc', 'valid_acc', 'target_acc']:
                 logs[metric].append(results[metric])
             
-            # ======================= KEY ENHANCEMENTS =======================
-            # Update teacher model after each epoch
             algorithm.update_teacher()
             
-            # Update learning rate based on validation performance
             if algorithm.scheduler is not None:
                 algorithm.scheduler.step(valid_acc)
-            # ======================= END ENHANCEMENTS =======================
             
             if results['valid_acc'] > best_valid_acc:
                 best_valid_acc = results['valid_acc']
@@ -880,7 +962,6 @@ def main(args):
             else:
                 epochs_without_improvement += 1
                 
-            # Prepare row for printing
             row = [
                 results.get('epoch', global_step),
                 results.get('class_loss', 0),

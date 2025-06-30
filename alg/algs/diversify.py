@@ -563,21 +563,20 @@ class Diversify(Algorithm):
             all_x = self.temporal_attn(all_x.squeeze(2).permute(0, 2, 1))
             all_x = all_x.unsqueeze(2)
         
-        # Forward pass with stochastic depth
+            # Forward pass with stochastic depth
         features = self.featurizer(all_x)
         features = self.stochastic_depth(features)
         all_z = self.bottleneck(features)
         
-        # Dynamic per-batch normalization - no fixed whitening layer
-        if all_z.size(0) > 1:  # Only normalize if batch size > 1
-            z_mean = all_z.mean(dim=0, keepdim=True)
-            z_std = all_z.std(dim=0, keepdim=True) + 1e-5
-            all_z = (all_z - z_mean) / z_std
-            
-        # ======================= CONTRASTIVE LEARNING =======================
+        # Ensure 2D tensor for normalization and projection
+        if all_z.dim() > 2:
+            all_z = all_z.view(all_z.size(0), -1)
+        
+        # Get actual feature dimension
+        feature_dim = all_z.size(1)
+        
         # Initialize projection head if needed
         if self.projection_head is None:
-            feature_dim = all_z.size(1)
             print(f"Initializing projection head for {feature_dim} features")
             self.projection_head = nn.Sequential(
                 nn.Linear(feature_dim, 256),
@@ -586,9 +585,28 @@ class Diversify(Algorithm):
                 nn.Linear(256, 128),
                 nn.BatchNorm1d(128)
             ).to(all_z.device)
-        # Project features for contrastive loss
-        projections = self.projection_head(all_z)
-        contrastive_loss = self.supcon_loss(projections, all_y) * self.contrast_weight
+            
+            # Add to optimizer
+            opt.add_param_group({'params': self.projection_head.parameters(), 'lr': self.args.lr})
+        # Reinitialize if dimension changed
+        elif self.projection_head[0].in_features != feature_dim:
+            print(f"Reconfiguring projection head from {self.projection_head[0].in_features} to {feature_dim} features")
+            self.projection_head = nn.Sequential(
+                nn.Linear(feature_dim, 256),
+                nn.BatchNorm1d(256),
+                nn.ReLU(),
+                nn.Linear(256, 128),
+                nn.BatchNorm1d(128)
+            ).to(all_z.device)
+            
+            # Update optimizer
+            # Remove old parameters
+            for param in self.projection_head.parameters():
+                for param_group in opt.param_groups:
+                    if param in param_group['params']:
+                        param_group['params'].remove(param)
+            # Add new parameters
+            opt.add_param_group({'params': self.projection_head.parameters(), 'lr': self.args.lr})
         # ======================= END CONTRASTIVE LEARNING =======================
             
         # Domain discrimination
@@ -728,7 +746,9 @@ class Diversify(Algorithm):
         
         # Forward pass
         all_z = self.abottleneck(self.featurizer(inputs))
-        
+        # Ensure 2D tensor
+        if all_z.dim() > 2:
+            all_z = all_z.view(all_z.size(0), -1)
         # Dynamic per-batch normalization
         if all_z.size(0) > 1:
             z_mean = all_z.mean(dim=0, keepdim=True)
@@ -766,7 +786,10 @@ class Diversify(Algorithm):
         
         features = self.featurizer(x)
         bottleneck_out = self.bottleneck(features)
-        
+
+        # Ensure 2D tensor
+        if bottleneck_out.dim() > 2:
+            bottleneck_out = bottleneck_out.view(bottleneck_out.size(0), -1)
         # Dynamic per-batch normalization
         if bottleneck_out.size(0) > 1:  # Only normalize if batch size > 1
             z_mean = bottleneck_out.mean(dim=0, keepdim=True)

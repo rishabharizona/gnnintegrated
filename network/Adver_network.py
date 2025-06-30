@@ -52,4 +52,7 @@ class Discriminator(nn.Module):
 
     def forward(self, x):
         """Forward pass through discriminator"""
+        # Flatten input if needed
+        if x.dim() > 2:
+            x = x.view(x.size(0), -1)
         return self.layers(x)

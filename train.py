@@ -704,6 +704,12 @@ def main(args):
                     print(f'GNN Pretrain Epoch {epoch+1}/{args.gnn_pretrain_epochs}: Loss {avg_loss:.4f}')
             
             print("GNN pretraining complete")
+    algorithm.create_teacher = types.MethodType(lambda self: None, algorithm)
+    algorithm.update_teacher = types.MethodType(
+        Diversify.update_teacher, 
+        algorithm
+    )
+    algorithm.update_teacher()
     
     algorithm.train()
     

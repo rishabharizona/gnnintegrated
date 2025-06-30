@@ -480,6 +480,11 @@ def main(args):
     if getattr(args, 'automated_k', False):
         print("\nRunning automated K estimation...")
         
+    # Create algorithm instance first
+    algorithm_class = alg.get_algorithm_class(args.algorithm)
+    algorithm = algorithm_class(args).to(args.device)
+    
+    # Now we can modify its components
     if args.use_gnn and GNN_AVAILABLE:
         print("\n===== Initializing GNN Feature Extractor =====")
         
@@ -544,8 +549,8 @@ def main(args):
             
             for epoch in range(args.gnn_pretrain_epochs):
                 gnn_model.train()
-                total_loss = 0.0  # INITIALIZE HERE
-                batch_count = 0   # INITIALIZE HERE
+                total_loss = 0.0
+                batch_count = 0
                 for batch in train_loader:
                     if args.use_gnn and GNN_AVAILABLE:
                         inputs = batch[0].to(args.device)
@@ -570,9 +575,9 @@ def main(args):
                         target = torch.mean(x_processed, dim=1)
                     else:
                         target = torch.mean(x, dim=1)
-        
+
                     features = gnn_model(x)
-        
+
                     # For reconstruction, we need to match the target shape
                     # Add reconstruction head if not exists
                     if not hasattr(gnn_model, 'reconstruction_head'):
@@ -584,7 +589,7 @@ def main(args):
                             nn.Linear(64, target_dim)
                         ).to(args.device)
                         print(f"Created reconstruction head with output dim: {target_dim}")
-        
+
                     reconstructed = gnn_model.reconstruction_head(features)
                     loss = torch.nn.functional.mse_loss(reconstructed, target)
                     

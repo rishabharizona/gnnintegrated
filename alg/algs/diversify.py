@@ -585,7 +585,7 @@ class Diversify(Algorithm):
             all_x = self.temporal_attn(all_x.squeeze(2).permute(0, 2, 1))
             all_x = all_x.unsqueeze(2)
         
-            # Forward pass with stochastic depth
+        # Forward pass with stochastic depth
         features = self.featurizer(all_x)
         features = self.stochastic_depth(features)
         all_z = self.bottleneck(features)
@@ -626,13 +626,18 @@ class Diversify(Algorithm):
             ).to(all_z.device)
             
             # Update optimizer
-            # Remove old parameters
             for param in self.projection_head.parameters():
                 for param_group in opt.param_groups:
                     if param in param_group['params']:
                         param_group['params'].remove(param)
-            # Add new parameters
             opt.add_param_group({'params': self.projection_head.parameters(), 'lr': self.args.lr})
+            
+        # ======================= CONTRASTIVE LEARNING =======================
+        # Compute projections
+        projections = self.projection_head(all_z)
+        
+        # Compute contrastive loss
+        contrastive_loss = self.supcon_loss(projections, all_y) * self.contrast_weight
         # ======================= END CONTRASTIVE LEARNING =======================
             
         # Domain discrimination

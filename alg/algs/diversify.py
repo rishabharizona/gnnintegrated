@@ -872,21 +872,38 @@ class Diversify(Algorithm):
         finally:
             self.explain_mode = original_mode
             
+    import copy
+    
     def update_teacher(self, exponential_moving_average=0.999):
-        """EMA update for teacher model"""
+        """Robust EMA update for teacher model with architecture matching"""
         if self.teacher_model is None:
-            # Initialize teacher with current weights
-            self.teacher_model = self.__class__(self.args)
-            self.teacher_model.load_state_dict(self.state_dict())
+            # Create teacher as a deep copy of the current student
+            self.teacher_model = copy.deepcopy(self)
+            
+            # Remove training-specific modules not needed in teacher
+            for module in ['projection_head', 'domain_adv_loss']:
+                if hasattr(self.teacher_model, module):
+                    delattr(self.teacher_model, module)
+            
+            # Set teacher to evaluation mode
             self.teacher_model.eval()
+            print("Teacher model initialized with current student architecture")
             return
         
-        # Update teacher with EMA
+        # Update teacher with EMA only for matching parameters
         teacher_params = dict(self.teacher_model.named_parameters())
         student_params = dict(self.named_parameters())
         
-        for name in student_params:
-            if name in teacher_params:
+        updated_count = 0
+        skipped_count = 0
+        for name, param in student_params.items():
+            if name in teacher_params and teacher_params[name].shape == param.shape:
                 teacher_params[name].data.mul_(exponential_moving_average).add_(
-                    student_params[name].data, alpha=1 - exponential_moving_average
+                    param.data, alpha=1 - exponential_moving_average
                 )
+                updated_count += 1
+            else:
+                skipped_count += 1
+        
+        if skipped_count > 0:
+            print(f"Updated {updated_count} params, skipped {skipped_count} mismatched params in teacher update")

@@ -15,6 +15,7 @@ from network import Adver_network, common_network
 from alg.algs.base import Algorithm
 from loss.common_loss import Entropylogits
 from torch_geometric.utils import to_dense_batch
+import copy
 
 GNN_AVAILABLE = True  # Flag indicating GNN availability
 

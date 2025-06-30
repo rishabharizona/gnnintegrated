@@ -19,7 +19,7 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from torch.utils.data import ConcatDataset, DataLoader as TorchDataLoader
 from network.act_network import ActNetwork
 import random  # Added for data augmentation
-
+import types
 # Suppress TensorFlow and SHAP warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf

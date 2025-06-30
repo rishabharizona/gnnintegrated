@@ -1250,13 +1250,13 @@ if __name__ == '__main__':
             
             args.use_tcn = getattr(args, 'use_tcn', True)
             args.lstm_hidden_size = 128  # Increased
-            args.lstm_layers = 5
+            args.lstm_layers = 1
             args.bidirectional = True  # ENABLED
             args.lstm_dropout = 0.0  # DISABLED
 
     # Optimizer settings minimized
     args.optimizer = getattr(args, 'optimizer', 'adam')
-    args.weight_decay = 1e-4  # Enable weight decay
+    args.weight_decay = 1e-3  # Enable weight decay
     args.domain_adv_weight = 0.1  # Enable domain adaptation
     args.lr = 0.01  # Increased learning rate
 

@@ -362,6 +362,17 @@ class Diversify(Algorithm):
         z1 = self.dbottleneck(self.featurizer(all_x1))
         if self.explain_mode:
             z1 = z1.clone()
+        
+        # Flatten and ensure correct dimension
+        if z1.dim() > 2:
+            z1 = z1.view(z1.size(0), -1)
+        current_dim = z1.size(1)
+        expected_dim = self.args.bottleneck
+        if current_dim > expected_dim:
+            z1 = z1[:, :expected_dim]
+        elif current_dim < expected_dim:
+            pad = torch.zeros(z1.size(0), expected_dim - current_dim, device=z1.device)
+            z1 = torch.cat([z1, pad], dim=1)
             
         # Domain discrimination
         disc_in1 = Adver_network.ReverseLayerF.apply(z1, self.args.alpha1)
@@ -428,6 +439,17 @@ class Diversify(Algorithm):
                     inputs = inputs.unsqueeze(2)
                 
                 feas = self.dbottleneck(self.featurizer(inputs))
+                
+                # Flatten and ensure correct dimension
+                if feas.dim() > 2:
+                    feas = feas.view(feas.size(0), -1)
+                current_dim = feas.size(1)
+                expected_dim = self.args.bottleneck
+                if current_dim > expected_dim:
+                    feas = feas[:, :expected_dim]
+                elif current_dim < expected_dim:
+                    pad = torch.zeros(feas.size(0), expected_dim - current_dim, device=feas.device)
+                    feas = torch.cat([feas, pad], dim=1)
                 
                 # Check for NaN in features
                 if torch.isnan(feas).any():
@@ -568,18 +590,22 @@ class Diversify(Algorithm):
         features = self.stochastic_depth(features)
         all_z = self.bottleneck(features)
         
-        # Ensure 2D tensor for normalization and projection
+        # Flatten and ensure correct dimension
         if all_z.dim() > 2:
             all_z = all_z.view(all_z.size(0), -1)
-        
-        # Get actual feature dimension
-        feature_dim = all_z.size(1)
+        current_dim = all_z.size(1)
+        expected_dim = self.args.bottleneck
+        if current_dim > expected_dim:
+            all_z = all_z[:, :expected_dim]
+        elif current_dim < expected_dim:
+            pad = torch.zeros(all_z.size(0), expected_dim - current_dim, device=all_z.device)
+            all_z = torch.cat([all_z, pad], dim=1)
         
         # Initialize projection head if needed
         if self.projection_head is None:
-            print(f"Initializing projection head for {feature_dim} features")
+            print(f"Initializing projection head for {expected_dim} features")
             self.projection_head = nn.Sequential(
-                nn.Linear(feature_dim, 256),
+                nn.Linear(expected_dim, 256),
                 nn.BatchNorm1d(256),
                 nn.ReLU(),
                 nn.Linear(256, 128),
@@ -589,10 +615,10 @@ class Diversify(Algorithm):
             # Add to optimizer
             opt.add_param_group({'params': self.projection_head.parameters(), 'lr': self.args.lr})
         # Reinitialize if dimension changed
-        elif self.projection_head[0].in_features != feature_dim:
-            print(f"Reconfiguring projection head from {self.projection_head[0].in_features} to {feature_dim} features")
+        elif self.projection_head[0].in_features != expected_dim:
+            print(f"Reconfiguring projection head from {self.projection_head[0].in_features} to {expected_dim} features")
             self.projection_head = nn.Sequential(
-                nn.Linear(feature_dim, 256),
+                nn.Linear(expected_dim, 256),
                 nn.BatchNorm1d(256),
                 nn.ReLU(),
                 nn.Linear(256, 128),
@@ -746,9 +772,17 @@ class Diversify(Algorithm):
         
         # Forward pass
         all_z = self.abottleneck(self.featurizer(inputs))
-        # Ensure 2D tensor
+        # Flatten and ensure correct dimension
         if all_z.dim() > 2:
             all_z = all_z.view(all_z.size(0), -1)
+        current_dim = all_z.size(1)
+        expected_dim = self.args.bottleneck
+        if current_dim > expected_dim:
+            all_z = all_z[:, :expected_dim]
+        elif current_dim < expected_dim:
+            pad = torch.zeros(all_z.size(0), expected_dim - current_dim, device=all_z.device)
+            all_z = torch.cat([all_z, pad], dim=1)
+        
         # Dynamic per-batch normalization
         if all_z.size(0) > 1:
             z_mean = all_z.mean(dim=0, keepdim=True)
@@ -787,9 +821,17 @@ class Diversify(Algorithm):
         features = self.featurizer(x)
         bottleneck_out = self.bottleneck(features)
 
-        # Ensure 2D tensor
+        # Flatten and ensure correct dimension
         if bottleneck_out.dim() > 2:
             bottleneck_out = bottleneck_out.view(bottleneck_out.size(0), -1)
+        current_dim = bottleneck_out.size(1)
+        expected_dim = self.args.bottleneck
+        if current_dim > expected_dim:
+            bottleneck_out = bottleneck_out[:, :expected_dim]
+        elif current_dim < expected_dim:
+            pad = torch.zeros(bottleneck_out.size(0), expected_dim - current_dim, device=bottleneck_out.device)
+            bottleneck_out = torch.cat([bottleneck_out, pad], dim=1)
+        
         # Dynamic per-batch normalization
         if bottleneck_out.size(0) > 1:  # Only normalize if batch size > 1
             z_mean = bottleneck_out.mean(dim=0, keepdim=True)

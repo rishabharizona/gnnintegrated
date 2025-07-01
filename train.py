@@ -1265,50 +1265,69 @@ def main(args):
     # ======================= END SHAP SECTION =======================
     
     try:
-        plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(12, 8))
+    
+    # Plot losses if available
+    if logs['class_loss']:
         plt.subplot(2, 1, 1)
-        epochs = list(range(len(logs['class_loss'])))
-        plt.plot(epochs, logs['class_loss'], label="Class Loss", marker='o')
-        plt.plot(epochs, logs['dis_loss'], label="Dis Loss", marker='x')
-        plt.plot(epochs, logs['total_loss'], label="Total Loss", linestyle='--')
+        loss_epochs = list(range(len(logs['class_loss'])))
+        plt.plot(loss_epochs, logs['class_loss'], label="Class Loss", marker='o')
+        
+        if len(logs['dis_loss']) == len(loss_epochs):
+            plt.plot(loss_epochs, logs['dis_loss'], label="Dis Loss", marker='x')
+        
+        if len(logs['total_loss']) == len(loss_epochs):
+            plt.plot(loss_epochs, logs['total_loss'], label="Total Loss", linestyle='--')
+        
         plt.title("Losses over Training Steps")
         plt.xlabel("Training Step")
         plt.ylabel("Loss")
         plt.legend()
         plt.grid(True)
-        
+    
+    # Plot accuracies if available
+    if logs['train_acc']:
         plt.subplot(2, 1, 2)
-        epochs = list(range(len(logs['train_acc'])))
-        plt.plot(epochs, logs['train_acc'], label="Train Accuracy", marker='o')
-        plt.plot(epochs, logs['valid_acc'], label="Valid Accuracy", marker='x')
-        plt.plot(epochs, logs['target_acc'], label="Target Accuracy", linestyle='--')
+        acc_epochs = list(range(len(logs['train_acc'])))
+        plt.plot(acc_epochs, logs['train_acc'], label="Train Accuracy", marker='o')
+        
+        if len(logs['valid_acc']) == len(acc_epochs):
+            plt.plot(acc_epochs, logs['valid_acc'], label="Valid Accuracy", marker='x')
+        
+        if len(logs['target_acc']) == len(acc_epochs):
+            plt.plot(acc_epochs, logs['target_acc'], label="Target Accuracy", linestyle='--')
+        
         plt.title("Accuracy over Training Steps")
-        plt.xlabel("Training Step")
+        plt.xlabel("Global Step")
         plt.ylabel("Accuracy")
         plt.legend()
         plt.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(args.output, "training_metrics.png"), dpi=300)
+    plt.close()
+    print("✅ Training metrics plot saved")
+    
+    # Domain discrepancy plot remains unchanged
+    if logs['h_divergence']:
+        plt.figure(figsize=(10, 6))
+        h_epochs = [i * 5 for i in range(len(logs['h_divergence']))]
+        plt.plot(h_epochs, logs['h_divergence'], 'o-', label='H-Divergence')
         
-        plt.tight_layout()
-        plt.savefig(os.path.join(args.output, "training_metrics.png"), dpi=300)
-        plt.close()
-        print("✅ Training metrics plot saved")
-        
-        if logs['h_divergence']:
-            plt.figure(figsize=(10, 6))
-            h_epochs = [i * 5 for i in range(len(logs['h_divergence']))]
-            plt.plot(h_epochs, logs['h_divergence'], 'o-', label='H-Divergence')
+        if len(logs['domain_acc']) == len(h_epochs):
             plt.plot(h_epochs, logs['domain_acc'], 's-', label='Domain Classifier Acc')
-            plt.title("Domain Discrepancy over Training")
-            plt.xlabel("Epoch")
-            plt.ylabel("Value")
-            plt.legend()
-            plt.grid(True)
-            plt.savefig(os.path.join(args.output, "domain_discrepancy.png"), dpi=300)
-            plt.close()
-            print("✅ Domain discrepancy plot saved")
-            
-    except Exception as e:
-        print(f"[WARNING] Failed to generate training plots: {str(e)}")
+        
+        plt.title("Domain Discrepancy over Training")
+        plt.xlabel("Epoch")
+        plt.ylabel("Value")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(os.path.join(args.output, "domain_discrepancy.png"), dpi=300)
+        plt.close()
+        print("✅ Domain discrepancy plot saved")
+        
+except Exception as e:
+    print(f"[WARNING] Failed to generate training plots: {str(e)}")
 
 if __name__ == '__main__':
     args = get_args()

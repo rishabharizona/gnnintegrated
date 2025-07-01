@@ -1032,11 +1032,11 @@ def main(args):
                 # Handle PyG DataBatch objects for GNN
                 background_list = []
                 for data in valid_loader:
-                    background_list.append(data)
-                    if len(background_list) * args.batch_size >= 64:
+                    background_list.extend(data.to_data_list())  # Convert batch to list of Data objects
+                    if len(background_list) >= 64:
                         break
-                background = background_list[0]  # Use first batch
-                X_eval = background[:10]  # First 10 samples from the batch
+                background = background_list[:64]  # Use first 64 samples
+                X_eval = background[:10]  # First 10 samples for evaluation
             else:
                 # Standard tensor handling for CNN
                 background = get_background_batch(valid_loader, size=64).cuda()
@@ -1048,8 +1048,8 @@ def main(args):
             # Create transform wrapper for GNN if needed
             transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
                 
-            # Transform background and X_eval if necessary
-            if transform_fn is not None:
+            # Transform background and X_eval if necessary (only for non-GNN)
+            if transform_fn is not None and not (args.use_gnn and GNN_AVAILABLE):
                 background = transform_fn(background)
                 X_eval = transform_fn(X_eval)
             
@@ -1061,45 +1061,42 @@ def main(args):
             print(f"SHAP values shape: {shap_vals.shape}")
             
             # Convert to numpy safely before visualization
-            X_eval_np = X_eval.detach().cpu().numpy()
+            if args.use_gnn and GNN_AVAILABLE:
+                # For GNN, convert each Data object's features to numpy
+                X_eval_np = [d.x.detach().cpu().numpy() for d in X_eval]
+            else:
+                X_eval_np = X_eval.detach().cpu().numpy()
             
             # Handle GNN dimensionality for visualization
             if args.use_gnn and GNN_AVAILABLE:
                 print(f"Original SHAP values shape: {shap_vals.shape}")
-                print(f"Original X_eval shape: {X_eval_np.shape}")
+                print(f"Original X_eval shape: {X_eval_np[0].shape}")
                 
-                # If 4D, reduce to 3D by summing over classes
-                if shap_vals.ndim == 4:
+                # For GNN, shap_vals is a list of arrays (one per sample)
+                if isinstance(shap_vals, list):
+                    # For GNN, shap_vals is a list of arrays (one per sample)
                     # Sum across classes to get overall feature importance
-                    shap_vals = np.abs(shap_vals).sum(axis=-1)
-                    print(f"SHAP values after class sum: {shap_vals.shape}")
+                    shap_vals = [np.abs(sv).sum(axis=-1) for sv in shap_vals]
+                    print(f"SHAP values after class sum: {shap_vals[0].shape}")
                 
-                # Now we should have 3D: [batch, time, channels]
-                if shap_vals.ndim == 3:
-                    # Convert to [batch, channels, 1, time] for visualization
-                    shap_vals = np.transpose(shap_vals, (0, 2, 1))
-                    shap_vals = np.expand_dims(shap_vals, axis=2)
+                # Visualize the first sample
+                plot_emg_shap_4d(X_eval_np[0], shap_vals[0], 
+                                 output_path=os.path.join(args.output, "shap_gnn_sample.html"))
+            else:
+                # Generate core visualizations for non-GNN data
+                try:
+                    plot_summary(shap_vals, X_eval_np, 
+                                output_path=os.path.join(args.output, "shap_summary.png"))
+                except IndexError as e:
+                    print(f"SHAP summary plot dimension error: {str(e)}")
+                    print(f"Using fallback 3D visualization instead")
+                    plot_emg_shap_4d(X_eval, shap_vals, 
+                                    output_path=os.path.join(args.output, "shap_3d_fallback.html"))
                     
-                    X_eval_np = np.transpose(X_eval_np, (0, 2, 1))
-                    X_eval_np = np.expand_dims(X_eval_np, axis=2)
-                else:
-                    print(f"⚠️ Unexpected SHAP values dimension: {shap_vals.ndim}")
-                    print("Skipping visualization-specific reshaping")
-            
-            # Generate core visualizations
-            try:
-                plot_summary(shap_vals, X_eval_np, 
-                            output_path=os.path.join(args.output, "shap_summary.png"))
-            except IndexError as e:
-                print(f"SHAP summary plot dimension error: {str(e)}")
-                print(f"Using fallback 3D visualization instead")
-                plot_emg_shap_4d(X_eval, shap_vals, 
-                                output_path=os.path.join(args.output, "shap_3d_fallback.html"))
-            
-            overlay_signal_with_shap(X_eval_np[0], shap_vals, 
-                                    output_path=os.path.join(args.output, "shap_overlay.png"))
-            plot_shap_heatmap(shap_vals, 
-                            output_path=os.path.join(args.output, "shap_heatmap.png"))
+                overlay_signal_with_shap(X_eval_np[0], shap_vals, 
+                                        output_path=os.path.join(args.output, "shap_overlay.png"))
+                plot_shap_heatmap(shap_vals, 
+                                 output_path=os.path.join(args.output, "shap_heatmap.png"))
             
             # Evaluate SHAP impact
             base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
@@ -1137,10 +1134,11 @@ def main(args):
                 print("[SHAP] Not enough samples for similarity metrics")
             
             # Generate 4D visualizations
-            plot_emg_shap_4d(X_eval, shap_vals, 
-                            output_path=os.path.join(args.output, "shap_4d_scatter.html"))
-            plot_4d_shap_surface(shap_vals, 
-                                output_path=os.path.join(args.output, "shap_4d_surface.html"))
+            if not (args.use_gnn and GNN_AVAILABLE):  # Skip for GNN for now
+                plot_emg_shap_4d(X_eval, shap_vals, 
+                                output_path=os.path.join(args.output, "shap_4d_scatter.html"))
+                plot_4d_shap_surface(shap_vals, 
+                                    output_path=os.path.join(args.output, "shap_4d_surface.html"))
             
             # Confusion matrix
             true_labels, pred_labels = [], []

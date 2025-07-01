@@ -1044,23 +1044,25 @@ def main(args):
                         # Unpack tensors
                         inputs, labels, domains = data[:3]
                         
-                        # Convert each sample in the batch to a Data object
-                        for i in range(inputs.size(0)):
-                            # Handle different input formats by checking tensor dimensions
-                            if inputs.dim() == 4:  # [batch, channels, 1, time]
-                                x_i = inputs[i].squeeze(1).permute(1, 0)  # [time, channels]
-                            elif inputs.dim() == 3:  # [batch, time, channels]
-                                x_i = inputs[i]  # [time, channels]
-                            else:
-                                print(f"Unsupported input shape: {inputs.shape}")
-                                continue
-                                
-                            data_obj = Data(
-                                x=x_i,
-                                y=labels[i].view(1),
-                                domain=domains[i].view(1)
-                            )
-                            background_list.append(data_obj)
+                        # Only process if inputs is a tensor
+                        if torch.is_tensor(inputs):
+                            # Convert each sample in the batch to a Data object
+                            for i in range(inputs.size(0)):
+                                # Handle different input formats by checking tensor dimensions
+                                if inputs.dim() == 4:  # [batch, channels, 1, time]
+                                    x_i = inputs[i].squeeze(1).permute(1, 0)  # [time, channels]
+                                elif inputs.dim() == 3:  # [batch, time, channels]
+                                    x_i = inputs[i]  # [time, channels]
+                                else:
+                                    print(f"Unsupported input shape: {inputs.shape}")
+                                    continue
+                                    
+                                data_obj = Data(
+                                    x=x_i,
+                                    y=labels[i].view(1),
+                                    domain=domains[i].view(1)
+                                )
+                                background_list.append(data_obj)
                     else:
                         print(f"Unsupported data type: {type(data)}")
                         continue

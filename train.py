@@ -1024,6 +1024,7 @@ def main(args):
     print(f'\n🎯 Final Target Accuracy: {target_acc:.4f}')
     
     # ======================= SHAP EXPLAINABILITY =======================
+    # ======================= SHAP EXPLAINABILITY =======================
     if getattr(args, 'enable_shap', False):
         print("\n📊 Running SHAP explainability...")
         try:
@@ -1038,14 +1039,14 @@ def main(args):
                     # Check if we have a PyG Batch object
                     elif hasattr(data, 'to_data_list'):
                         background_list.extend(data.to_data_list())
-                    # Check if we have a list of tensors (standard format)
-                    elif isinstance(data, (list, tuple)) and len(data) >= 3:
+                    # Check if we have standard tensors
+                    elif isinstance(data, (tuple, list)) and len(data) >= 3:
                         # Unpack tensors
                         inputs, labels, domains = data[:3]
                         
                         # Convert each sample in the batch to a Data object
                         for i in range(inputs.size(0)):
-                            # Handle different input formats
+                            # Handle different input formats by checking tensor dimensions
                             if inputs.dim() == 4:  # [batch, channels, 1, time]
                                 x_i = inputs[i].squeeze(1).permute(1, 0)  # [time, channels]
                             elif inputs.dim() == 3:  # [batch, time, channels]

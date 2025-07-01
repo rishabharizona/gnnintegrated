@@ -1032,23 +1032,44 @@ def main(args):
             if args.use_gnn and GNN_AVAILABLE:
                 # Handle PyG Data objects for GNN
                 background_list = []
-                for data in valid_loader:
+                print("Collecting SHAP background data for GNN...")
+                
+                # Debug: print loader type
+                print(f"Loader type: {type(valid_loader)}")
+                
+                for batch_idx, data in enumerate(valid_loader):
+                    print(f"\nBatch {batch_idx} type: {type(data)}")
+                    
+                    # Debug: print detailed structure
+                    if isinstance(data, (tuple, list)):
+                        print(f"Data length: {len(data)}")
+                        for i, item in enumerate(data):
+                            print(f"  Item {i} type: {type(item)}")
+                            if torch.is_tensor(item):
+                                print(f"  Item {i} shape: {item.shape}")
+                    
                     # Check if we have PyG Data objects
                     if isinstance(data, Data):
+                        print("Found PyG Data object")
                         background_list.append(data)
                     # Check if we have a PyG Batch object
                     elif hasattr(data, 'to_data_list'):
+                        print("Found PyG Batch object")
                         background_list.extend(data.to_data_list())
                     # Check if we have standard tensors
                     elif isinstance(data, (tuple, list)) and len(data) >= 3:
+                        print("Found tuple/list data format")
                         # Unpack tensors
                         inputs, labels, domains = data[:3]
                         
-                        # Only process if inputs is a tensor
+                        # Debug: print input type
+                        print(f"Inputs type: {type(inputs)}")
+                        
+                        # Convert each sample in the batch to a Data object
                         if torch.is_tensor(inputs):
-                            # Convert each sample in the batch to a Data object
+                            print(f"Inputs shape: {inputs.shape}")
                             for i in range(inputs.size(0)):
-                                # Handle different input formats by checking tensor dimensions
+                                # Handle different input formats
                                 if inputs.dim() == 4:  # [batch, channels, 1, time]
                                     x_i = inputs[i].squeeze(1).permute(1, 0)  # [time, channels]
                                 elif inputs.dim() == 3:  # [batch, time, channels]
@@ -1063,9 +1084,13 @@ def main(args):
                                     domain=domains[i].view(1)
                                 )
                                 background_list.append(data_obj)
+                        else:
+                            print("Inputs is not a tensor, skipping batch")
                     else:
                         print(f"Unsupported data type: {type(data)}")
-                        continue
+                    
+                    # Debug: current background count
+                    print(f"Current background samples: {len(background_list)}")
                         
                     if len(background_list) >= 64:
                         break
@@ -1081,8 +1106,10 @@ def main(args):
                     X_eval = None
             else:
                 # Standard tensor handling for CNN
+                print("Collecting SHAP background for CNN")
                 background = get_background_batch(valid_loader, size=64).cuda()
                 X_eval = background[:10]
+                print(f"Collected CNN background shape: {background.shape}")
             
             if background is None or X_eval is None:
                 print("Skipping SHAP due to missing data")
@@ -1113,6 +1140,7 @@ def main(args):
                 unified_predictor.eval()
                 
                 # Compute SHAP values safely
+                print("Computing SHAP values...")
                 shap_explanation = safe_compute_shap_values(unified_predictor, background, X_eval)
                 
                 # Extract values from Explanation object
@@ -1169,6 +1197,7 @@ def main(args):
                                      output_path=os.path.join(args.output, "shap_heatmap.png"))
                 
                 # Evaluate SHAP impact
+                print("Evaluating SHAP impact...")
                 base_preds, masked_preds, acc_drop = evaluate_shap_impact(unified_predictor, X_eval, shap_vals)
                 
                 # Save SHAP values
@@ -1211,6 +1240,7 @@ def main(args):
                                         output_path=os.path.join(args.output, "shap_4d_surface.html"))
                 
                 # Confusion matrix
+                print("Generating confusion matrix...")
                 true_labels, pred_labels = [], []
                 for data in valid_loader:
                     if args.use_gnn and GNN_AVAILABLE:
@@ -1262,7 +1292,7 @@ def main(args):
             print(f"[ERROR] SHAP analysis failed: {str(e)}")
             import traceback
             traceback.print_exc()
-    # ======================= END SHAP SECTION =======================
+        # ======================= END SHAP SECTION =======================
     
     try:
     plt.figure(figsize=(12, 8))

@@ -1033,186 +1033,199 @@ def main(args):
                 # Handle PyG Data objects for GNN
                 background_list = []
                 for data in valid_loader:
-                    # If data is a list, extend directly
-                    if isinstance(data, list):
-                        background_list.extend(data)
-                    # If data is a Batch object, convert to list of individual graphs
+                    # Check if we have PyG Data objects
+                    if isinstance(data, Data):
+                        background_list.append(data)
+                    # Check if we have a PyG Batch object
                     elif hasattr(data, 'to_data_list'):
                         background_list.extend(data.to_data_list())
-                    # Otherwise, assume it's a single Data object
+                    # Check if we have standard tensors
+                    elif isinstance(data, (tuple, list)) and isinstance(data[0], torch.Tensor):
+                        # Convert tensor to Data object
+                        x, y, domain = data
+                        data_obj = Data(x=x, y=y, domain=domain)
+                        background_list.append(data_obj)
                     else:
-                        background_list.append(data)
+                        print(f"Unsupported data type: {type(data)}")
+                        continue
                         
                     if len(background_list) >= 64:
                         break
                         
                 # Create batched graphs for SHAP
-                background = Batch.from_data_list(background_list[:64])
-                X_eval = Batch.from_data_list(background_list[:10])
+                if background_list:
+                    background = Batch.from_data_list(background_list[:64])
+                    X_eval = Batch.from_data_list(background_list[:10])
+                else:
+                    print("No valid data collected for SHAP background")
+                    background = None
+                    X_eval = None
             else:
                 # Standard tensor handling for CNN
                 background = get_background_batch(valid_loader, size=64).cuda()
                 X_eval = background[:10]
             
-            # Disable inplace operations in the model
-            disable_inplace_relu(algorithm)
-            
-            # Create a prediction wrapper that handles both CNN and GNN inputs
-            class UnifiedPredictor(nn.Module):
-                def __init__(self, model):
-                    super().__init__()
-                    self.model = model
-                    
-                def forward(self, x):
-                    # Handle GNN Batch objects
-                    if isinstance(x, Batch):
-                        return self.model.predict(x)
-                    # Handle list of Data objects
-                    elif isinstance(x, list) and isinstance(x[0], Data):
-                        batch = Batch.from_data_list(x)
-                        return self.model.predict(batch)
-                    # Handle standard tensors
-                    else:
-                        return self.model.predict(x)
-            
-            # Create the unified predictor
-            unified_predictor = UnifiedPredictor(algorithm).to(args.device)
-            unified_predictor.eval()
-            
-            # Compute SHAP values safely
-            shap_explanation = safe_compute_shap_values(unified_predictor, background, X_eval)
-            
-            # Extract values from Explanation object
-            shap_vals = shap_explanation.values
-            print(f"SHAP values shape: {shap_vals.shape}")
-            
-            # Convert to numpy safely before visualization
-            if args.use_gnn and GNN_AVAILABLE:
-                # For GNN, convert batched graph to numpy
-                X_eval_np = X_eval.x.detach().cpu().numpy()
+            if background is None or X_eval is None:
+                print("Skipping SHAP due to missing data")
             else:
-                X_eval_np = X_eval.detach().cpu().numpy()
-            
-            # Handle GNN dimensionality for visualization
-            if args.use_gnn and GNN_AVAILABLE:
-                print(f"Original SHAP values shape: {shap_vals.shape}")
-                print(f"Original X_eval shape: {X_eval_np.shape}")
+                # Disable inplace operations in the model
+                disable_inplace_relu(algorithm)
                 
-                # If 4D, reduce to 3D by summing over classes
-                if shap_vals.ndim == 4:
-                    # Sum across classes to get overall feature importance
-                    shap_vals = np.abs(shap_vals).sum(axis=-1)
-                    print(f"SHAP values after class sum: {shap_vals.shape}")
+                # Create a prediction wrapper that handles both CNN and GNN inputs
+                class UnifiedPredictor(nn.Module):
+                    def __init__(self, model):
+                        super().__init__()
+                        self.model = model
+                        
+                    def forward(self, x):
+                        # Handle GNN Batch objects
+                        if isinstance(x, Batch):
+                            return self.model.predict(x)
+                        # Handle list of Data objects
+                        elif isinstance(x, list) and isinstance(x[0], Data):
+                            batch = Batch.from_data_list(x)
+                            return self.model.predict(batch)
+                        # Handle standard tensors
+                        else:
+                            return self.model.predict(x)
                 
-                # Now we should have 3D: [batch, time, channels]
-                if shap_vals.ndim == 3:
-                    # Convert to [batch, channels, 1, time] for visualization
-                    shap_vals = np.transpose(shap_vals, (0, 2, 1))
-                    shap_vals = np.expand_dims(shap_vals, axis=2)
-                    
-                    X_eval_np = np.transpose(X_eval_np, (0, 2, 1))
-                    X_eval_np = np.expand_dims(X_eval_np, axis=2)
-                else:
-                    print(f"⚠️ Unexpected SHAP values dimension: {shap_vals.ndim}")
-                    print("Skipping visualization-specific reshaping")
+                # Create the unified predictor
+                unified_predictor = UnifiedPredictor(algorithm).to(args.device)
+                unified_predictor.eval()
                 
-                # Visualize the first sample
-                plot_emg_shap_4d(X_eval_np[0], shap_vals[0], 
-                                 output_path=os.path.join(args.output, "shap_gnn_sample.html"))
-            else:
-                # Generate core visualizations for non-GNN data
-                try:
-                    plot_summary(shap_vals, X_eval_np, 
-                                output_path=os.path.join(args.output, "shap_summary.png"))
-                except IndexError as e:
-                    print(f"SHAP summary plot dimension error: {str(e)}")
-                    print(f"Using fallback 3D visualization instead")
-                    plot_emg_shap_4d(X_eval, shap_vals, 
-                                    output_path=os.path.join(args.output, "shap_3d_fallback.html"))
-                    
-                overlay_signal_with_shap(X_eval_np[0], shap_vals, 
-                                        output_path=os.path.join(args.output, "shap_overlay.png"))
-                plot_shap_heatmap(shap_vals, 
-                                 output_path=os.path.join(args.output, "shap_heatmap.png"))
-            
-            # Evaluate SHAP impact
-            base_preds, masked_preds, acc_drop = evaluate_shap_impact(unified_predictor, X_eval, shap_vals)
-            
-            # Save SHAP values
-            save_path = os.path.join(args.output, "shap_values.npy")
-            save_shap_numpy(shap_vals, save_path=save_path)
-            
-            # Compute impact metrics
-            print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
-            print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
-            print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
-            print(f"[SHAP] AOPC: {compute_aopc(unified_predictor, X_eval, shap_vals):.4f}")
-            
-            # Compute advanced metrics
-            metrics = evaluate_advanced_shap_metrics(shap_vals, X_eval)
-            print(f"[SHAP] Entropy: {metrics.get('shap_entropy', 0):.4f}")
-            print(f"[SHAP] Coherence: {metrics.get('feature_coherence', 0):.4f}")
-            print(f"[SHAP] Channel Variance: {metrics.get('channel_variance', 0):.4f}")
-            print(f"[SHAP] Temporal Entropy: {metrics.get('temporal_entropy', 0):.4f}")
-            print(f"[SHAP] Mutual Info: {metrics.get('mutual_info', 0):.4f}")
-            print(f"[SHAP] PCA Alignment: {metrics.get('pca_alignment', 0):.4f}")
-            
-            # Compute similarity metrics between first two samples
-            shap_array = _get_shap_array(shap_vals)
-            if len(shap_array) >= 2:
-                # Extract SHAP values for first two samples
-                sample1 = shap_array[0]
-                sample2 = shap_array[1]
+                # Compute SHAP values safely
+                shap_explanation = safe_compute_shap_values(unified_predictor, background, X_eval)
                 
-                print(f"[SHAP] Jaccard (top-10): {compute_jaccard_topk(sample1, sample2, k=10):.4f}")
-                print(f"[SHAP] Kendall's Tau: {compute_kendall_tau(sample1, sample2):.4f}")
-                print(f"[SHAP] Cosine Similarity: {cosine_similarity_shap(sample1, sample2):.4f}")
-            else:
-                print("[SHAP] Not enough samples for similarity metrics")
-            
-            # Generate 4D visualizations
-            if not (args.use_gnn and GNN_AVAILABLE):  # Skip for GNN for now
-                plot_emg_shap_4d(X_eval, shap_vals, 
-                                output_path=os.path.join(args.output, "shap_4d_scatter.html"))
-                plot_4d_shap_surface(shap_vals, 
-                                    output_path=os.path.join(args.output, "shap_4d_surface.html"))
-            
-            # Confusion matrix
-            true_labels, pred_labels = [], []
-            for data in valid_loader:
+                # Extract values from Explanation object
+                shap_vals = shap_explanation.values
+                print(f"SHAP values shape: {shap_vals.shape}")
+                
+                # Convert to numpy safely before visualization
                 if args.use_gnn and GNN_AVAILABLE:
-                    # Handle different data formats
-                    if isinstance(data, list):
-                        # List of Data objects
-                        x = data
-                        y = [d.y for d in data]
-                    elif hasattr(data, 'y'):
-                        # Batch object
-                        x = data
-                        y = data.y
-                    else:
-                        # Unsupported format
-                        continue
+                    # For GNN, convert batched graph to numpy
+                    X_eval_np = X_eval.x.detach().cpu().numpy()
                 else:
-                    x = data[0].to(args.device).float()
-                    y = data[1]
+                    X_eval_np = X_eval.detach().cpu().numpy()
                 
-                with torch.no_grad():
-                    # Apply transform for GNN if needed
+                # Handle GNN dimensionality for visualization
+                if args.use_gnn and GNN_AVAILABLE:
+                    print(f"Original SHAP values shape: {shap_vals.shape}")
+                    print(f"Original X_eval shape: {X_eval_np.shape}")
+                    
+                    # If 4D, reduce to 3D by summing over classes
+                    if shap_vals.ndim == 4:
+                        # Sum across classes to get overall feature importance
+                        shap_vals = np.abs(shap_vals).sum(axis=-1)
+                        print(f"SHAP values after class sum: {shap_vals.shape}")
+                    
+                    # Now we should have 3D: [batch, time, channels]
+                    if shap_vals.ndim == 3:
+                        # Convert to [batch, channels, 1, time] for visualization
+                        shap_vals = np.transpose(shap_vals, (0, 2, 1))
+                        shap_vals = np.expand_dims(shap_vals, axis=2)
+                        
+                        X_eval_np = np.transpose(X_eval_np, (0, 2, 1))
+                        X_eval_np = np.expand_dims(X_eval_np, axis=2)
+                    else:
+                        print(f"⚠️ Unexpected SHAP values dimension: {shap_vals.ndim}")
+                        print("Skipping visualization-specific reshaping")
+                    
+                    # Visualize the first sample
+                    plot_emg_shap_4d(X_eval_np[0], shap_vals[0], 
+                                     output_path=os.path.join(args.output, "shap_gnn_sample.html"))
+                else:
+                    # Generate core visualizations for non-GNN data
+                    try:
+                        plot_summary(shap_vals, X_eval_np, 
+                                    output_path=os.path.join(args.output, "shap_summary.png"))
+                    except IndexError as e:
+                        print(f"SHAP summary plot dimension error: {str(e)}")
+                        print(f"Using fallback 3D visualization instead")
+                        plot_emg_shap_4d(X_eval, shap_vals, 
+                                        output_path=os.path.join(args.output, "shap_3d_fallback.html"))
+                        
+                    overlay_signal_with_shap(X_eval_np[0], shap_vals, 
+                                            output_path=os.path.join(args.output, "shap_overlay.png"))
+                    plot_shap_heatmap(shap_vals, 
+                                     output_path=os.path.join(args.output, "shap_heatmap.png"))
+                
+                # Evaluate SHAP impact
+                base_preds, masked_preds, acc_drop = evaluate_shap_impact(unified_predictor, X_eval, shap_vals)
+                
+                # Save SHAP values
+                save_path = os.path.join(args.output, "shap_values.npy")
+                save_shap_numpy(shap_vals, save_path=save_path)
+                
+                # Compute impact metrics
+                print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
+                print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
+                print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
+                print(f"[SHAP] AOPC: {compute_aopc(unified_predictor, X_eval, shap_vals):.4f}")
+                
+                # Compute advanced metrics
+                metrics = evaluate_advanced_shap_metrics(shap_vals, X_eval)
+                print(f"[SHAP] Entropy: {metrics.get('shap_entropy', 0):.4f}")
+                print(f"[SHAP] Coherence: {metrics.get('feature_coherence', 0):.4f}")
+                print(f"[SHAP] Channel Variance: {metrics.get('channel_variance', 0):.4f}")
+                print(f"[SHAP] Temporal Entropy: {metrics.get('temporal_entropy', 0):.4f}")
+                print(f"[SHAP] Mutual Info: {metrics.get('mutual_info', 0):.4f}")
+                print(f"[SHAP] PCA Alignment: {metrics.get('pca_alignment', 0):.4f}")
+                
+                # Compute similarity metrics between first two samples
+                shap_array = _get_shap_array(shap_vals)
+                if len(shap_array) >= 2:
+                    # Extract SHAP values for first two samples
+                    sample1 = shap_array[0]
+                    sample2 = shap_array[1]
+                    
+                    print(f"[SHAP] Jaccard (top-10): {compute_jaccard_topk(sample1, sample2, k=10):.4f}")
+                    print(f"[SHAP] Kendall's Tau: {compute_kendall_tau(sample1, sample2):.4f}")
+                    print(f"[SHAP] Cosine Similarity: {cosine_similarity_shap(sample1, sample2):.4f}")
+                else:
+                    print("[SHAP] Not enough samples for similarity metrics")
+                
+                # Generate 4D visualizations
+                if not (args.use_gnn and GNN_AVAILABLE):  # Skip for GNN for now
+                    plot_emg_shap_4d(X_eval, shap_vals, 
+                                    output_path=os.path.join(args.output, "shap_4d_scatter.html"))
+                    plot_4d_shap_surface(shap_vals, 
+                                        output_path=os.path.join(args.output, "shap_4d_surface.html"))
+                
+                # Confusion matrix
+                true_labels, pred_labels = [], []
+                for data in valid_loader:
                     if args.use_gnn and GNN_AVAILABLE:
-                        x = transform_for_gnn(x)
-                    preds = unified_predictor(x).cpu()
-                    true_labels.extend([yi.item() for yi in y])
-                    pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
-            
-            cm = confusion_matrix(true_labels, pred_labels)
-            disp = ConfusionMatrixDisplay(confusion_matrix=cm)
-            disp.plot(cmap="Blues")
-            plt.title("Confusion Matrix (Validation Set)")
-            plt.savefig(os.path.join(args.output, "confusion_matrix.png"), dpi=300)
-            plt.close()
-            
-            print("✅ SHAP analysis completed successfully")
+                        # Handle different data formats
+                        if isinstance(data, Data):
+                            x = data
+                            y = data.y
+                        elif hasattr(data, 'y'):
+                            # Batch object
+                            x = data
+                            y = data.y
+                        else:
+                            # Unsupported format
+                            continue
+                    else:
+                        x = data[0].to(args.device).float()
+                        y = data[1]
+                    
+                    with torch.no_grad():
+                        # Apply transform for GNN if needed
+                        if args.use_gnn and GNN_AVAILABLE:
+                            x = transform_for_gnn(x)
+                        preds = unified_predictor(x).cpu()
+                        true_labels.extend([yi.item() for yi in y])
+                        pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
+                
+                cm = confusion_matrix(true_labels, pred_labels)
+                disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+                disp.plot(cmap="Blues")
+                plt.title("Confusion Matrix (Validation Set)")
+                plt.savefig(os.path.join(args.output, "confusion_matrix.png"), dpi=300)
+                plt.close()
+                
+                print("✅ SHAP analysis completed successfully")
         except Exception as e:
             print(f"[ERROR] SHAP analysis failed: {str(e)}")
             import traceback

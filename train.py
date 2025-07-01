@@ -1024,17 +1024,28 @@ def main(args):
     print(f'\n🎯 Final Target Accuracy: {target_acc:.4f}')
     
     # ======================= SHAP EXPLAINABILITY =======================
+    # ======================= SHAP EXPLAINABILITY =======================
     if getattr(args, 'enable_shap', False):
         print("\n📊 Running SHAP explainability...")
         try:
             # Prepare background and evaluation data
             if args.use_gnn and GNN_AVAILABLE:
-                # Handle PyG DataBatch objects for GNN
+                # Handle PyG Data objects for GNN
                 background_list = []
                 for data in valid_loader:
-                    background_list.extend(data.to_data_list())  # Convert batch to list of Data objects
+                    # If data is a list, extend directly
+                    if isinstance(data, list):
+                        background_list.extend(data)
+                    # If data is a Batch object, convert to list of individual graphs
+                    elif hasattr(data, 'to_data_list'):
+                        background_list.extend(data.to_data_list())
+                    # Otherwise, assume it's a single Data object
+                    else:
+                        background_list.append(data)
+                        
                     if len(background_list) >= 64:
                         break
+                        
                 background = background_list[:64]  # Use first 64 samples
                 X_eval = background[:10]  # First 10 samples for evaluation
             else:
@@ -1144,8 +1155,18 @@ def main(args):
             true_labels, pred_labels = [], []
             for data in valid_loader:
                 if args.use_gnn and GNN_AVAILABLE:
-                    x = data[0].to(args.device)
-                    y = data[1]
+                    # Handle different data formats
+                    if isinstance(data, list):
+                        # List of Data objects
+                        x = data
+                        y = [d.y for d in data]
+                    elif hasattr(data, 'y'):
+                        # Batch object
+                        x = data
+                        y = data.y
+                    else:
+                        # Unsupported format
+                        continue
                 else:
                     x = data[0].to(args.device).float()
                     y = data[1]
@@ -1155,7 +1176,7 @@ def main(args):
                     if args.use_gnn and GNN_AVAILABLE:
                         x = transform_for_gnn(x)
                     preds = algorithm.predict(x).cpu()
-                    true_labels.extend(y.cpu().numpy())
+                    true_labels.extend([yi.item() for yi in y])
                     pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
             
             cm = confusion_matrix(true_labels, pred_labels)

@@ -1024,7 +1024,6 @@ def main(args):
     print(f'\n🎯 Final Target Accuracy: {target_acc:.4f}')
     
     # ======================= SHAP EXPLAINABILITY =======================
-    # ======================= SHAP EXPLAINABILITY =======================
     if getattr(args, 'enable_shap', False):
         print("\n📊 Running SHAP explainability...")
         try:
@@ -1039,12 +1038,28 @@ def main(args):
                     # Check if we have a PyG Batch object
                     elif hasattr(data, 'to_data_list'):
                         background_list.extend(data.to_data_list())
-                    # Check if we have standard tensors
-                    elif isinstance(data, (tuple, list)) and isinstance(data[0], torch.Tensor):
-                        # Convert tensor to Data object
-                        x, y, domain = data
-                        data_obj = Data(x=x, y=y, domain=domain)
-                        background_list.append(data_obj)
+                    # Check if we have a list of tensors (standard format)
+                    elif isinstance(data, (list, tuple)) and len(data) >= 3:
+                        # Unpack tensors
+                        inputs, labels, domains = data[:3]
+                        
+                        # Convert each sample in the batch to a Data object
+                        for i in range(inputs.size(0)):
+                            # Handle different input formats
+                            if inputs.dim() == 4:  # [batch, channels, 1, time]
+                                x_i = inputs[i].squeeze(1).permute(1, 0)  # [time, channels]
+                            elif inputs.dim() == 3:  # [batch, time, channels]
+                                x_i = inputs[i]  # [time, channels]
+                            else:
+                                print(f"Unsupported input shape: {inputs.shape}")
+                                continue
+                                
+                            data_obj = Data(
+                                x=x_i,
+                                y=labels[i].view(1),
+                                domain=domains[i].view(1)
+                            )
+                            background_list.append(data_obj)
                     else:
                         print(f"Unsupported data type: {type(data)}")
                         continue
@@ -1056,6 +1071,7 @@ def main(args):
                 if background_list:
                     background = Batch.from_data_list(background_list[:64])
                     X_eval = Batch.from_data_list(background_list[:10])
+                    print(f"Collected {len(background_list)} samples for SHAP background")
                 else:
                     print("No valid data collected for SHAP background")
                     background = None
@@ -1203,6 +1219,10 @@ def main(args):
                             # Batch object
                             x = data
                             y = data.y
+                        elif isinstance(data, (list, tuple)) and len(data) >= 2:
+                            # Standard format: [inputs, labels, ...]
+                            x = data[0]
+                            y = data[1]
                         else:
                             # Unsupported format
                             continue
@@ -1215,7 +1235,16 @@ def main(args):
                         if args.use_gnn and GNN_AVAILABLE:
                             x = transform_for_gnn(x)
                         preds = unified_predictor(x).cpu()
-                        true_labels.extend([yi.item() for yi in y])
+                        
+                        # Handle single values vs tensors
+                        if isinstance(y, torch.Tensor):
+                            y = y.cpu().numpy()
+                        elif isinstance(y, list):
+                            y = np.array(y)
+                        else:
+                            y = np.array([y])
+                            
+                        true_labels.extend(y)
                         pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
                 
                 cm = confusion_matrix(true_labels, pred_labels)

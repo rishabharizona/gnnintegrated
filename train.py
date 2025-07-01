@@ -1046,8 +1046,9 @@ def main(args):
                     if len(background_list) >= 64:
                         break
                         
-                background = background_list[:64]  # Use first 64 samples
-                X_eval = background[:10]  # First 10 samples for evaluation
+                # Create batched graphs for SHAP
+                background = Batch.from_data_list(background_list[:64])
+                X_eval = Batch.from_data_list(background_list[:10])
             else:
                 # Standard tensor handling for CNN
                 background = get_background_batch(valid_loader, size=64).cuda()
@@ -1056,16 +1057,30 @@ def main(args):
             # Disable inplace operations in the model
             disable_inplace_relu(algorithm)
             
-            # Create transform wrapper for GNN if needed
-            transform_fn = transform_for_gnn if args.use_gnn and GNN_AVAILABLE else None
-                
-            # Transform background and X_eval if necessary (only for non-GNN)
-            if transform_fn is not None and not (args.use_gnn and GNN_AVAILABLE):
-                background = transform_fn(background)
-                X_eval = transform_fn(X_eval)
+            # Create a prediction wrapper that handles both CNN and GNN inputs
+            class UnifiedPredictor(nn.Module):
+                def __init__(self, model):
+                    super().__init__()
+                    self.model = model
+                    
+                def forward(self, x):
+                    # Handle GNN Batch objects
+                    if isinstance(x, Batch):
+                        return self.model.predict(x)
+                    # Handle list of Data objects
+                    elif isinstance(x, list) and isinstance(x[0], Data):
+                        batch = Batch.from_data_list(x)
+                        return self.model.predict(batch)
+                    # Handle standard tensors
+                    else:
+                        return self.model.predict(x)
+            
+            # Create the unified predictor
+            unified_predictor = UnifiedPredictor(algorithm).to(args.device)
+            unified_predictor.eval()
             
             # Compute SHAP values safely
-            shap_explanation = safe_compute_shap_values(algorithm, background, X_eval)
+            shap_explanation = safe_compute_shap_values(unified_predictor, background, X_eval)
             
             # Extract values from Explanation object
             shap_vals = shap_explanation.values
@@ -1073,22 +1088,33 @@ def main(args):
             
             # Convert to numpy safely before visualization
             if args.use_gnn and GNN_AVAILABLE:
-                # For GNN, convert each Data object's features to numpy
-                X_eval_np = [d.x.detach().cpu().numpy() for d in X_eval]
+                # For GNN, convert batched graph to numpy
+                X_eval_np = X_eval.x.detach().cpu().numpy()
             else:
                 X_eval_np = X_eval.detach().cpu().numpy()
             
             # Handle GNN dimensionality for visualization
             if args.use_gnn and GNN_AVAILABLE:
                 print(f"Original SHAP values shape: {shap_vals.shape}")
-                print(f"Original X_eval shape: {X_eval_np[0].shape}")
+                print(f"Original X_eval shape: {X_eval_np.shape}")
                 
-                # For GNN, shap_vals is a list of arrays (one per sample)
-                if isinstance(shap_vals, list):
-                    # For GNN, shap_vals is a list of arrays (one per sample)
+                # If 4D, reduce to 3D by summing over classes
+                if shap_vals.ndim == 4:
                     # Sum across classes to get overall feature importance
-                    shap_vals = [np.abs(sv).sum(axis=-1) for sv in shap_vals]
-                    print(f"SHAP values after class sum: {shap_vals[0].shape}")
+                    shap_vals = np.abs(shap_vals).sum(axis=-1)
+                    print(f"SHAP values after class sum: {shap_vals.shape}")
+                
+                # Now we should have 3D: [batch, time, channels]
+                if shap_vals.ndim == 3:
+                    # Convert to [batch, channels, 1, time] for visualization
+                    shap_vals = np.transpose(shap_vals, (0, 2, 1))
+                    shap_vals = np.expand_dims(shap_vals, axis=2)
+                    
+                    X_eval_np = np.transpose(X_eval_np, (0, 2, 1))
+                    X_eval_np = np.expand_dims(X_eval_np, axis=2)
+                else:
+                    print(f"⚠️ Unexpected SHAP values dimension: {shap_vals.ndim}")
+                    print("Skipping visualization-specific reshaping")
                 
                 # Visualize the first sample
                 plot_emg_shap_4d(X_eval_np[0], shap_vals[0], 
@@ -1110,7 +1136,7 @@ def main(args):
                                  output_path=os.path.join(args.output, "shap_heatmap.png"))
             
             # Evaluate SHAP impact
-            base_preds, masked_preds, acc_drop = evaluate_shap_impact(algorithm, X_eval, shap_vals)
+            base_preds, masked_preds, acc_drop = evaluate_shap_impact(unified_predictor, X_eval, shap_vals)
             
             # Save SHAP values
             save_path = os.path.join(args.output, "shap_values.npy")
@@ -1120,7 +1146,7 @@ def main(args):
             print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
             print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
             print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
-            print(f"[SHAP] AOPC: {compute_aopc(algorithm, X_eval, shap_vals):.4f}")
+            print(f"[SHAP] AOPC: {compute_aopc(unified_predictor, X_eval, shap_vals):.4f}")
             
             # Compute advanced metrics
             metrics = evaluate_advanced_shap_metrics(shap_vals, X_eval)
@@ -1175,7 +1201,7 @@ def main(args):
                     # Apply transform for GNN if needed
                     if args.use_gnn and GNN_AVAILABLE:
                         x = transform_for_gnn(x)
-                    preds = algorithm.predict(x).cpu()
+                    preds = unified_predictor(x).cpu()
                     true_labels.extend([yi.item() for yi in y])
                     pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
             

@@ -1029,84 +1029,80 @@ def main(args):
         print("\n📊 Running SHAP explainability...")
         try:
             # Prepare background and evaluation data
+            background_list = []
             if args.use_gnn and GNN_AVAILABLE:
-                # Handle PyG Data objects for GNN
-                background_list = []
                 print("Collecting SHAP background data for GNN...")
-                
-                # Debug: print loader type
                 print(f"Loader type: {type(valid_loader)}")
                 
-                for batch_idx, data in enumerate(valid_loader):
-                    print(f"\nBatch {batch_idx} type: {type(data)}")
+                for batch_idx, batch in enumerate(valid_loader):
+                    print(f"\nBatch {batch_idx} type: {type(batch)}")
                     
-                    # Debug: print detailed structure
-                    if isinstance(data, (tuple, list)):
-                        print(f"Data length: {len(data)}")
-                        for i, item in enumerate(data):
+                    # Handle PyG Batch objects
+                    if isinstance(batch, (Data, Batch)) or hasattr(batch, 'to_data_list'):
+                        print("Found PyG Data/Batch object")
+                        try:
+                            # Convert batch to list of individual graphs
+                            if hasattr(batch, 'to_data_list'):
+                                data_list = batch.to_data_list()
+                            else:
+                                data_list = [batch]
+                                
+                            print(f"Converted to {len(data_list)} graphs")
+                            background_list.extend(data_list)
+                            
+                        except Exception as e:
+                            print(f"Error converting batch: {str(e)}")
+                    
+                    # Handle tuple format (common with custom datasets)
+                    elif isinstance(batch, (tuple, list)):
+                        print(f"Data length: {len(batch)}")
+                        
+                        # Find the DataBatch object in the tuple
+                        data_batch = None
+                        for i, item in enumerate(batch):
                             print(f"  Item {i} type: {type(item)}")
-                            if torch.is_tensor(item):
+                            if isinstance(item, (Data, Batch)) or hasattr(item, 'to_data_list'):
+                                data_batch = item
+                                break
+                            elif torch.is_tensor(item):
                                 print(f"  Item {i} shape: {item.shape}")
-                    
-                    # Check if we have PyG Data objects
-                    if isinstance(data, Data):
-                        print("Found PyG Data object")
-                        background_list.append(data)
-                    # Check if we have a PyG Batch object
-                    elif hasattr(data, 'to_data_list'):
-                        print("Found PyG Batch object")
-                        background_list.extend(data.to_data_list())
-                    # Check if we have standard tensors
-                    elif isinstance(data, (tuple, list)) and len(data) >= 3:
-                        print("Found tuple/list data format")
-                        # Unpack tensors
-                        inputs, labels, domains = data[:3]
                         
-                        # Debug: print input type
-                        print(f"Inputs type: {type(inputs)}")
-                        
-                        # Convert each sample in the batch to a Data object
-                        if torch.is_tensor(inputs):
-                            print(f"Inputs shape: {inputs.shape}")
-                            for i in range(inputs.size(0)):
-                                # Handle different input formats
-                                if inputs.dim() == 4:  # [batch, channels, 1, time]
-                                    x_i = inputs[i].squeeze(1).permute(1, 0)  # [time, channels]
-                                elif inputs.dim() == 3:  # [batch, time, channels]
-                                    x_i = inputs[i]  # [time, channels]
+                        if data_batch is not None:
+                            print("Found DataBatch in tuple")
+                            try:
+                                # Convert batch to list of individual graphs
+                                if hasattr(data_batch, 'to_data_list'):
+                                    data_list = data_batch.to_data_list()
                                 else:
-                                    print(f"Unsupported input shape: {inputs.shape}")
-                                    continue
+                                    data_list = [data_batch]
                                     
-                                data_obj = Data(
-                                    x=x_i,
-                                    y=labels[i].view(1),
-                                    domain=domains[i].view(1)
-                                )
-                                background_list.append(data_obj)
+                                print(f"Converted to {len(data_list)} graphs")
+                                background_list.extend(data_list)
+                            except Exception as e:
+                                print(f"Error converting DataBatch: {str(e)}")
                         else:
-                            print("Inputs is not a tensor, skipping batch")
-                    else:
-                        print(f"Unsupported data type: {type(data)}")
+                            print("No DataBatch found in tuple")
                     
-                    # Debug: current background count
+                    else:
+                        print(f"Unsupported batch type: {type(batch)}")
+                    
                     print(f"Current background samples: {len(background_list)}")
-                        
                     if len(background_list) >= 64:
+                        print("Reached 64 background samples")
                         break
-                        
+                
                 # Create batched graphs for SHAP
                 if background_list:
                     background = Batch.from_data_list(background_list[:64])
                     X_eval = Batch.from_data_list(background_list[:10])
-                    print(f"Collected {len(background_list)} samples for SHAP background")
+                    print(f"Created background batch with {len(background_list[:64])} graphs")
+                    print(f"Created evaluation batch with {len(background_list[:10])} graphs")
                 else:
-                    print("No valid data collected for SHAP background")
+                    print("⚠️ Couldn't collect background data for SHAP")
                     background = None
                     X_eval = None
             else:
                 # Standard tensor handling for CNN
-                print("Collecting SHAP background for CNN")
                 background = get_background_batch(valid_loader, size=64).cuda()
                 X_eval = background[:10]
                 print(f"Collected CNN background shape: {background.shape}")

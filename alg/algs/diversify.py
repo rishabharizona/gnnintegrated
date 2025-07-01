@@ -2712,7 +2712,7 @@ class Diversify(Algorithm):
                 )
 
 
-                updated_count += 1Add commentMore actions
+                updated_count += 1
 
 
             else:

@@ -375,29 +375,35 @@ class EnhancedTemporalGCN(TemporalGCN):
             from torch_geometric.utils import to_dense_batch
             x, mask = to_dense_batch(x.x, x.batch)
         
-        # Handle various input dimensions
-        if x.dim() == 3:
-            # [batch, nodes, features] -> [batch, features, nodes]
-            x = x.permute(0, 2, 1)
-        elif x.dim() == 4:
-            # [batch, channels, height, width] -> [batch, channels, width] for temporal data
-            if x.size(2) == 1:  # Single spatial dimension
-                x = x.squeeze(2).permute(0, 2, 1)
-            else:
-                # Handle multi-dimensional spatial data
-                x = x.flatten(2, 3).permute(0, 2, 1)
+        # Store original device
+        device = x.device
         
-        # Dynamic feature projection
-        input_dim = x.size(-1)
-        if input_dim not in [8, 16, 200]:
-            print(f"⚠️ Unexpected input dimension: {input_dim}. Using projection.")
+        # Dynamic feature dimension handling
+        if x.dim() == 4:  # [batch, channels, spatial, time]
+            # Handle EMG data format
+            if x.size(1) == 8 or x.size(1) == 200:
+                x = x.squeeze(2).permute(0, 2, 1)
+            elif x.size(2) == 8 or x.size(2) == 200:
+                x = x.squeeze(1).permute(0, 2, 1)
+            elif x.size(3) == 8 or x.size(3) == 200:
+                x = x.squeeze(2)
+            elif x.size(3) == 1 and (x.size(2) == 8 or x.size(2) == 200):
+                x = x.squeeze(3)
+        
+        # Handle PyG Batch objects
+        if isinstance(x, Batch):
+            x = to_dense_batch(x.x, x.batch)[0]
+        
+        # Get actual feature dimension
+        actual_dim = x.size(-1)
+        print(f"Detected actual feature dimension: {actual_dim}")
+        
+        # Dynamic projection for unexpected dimensions
+        if actual_dim != self.input_dim:
+            print(f"⚠️ Projecting features from {actual_dim} to {self.input_dim}")
             if not hasattr(self, 'dynamic_projection'):
-                self.dynamic_projection = nn.Linear(input_dim, self.input_dim).to(x.device)
+                self.dynamic_projection = nn.Linear(actual_dim, self.input_dim).to(device)
             x = self.dynamic_projection(x)
-        elif input_dim != self.input_dim:
-            if not hasattr(self, 'feature_projection'):
-                self.feature_projection = nn.Linear(input_dim, self.input_dim).to(x.device)
-            x = self.feature_projection(x)
         
         # Original processing
         original_x = x.clone()

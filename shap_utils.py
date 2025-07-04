@@ -15,15 +15,51 @@ from tqdm import tqdm
 import os
 import warnings
 from scipy.stats import entropy
+from torch_geometric.data import Data, Batch
 
 # Helper function to safely convert tensors to numpy
 def to_numpy(tensor):
     """Safely convert tensor to numpy array with detachment"""
     if isinstance(tensor, torch.Tensor):
         return tensor.detach().cpu().numpy()
+    elif isinstance(tensor, (Data, Batch)):
+        # Handle PyG data types
+        if hasattr(tensor, 'x'):
+            return tensor.x.detach().cpu().numpy()
+        elif hasattr(tensor, 'node_features'):
+            return tensor.node_features.detach().cpu().numpy()
+        return None
     return tensor
 
+def is_pyg_data(obj):
+    """Check if object is a PyG Data or Batch"""
+    return isinstance(obj, (Data, Batch)) or hasattr(obj, 'to_data_list')
+
+def get_pyg_tensor(batch):
+    """Extract feature tensor from PyG batch"""
+    if hasattr(batch, 'x'):
+        return batch.x
+    elif hasattr(batch, 'node_features'):
+        return batch.node_features
+    return None
+
+def get_pyg_batch_size(batch):
+    """Get batch size from PyG data"""
+    if hasattr(batch, 'batch'):
+        return int(batch.batch.max()) + 1
+    elif hasattr(batch, 'num_graphs'):
+        return batch.num_graphs
+    return 1
+
 def safe_forward(model, x):
+    """
+    Forward pass that handles PyG data types
+    """
+    # Handle PyG data separately
+    if is_pyg_data(x):
+        return safe_forward_pyg(model, x)
+    
+    # Original tensor handling
     x = x.clone().requires_grad_(True)
     
     # Disable inplace operations
@@ -35,9 +71,31 @@ def safe_forward(model, x):
     
     try:
         with torch.enable_grad():
-            # Direct forward pass
-            output = model(x)
-            return output
+            return model(x)
+    finally:
+        # Restore inplace states
+        for name, module in model.named_modules():
+            if name in original_states:
+                module.inplace = original_states[name]
+
+def safe_forward_pyg(model, data):
+    """Special forward pass for PyG data"""
+    # Disable inplace operations
+    original_states = {}
+    for name, module in model.named_modules():
+        if hasattr(module, 'inplace'):
+            original_states[name] = module.inplace
+            module.inplace = False
+    
+    try:
+        with torch.enable_grad():
+            # Clone and set requires_grad on node features
+            data = data.clone()
+            if hasattr(data, 'x'):
+                data.x = data.x.clone().requires_grad_(True)
+            elif hasattr(data, 'node_features'):
+                data.node_features = data.node_features.clone().requires_grad_(True)
+            return model(data)
     finally:
         # Restore inplace states
         for name, module in model.named_modules():
@@ -45,60 +103,73 @@ def safe_forward(model, x):
                 module.inplace = original_states[name]
 
 class PredictWrapper(torch.nn.Module):
+    """Wrapper that handles PyG data for SHAP compatibility"""
     def __init__(self, model):
         super().__init__()
         self.model = model
         
     def forward(self, x):
-        output = safe_forward(self.model, x)
-        # Return only logits if model returns tuple (logits, embeddings)
-        return output[0] if isinstance(output, tuple) else output
-
-from torch_geometric.data import Batch
+        # Handle PyG data differently
+        if is_pyg_data(x):
+            return safe_forward_pyg(self.model, x)
+        return safe_forward(self.model, x)
 
 def get_background_batch(loader, size=64):
-    background_list = []
+    """Get a batch of background samples for SHAP"""
+    background = []
     for batch in loader:
-        data_batch = batch[0]  # Get DataBatch object
-        data_list = data_batch.to_data_list()
-        background_list.extend(data_list)
-        if len(background_list) >= size:
+        background.append(batch[0])
+        if len(background) >= size:
             break
-    return Batch.from_data_list(background_list[:size])
+    
+    # Handle PyG data
+    if is_pyg_data(background[0]):
+        return Batch.from_data_list(background[:size])
+    return torch.cat(background, dim=0)[:size]
 
-# Add this helper function at the top
-def move_to_device(data, device):
-    """Move PyG Batch or Tensor to device"""
-    if hasattr(data, 'to'):
-        return data.to(device)
-    elif isinstance(data, (list, tuple)):
-        return [move_to_device(d, device) for d in data]
-    return data
-
-# Update safe_compute_shap_values function
 def safe_compute_shap_values(model, background, inputs, nsamples=200):
+    """
+    Compute SHAP values safely with PyG support
+    """
     try:
         # Get model device
         device = next(model.parameters()).device
         
         # Move data to model's device
-        background = move_to_device(background, device)
-        inputs = move_to_device(inputs, device)
+        background = background.to(device)
+        inputs = inputs.to(device)
         
         wrapped_model = PredictWrapper(model)
-        explainer = shap.DeepExplainer(
-            wrapped_model,
-            background,
-        )
+        
+        # For PyG data, we need to use a different approach
+        if is_pyg_data(background):
+            # Use first sample as background
+            if hasattr(background, 'to_data_list'):
+                background_list = background.to_data_list()
+                background_sample = background_list[0]
+            else:
+                background_sample = background
+            
+            explainer = shap.DeepExplainer(
+                wrapped_model,
+                background_sample,
+            )
+        else:
+            explainer = shap.DeepExplainer(
+                wrapped_model,
+                background,
+            )
+        
+        # Compute SHAP values
         shap_values = explainer.shap_values(
             inputs,
             check_additivity=False
         )
+        
         return shap.Explanation(
             values=shap_values,
             base_values=explainer.expected_value,
             data=to_numpy(inputs)
-        )
     except Exception as e:
         print(f"SHAP computation failed: {str(e)}")
         import traceback

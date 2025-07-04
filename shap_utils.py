@@ -31,11 +31,7 @@ def to_numpy(tensor):
         return None
     return tensor
 
-def is_pyg_data(obj):
-    """Check if object is a PyG Data or Batch"""
-    return isinstance(obj, (Data, Batch)) or hasattr(obj, 'to_data_list')
-
-def get_pyg_tensor(batch):
+def extract_pyg_features(batch):
     """Extract feature tensor from PyG batch"""
     if hasattr(batch, 'x'):
         return batch.x
@@ -55,11 +51,11 @@ def safe_forward(model, x):
     """
     Forward pass that handles PyG data types
     """
-    # Handle PyG data separately
-    if is_pyg_data(x):
+    # For PyG data, use special handling
+    if isinstance(x, (Data, Batch)) or hasattr(x, 'to_data_list'):
         return safe_forward_pyg(model, x)
     
-    # Original tensor handling
+    # Standard tensor handling
     x = x.clone().requires_grad_(True)
     
     # Disable inplace operations
@@ -110,7 +106,7 @@ class PredictWrapper(torch.nn.Module):
         
     def forward(self, x):
         # Handle PyG data differently
-        if is_pyg_data(x):
+        if isinstance(x, (Data, Batch)) or hasattr(x, 'to_data_list'):
             return safe_forward_pyg(self.model, x)
         return safe_forward(self.model, x)
 
@@ -123,7 +119,7 @@ def get_background_batch(loader, size=64):
             break
     
     # Handle PyG data
-    if is_pyg_data(background[0]):
+    if isinstance(background[0], (Data, Batch)) or hasattr(background[0], 'to_data_list'):
         return Batch.from_data_list(background[:size])
     return torch.cat(background, dim=0)[:size]
 
@@ -141,36 +137,67 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
         
         wrapped_model = PredictWrapper(model)
         
-        # For PyG data, we need to use a different approach
-        if is_pyg_data(background):
-            # Use first sample as background
-            if hasattr(background, 'to_data_list'):
-                background_list = background.to_data_list()
-                background_sample = background_list[0]
-            else:
-                background_sample = background
+        # For PyG data, we need to convert to tensors for SHAP compatibility
+        if isinstance(background, (Data, Batch)) or hasattr(background, 'to_data_list'):
+            # Extract features from PyG data
+            background_features = extract_pyg_features(background)
+            inputs_features = extract_pyg_features(inputs)
             
+            # Create a tensor-based wrapper that reconstructs PyG objects
+            class TensorWrapper(torch.nn.Module):
+                def __init__(self, model, background):
+                    super().__init__()
+                    self.model = model
+                    self.background = background
+                    
+                def forward(self, x):
+                    # Reconstruct PyG data from features
+                    if isinstance(self.background, Batch):
+                        # For batch data, reconstruct each graph
+                        batch_list = []
+                        for i in range(len(x)):
+                            data = self.background[i].clone()
+                            if hasattr(data, 'x'):
+                                data.x = x[i]
+                            elif hasattr(data, 'node_features'):
+                                data.node_features = x[i]
+                            batch_list.append(data)
+                        return wrapped_model(Batch.from_data_list(batch_list))
+                    else:
+                        # For single graph
+                        data = self.background.clone()
+                        if hasattr(data, 'x'):
+                            data.x = x
+                        elif hasattr(data, 'node_features'):
+                            data.node_features = x
+                        return wrapped_model(data)
+            
+            # Create explainer with tensor-based wrapper
             explainer = shap.DeepExplainer(
-                wrapped_model,
-                background_sample,
+                TensorWrapper(wrapped_model, background),
+                background_features.unsqueeze(0) if background_features.dim() == 1 else background_features
+            )
+            
+            # Compute SHAP values
+            shap_values = explainer.shap_values(
+                inputs_features.unsqueeze(0) if inputs_features.dim() == 1 else inputs_features,
+                check_additivity=False
             )
         else:
+            # Standard tensor handling
             explainer = shap.DeepExplainer(
                 wrapped_model,
                 background,
             )
-        
-        # Compute SHAP values
-        shap_values = explainer.shap_values(
-            inputs,
-            check_additivity=False
-        )
+            shap_values = explainer.shap_values(
+                inputs,
+                check_additivity=False
+            )
         
         return shap.Explanation(
             values=shap_values,
             base_values=explainer.expected_value,
             data=to_numpy(inputs)
-        )
     except Exception as e:
         print(f"SHAP computation failed: {str(e)}")
         import traceback

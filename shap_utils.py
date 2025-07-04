@@ -206,27 +206,27 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
             # Create explainer with tensor-based wrapper
             tensor_wrapper = TensorWrapper(wrapped_model, background)
             
-            # Create explainer with reduced nsamples to avoid memory issues
+            # Create explainer
             explainer = shap.DeepExplainer(
                 tensor_wrapper,
-                background_features,
-                nsamples=min(nsamples, 50)  # Reduce samples for large inputs
+                background_features
             )
-            # Compute SHAP values
+            
+            # Compute SHAP values with reduced nsamples to avoid memory issues
             shap_values = explainer.shap_values(
                 inputs_features,
-                check_additivity=False
-            )
+                check_additivity=False,
+                nsamples=min(nsamples, 50)  # Reduce samples for large inputs
         else:
             # Standard tensor handling
             explainer = shap.DeepExplainer(
                 wrapped_model,
                 background,
-                nsamples=nsamples
             )
             shap_values = explainer.shap_values(
                 inputs,
-                check_additivity=False
+                check_additivity=False,
+                nsamples=nsamples
             )
         
         return shap.Explanation(

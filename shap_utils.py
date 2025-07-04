@@ -37,6 +37,10 @@ def extract_pyg_features(batch):
         return batch.x
     elif hasattr(batch, 'node_features'):
         return batch.node_features
+    # Try to find the feature tensor by name
+    for attr in ['features', 'feat', 'data']:
+        if hasattr(batch, attr):
+            return getattr(batch, attr)
     return None
 
 def get_pyg_batch_size(batch):
@@ -155,14 +159,25 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
                     if isinstance(self.background, Batch):
                         # For batch data, reconstruct each graph
                         batch_list = []
-                        for i in range(len(x)):
+                        start_idx = 0
+                        for i in range(len(self.background)):
                             data = self.background[i].clone()
+                            num_nodes = data.num_nodes
+                            node_features = x[start_idx:start_idx+num_nodes]
+                            start_idx += num_nodes
+                            
                             if hasattr(data, 'x'):
-                                data.x = x[i]
+                                data.x = node_features
                             elif hasattr(data, 'node_features'):
-                                data.node_features = x[i]
+                                data.node_features = node_features
+                            else:
+                                # Try to set features by name
+                                for attr in ['features', 'feat', 'data']:
+                                    if hasattr(data, attr):
+                                        setattr(data, attr, node_features)
+                                        break
                             batch_list.append(data)
-                        return wrapped_model(Batch.from_data_list(batch_list))
+                        return self.model(Batch.from_data_list(batch_list))
                     else:
                         # For single graph
                         data = self.background.clone()
@@ -170,17 +185,26 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
                             data.x = x
                         elif hasattr(data, 'node_features'):
                             data.node_features = x
-                        return wrapped_model(data)
+                        else:
+                            # Try to set features by name
+                            for attr in ['features', 'feat', 'data']:
+                                if hasattr(data, attr):
+                                    setattr(data, attr, x)
+                                    break
+                        return self.model(data)
             
             # Create explainer with tensor-based wrapper
+            tensor_wrapper = TensorWrapper(wrapped_model, background)
+            
+            # Create explainer
             explainer = shap.DeepExplainer(
-                TensorWrapper(wrapped_model, background),
-                background_features.unsqueeze(0) if background_features.dim() == 1 else background_features
+                tensor_wrapper,
+                background_features
             )
             
             # Compute SHAP values
             shap_values = explainer.shap_values(
-                inputs_features.unsqueeze(0) if inputs_features.dim() == 1 else inputs_features,
+                inputs_features,
                 check_additivity=False
             )
         else:

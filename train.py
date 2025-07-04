@@ -1063,9 +1063,10 @@ def main(args):
                         break
                 
                 if background_list:
-                    background = Batch.from_data_list(background_list[:64])
+                    # For GNN: use first sample as background
+                    background = background_list[0]
                     X_eval = Batch.from_data_list(background_list[:10])
-                    print(f"Created background batch with {len(background_list[:64])} graphs")
+                    print(f"Using first sample as background for GNN")
                     print(f"Created evaluation batch with {len(background_list[:10])} graphs")
                 else:
                     print("⚠️ Couldn't collect background data for SHAP")
@@ -1083,21 +1084,18 @@ def main(args):
                 # Disable inplace operations in the model
                 disable_inplace_relu(algorithm)
                 
-                # Create a prediction wrapper that handles both CNN and GNN inputs
+                # Create a prediction wrapper
                 class UnifiedPredictor(nn.Module):
                     def __init__(self, model):
                         super().__init__()
                         self.model = model
                         
                     def forward(self, x):
-                        # Handle GNN Batch objects
-                        if isinstance(x, Batch):
+                        if is_pyg_data(x):
                             return self.model.predict(x)
-                        # Handle list of Data objects
                         elif isinstance(x, list) and isinstance(x[0], Data):
                             batch = Batch.from_data_list(x)
                             return self.model.predict(batch)
-                        # Handle standard tensors
                         else:
                             return self.model.predict(x)
                 
@@ -1149,22 +1147,21 @@ def main(args):
                             X_eval_np = np.expand_dims(X_eval_np, axis=2)
                         else:
                             print(f"⚠️ Unexpected SHAP values dimension: {shap_vals.ndim}")
-                            print("Skipping visualization-specific reshaping")
                         
                         # Visualize the first sample
-                        plot_emg_shap_4d(X_eval_np[0], shap_vals[0], 
-                                         output_path=os.path.join(args.output, "shap_gnn_sample.html"))
+                        try:
+                            plot_emg_shap_4d(X_eval_np[0], shap_vals[0], 
+                                             output_path=os.path.join(args.output, "shap_gnn_sample.html"))
+                        except Exception as e:
+                            print(f"4D plot failed: {str(e)}")
                     else:
                         # Generate core visualizations for non-GNN data
                         try:
                             plot_summary(shap_vals, X_eval_np, 
                                         output_path=os.path.join(args.output, "shap_summary.png"))
-                        except IndexError as e:
-                            print(f"SHAP summary plot dimension error: {str(e)}")
-                            print(f"Using fallback 3D visualization instead")
-                            plot_emg_shap_4d(X_eval, shap_vals, 
-                                            output_path=os.path.join(args.output, "shap_3d_fallback.html"))
-                            
+                        except Exception as e:
+                            print(f"Summary plot failed: {str(e)}")
+                        
                         try:
                             overlay_signal_with_shap(X_eval_np[0], shap_vals, 
                                                     output_path=os.path.join(args.output, "shap_overlay.png"))

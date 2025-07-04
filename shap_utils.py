@@ -129,7 +129,7 @@ def get_background_batch(loader, size=64):
 
 def safe_compute_shap_values(model, background, inputs):
     """
-    Compute SHAP values safely with PyG support (robust version)
+    Compute SHAP values safely with PyG support (final robust version)
     """
     try:
         # Get model device
@@ -167,20 +167,16 @@ def safe_compute_shap_values(model, background, inputs):
                             data = self.background[i].clone()
                             num_nodes = data.num_nodes
                             
-                            # Get features for this graph
-                            if x.dim() == 1:
-                                # Flattened features
+                            # Handle different feature dimensions
+                            if x.dim() == 3:
+                                # Time series features: [batch, time, features]
                                 node_features = x[start_idx:start_idx+num_nodes]
-                                start_idx += num_nodes
-                            elif x.dim() == 2:
-                                # [nodes, features]
-                                node_features = x[start_idx:start_idx+num_nodes]
-                                start_idx += num_nodes
                             else:
-                                # [batch, time, features] - take first element
-                                node_features = x[i]
+                                # Standard features: [nodes, features]
+                                node_features = x[start_idx:start_idx+num_nodes]
                             
-                            # Apply features to graph
+                            start_idx += num_nodes
+                            
                             if hasattr(data, 'x'):
                                 data.x = node_features
                             elif hasattr(data, 'node_features'):
@@ -211,14 +207,19 @@ def safe_compute_shap_values(model, background, inputs):
             # Create explainer with tensor-based wrapper
             tensor_wrapper = TensorWrapper(wrapped_model, background)
             
-            # Create explainer - use PartitionExplainer as fallback
+            # Create explainer - use KernelExplainer as final fallback
             try:
                 # First try DeepExplainer
                 explainer = shap.DeepExplainer(tensor_wrapper, background_features)
                 shap_values = explainer.shap_values(inputs_features)
             except Exception as e:
-                print(f"DeepExplainer failed: {str(e)}. Using PartitionExplainer")
-                explainer = shap.PartitionExplainer(tensor_wrapper, background_features)
+                print(f"DeepExplainer failed: {str(e)}. Using KernelExplainer")
+                # Create summary of background data
+                background_summary = shap.sample(background_features, 10)
+                explainer = shap.KernelExplainer(
+                    tensor_wrapper,
+                    background_summary
+                )
                 shap_values = explainer.shap_values(inputs_features)
         else:
             # Standard tensor handling
@@ -226,15 +227,18 @@ def safe_compute_shap_values(model, background, inputs):
                 explainer = shap.DeepExplainer(wrapped_model, background)
                 shap_values = explainer.shap_values(inputs)
             except Exception as e:
-                print(f"DeepExplainer failed: {str(e)}. Using PartitionExplainer")
-                explainer = shap.PartitionExplainer(wrapped_model, background)
+                print(f"DeepExplainer failed: {str(e)}. Using KernelExplainer")
+                background_summary = shap.sample(background, 10)
+                explainer = shap.KernelExplainer(
+                    wrapped_model,
+                    background_summary
+                )
                 shap_values = explainer.shap_values(inputs)
         
         return shap.Explanation(
             values=shap_values,
             base_values=explainer.expected_value,
             data=to_numpy(inputs)
-        )
     except Exception as e:
         print(f"SHAP computation failed: {str(e)}")
         import traceback

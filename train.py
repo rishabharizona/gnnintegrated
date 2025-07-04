@@ -370,27 +370,36 @@ class EnhancedTemporalGCN(TemporalGCN):
                     param.data.fill_(0)
 
     def forward(self, x):
+        # Handle different input formats
         if hasattr(x, 'x') and hasattr(x, 'batch'):
             from torch_geometric.utils import to_dense_batch
             x, mask = to_dense_batch(x.x, x.batch)
         
-        if x.dim() == 4:
-            x = x.squeeze(2).permute(0, 2, 1)
+        # Handle various input dimensions
+        if x.dim() == 3:
+            # [batch, nodes, features] -> [batch, features, nodes]
+            x = x.permute(0, 2, 1)
+        elif x.dim() == 4:
+            # [batch, channels, height, width] -> [batch, channels, width] for temporal data
+            if x.size(2) == 1:  # Single spatial dimension
+                x = x.squeeze(2).permute(0, 2, 1)
+            else:
+                # Handle multi-dimensional spatial data
+                x = x.flatten(2, 3).permute(0, 2, 1)
         
-        if x.size(-1) not in [8, 16, 200]:
-            raise ValueError(f"Input features dim mismatch! Expected 8, 16 or 200, got {x.size(-1)}")
-
-        # Add projection for 16 features
-        if x.size(-1) == 16 and self.input_dim == 8:
-            if not hasattr(self, 'feature_projection_16'):
-                self.feature_projection_16 = nn.Linear(16, 8).to(x.device)
-            x = self.feature_projection_16(x)
-        
-        if x.size(-1) == 200 and self.input_dim == 8:
+        # Dynamic feature projection
+        input_dim = x.size(-1)
+        if input_dim not in [8, 16, 200]:
+            print(f"⚠️ Unexpected input dimension: {input_dim}. Using projection.")
+            if not hasattr(self, 'dynamic_projection'):
+                self.dynamic_projection = nn.Linear(input_dim, self.input_dim).to(x.device)
+            x = self.dynamic_projection(x)
+        elif input_dim != self.input_dim:
             if not hasattr(self, 'feature_projection'):
-                self.feature_projection = nn.Linear(200, 8).to(x.device)
+                self.feature_projection = nn.Linear(input_dim, self.input_dim).to(x.device)
             x = self.feature_projection(x)
         
+        # Original processing
         original_x = x.clone()
         
         gnn_features = x

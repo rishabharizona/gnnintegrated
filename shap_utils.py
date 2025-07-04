@@ -212,11 +212,20 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
                 background_features
             )
             
-            # Compute SHAP values with reduced nsamples to avoid memory issues
-            shap_values = explainer.shap_values(
-                inputs_features,
-                check_additivity=False,
-                nsamples=min(nsamples, 50)  # Reduce samples for large inputs
+            # Compute SHAP values - use max_evals instead of nsamples for newer SHAP versions
+            try:
+                # Try new parameter name first
+                shap_values = explainer.shap_values(
+                    inputs_features,
+                    check_additivity=False,
+                    max_evals=min(nsamples, 50)  # Use max_evals for newer SHAP versions
+                )
+            except TypeError:
+                # Fallback to old parameter name
+                shap_values = explainer.shap_values(
+                    inputs_features,
+                    check_additivity=False,
+                    nsamples=min(nsamples, 50)  # Use nsamples for older versions
             )
         else:
             # Standard tensor handling
@@ -224,11 +233,18 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
                 wrapped_model,
                 background,
             )
-            shap_values = explainer.shap_values(
-                inputs,
-                check_additivity=False,
-                nsamples=nsamples
-            )
+            try:
+                shap_values = explainer.shap_values(
+                    inputs,
+                    check_additivity=False,
+                    max_evals=nsamples
+                )
+            except TypeError:
+                shap_values = explainer.shap_values(
+                    inputs,
+                    check_additivity=False,
+                    nsamples=nsamples
+                )
         
         return shap.Explanation(
             values=shap_values,

@@ -1145,7 +1145,11 @@ def main(args):
                 # Check if SHAP computation succeeded
                 if shap_explanation is None:
                     print("⚠️ SHAP computation failed. Skipping analysis.")
-                    continue  # Skip the rest of SHAP analysis
+                    # Instead of continue, skip SHAP analysis by wrapping the rest in an else block
+                else:
+                    # Extract values from Explanation object
+                    shap_vals = shap_explanation.values
+                    print(f"SHAP values shape: {shap_vals.shape}")
                 
                 # Extract values from Explanation object
                 shap_vals = shap_explanation.values

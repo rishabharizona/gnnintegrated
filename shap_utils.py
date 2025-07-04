@@ -211,7 +211,7 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
                 tensor_wrapper,
                 background_features,
                 nsamples=min(nsamples, 50)  # Reduce samples for large inputs
-            
+            )
             # Compute SHAP values
             shap_values = explainer.shap_values(
                 inputs_features,

@@ -217,6 +217,7 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
                 inputs_features,
                 check_additivity=False,
                 nsamples=min(nsamples, 50)  # Reduce samples for large inputs
+            )
         else:
             # Standard tensor handling
             explainer = shap.DeepExplainer(

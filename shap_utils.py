@@ -66,18 +66,42 @@ def get_background_batch(loader, size=64):
             break
     return Batch.from_data_list(background_list[:size])
 
+# Add this helper function at the top
+def move_to_device(data, device):
+    """Move PyG Batch or Tensor to device"""
+    if hasattr(data, 'to'):
+        return data.to(device)
+    elif isinstance(data, (list, tuple)):
+        return [move_to_device(d, device) for d in data]
+    return data
+
+# Update safe_compute_shap_values function
 def safe_compute_shap_values(model, background, inputs, nsamples=200):
     try:
+        # Get model device
+        device = next(model.parameters()).device
+        
+        # Move data to model's device
+        background = move_to_device(background, device)
+        inputs = move_to_device(inputs, device)
+        
         wrapped_model = PredictWrapper(model)
-        explainer = shap.DeepExplainer(wrapped_model, background)
-        shap_values = explainer.shap_values(inputs, check_additivity=False)
+        explainer = shap.DeepExplainer(
+            wrapped_model,
+            background,
+        )
+        shap_values = explainer.shap_values(
+            inputs,
+            check_additivity=False
+        )
         return shap.Explanation(
             values=shap_values,
             base_values=explainer.expected_value,
             data=to_numpy(inputs)
-        )
     except Exception as e:
         print(f"SHAP computation failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def _get_shap_array(shap_values):

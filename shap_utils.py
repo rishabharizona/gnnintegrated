@@ -157,7 +157,12 @@ def safe_compute_shap_values(model, background, inputs):
                     self.model = model
                     self.background = background
                     self.device = next(model.parameters()).device
-                    
+                 # Ensure background features are properly formatted
+                if isinstance(background, (Data, Batch)):
+                    background_features = extract_pyg_features(background)
+                    if background_features.dim() == 2:
+                        background_features = background_features.unsqueeze(0)  # Add batch dimension   
+                        
                 def forward(self, x):
                     # Convert numpy arrays to tensors
                     if isinstance(x, np.ndarray):

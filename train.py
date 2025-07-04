@@ -353,10 +353,9 @@ class EnhancedTemporalGCN(TemporalGCN):
         # SHAP-specific components
         self.shap_projection = None
         self.shap_classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(8 * 200, 256),  # Match input dimensions [8, 200]
-            nn.ReLU(),
-            nn.Linear(256, num_classes)
+        nn.Linear(8*200, 256),
+        nn.ReLU(),
+        nn.Linear(256, num_classes)
         )
         self._init_weights()
         
@@ -470,16 +469,20 @@ class EnhancedTemporalGCN(TemporalGCN):
         else:
             features = x
             
-        # Debug output
-        print(f"SHAP mode input shape: {features.shape}")
-        
-        # Handle feature dimensions - preserve original shape
-        if features.dim() == 3:
-            # [batch, channels, time] - flatten channels and time
+        # Handle feature dimensions - flatten properly
+        if features.dim() == 2:  # [nodes, features]
+            features = features.view(1, -1)  # Convert to [1, nodes*features]
+        elif features.dim() == 3:  # [batch, nodes, features]
             features = features.flatten(start_dim=1)
-        elif features.dim() == 4:
-            # [batch, channels, height, width] - convert to 2D
+        elif features.dim() == 4:  # [batch, ch, spatial, time]
             features = features.flatten(start_dim=1)
+            
+        # Ensure correct dimensionality for classifier
+        if features.size(1) != 8*200:
+            # Add projection if needed
+            if not hasattr(self, 'shap_projection'):
+                self.shap_projection = nn.Linear(features.size(1), 8*200).to(features.device)
+            features = self.shap_projection(features)
         
         # Directly pass to SHAP classifier
         return self.shap_classifier(features)

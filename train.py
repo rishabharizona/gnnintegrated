@@ -462,35 +462,35 @@ class EnhancedTemporalGCN(TemporalGCN):
         return output
     
     # In EnhancedTemporalGCN.forward_shap (replace lines 480-485)
-def forward_shap(self, x):
-    """Simplified forward pass for SHAP compatibility"""
-    # Extract features from PyG objects if needed
-    if hasattr(x, 'x'):
-        features = x.x
-    else:
-        features = x
+    def forward_shap(self, x):
+        """Simplified forward pass for SHAP compatibility"""
+        # Extract features from PyG objects if needed
+        if hasattr(x, 'x'):
+            features = x.x
+        else:
+            features = x
+            
+        # Handle feature dimensions - flatten properly
+        if features.dim() == 2:  # [nodes, features]
+            features = features.view(1, -1)  # Convert to [1, nodes*features]
+        elif features.dim() == 3:  # [batch, nodes, features]
+            features = features.flatten(start_dim=1)
+        elif features.dim() == 4:  # [batch, ch, spatial, time]
+            features = features.flatten(start_dim=1)
         
-    # Handle feature dimensions - flatten properly
-    if features.dim() == 2:  # [nodes, features]
-        features = features.view(1, -1)  # Convert to [1, nodes*features]
-    elif features.dim() == 3:  # [batch, nodes, features]
-        features = features.flatten(start_dim=1)
-    elif features.dim() == 4:  # [batch, ch, spatial, time]
-        features = features.flatten(start_dim=1)
-    
-    # Get actual feature dimension
-    actual_dim = features.size(1)
-    expected_dim = 8 * 200
-    
-    # Create projection if needed and not exists
-    if actual_dim != expected_dim:
-        if self.shap_projection is None:
-            print(f"Creating SHAP projection: {actual_dim} -> {expected_dim}")
-            self.shap_projection = nn.Linear(actual_dim, expected_dim).to(features.device)
-        features = self.shap_projection(features)
-    
-    # Directly pass to SHAP classifier
-    return self.shap_classifier(features)
+        # Get actual feature dimension
+        actual_dim = features.size(1)
+        expected_dim = 8 * 200
+        
+        # Create projection if needed and not exists
+        if actual_dim != expected_dim:
+            if self.shap_projection is None:
+                print(f"Creating SHAP projection: {actual_dim} -> {expected_dim}")
+                self.shap_projection = nn.Linear(actual_dim, expected_dim).to(features.device)
+            features = self.shap_projection(features)
+        
+        # Directly pass to SHAP classifier
+        return self.shap_classifier(features)
 # ======================= DOMAIN ADVERSARIAL LOSS =======================
 class DomainAdversarialLoss(nn.Module):
     def __init__(self, bottleneck_dim):

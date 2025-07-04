@@ -156,8 +156,13 @@ def safe_compute_shap_values(model, background, inputs):
                     super().__init__()
                     self.model = model
                     self.background = background
+                    self.device = next(model.parameters()).device
                     
                 def forward(self, x):
+                    # Convert numpy arrays to tensors
+                    if isinstance(x, np.ndarray):
+                        x = torch.tensor(x, dtype=torch.float32).to(self.device)
+                    
                     # Reconstruct PyG data from features
                     if isinstance(self.background, Batch):
                         # For batch data, reconstruct each graph
@@ -214,13 +219,19 @@ def safe_compute_shap_values(model, background, inputs):
                 shap_values = explainer.shap_values(inputs_features)
             except Exception as e:
                 print(f"DeepExplainer failed: {str(e)}. Using KernelExplainer")
-                # Create summary of background data
-                background_summary = shap.sample(background_features, 10)
+                # Convert to numpy for KernelExplainer
+                bg_numpy = background_features.cpu().detach().numpy()
+                inputs_numpy = inputs_features.cpu().detach().numpy()
+                
+                # Create model wrapper for KernelExplainer
+                def model_wrapper(x):
+                    return tensor_wrapper(x).detach().cpu().numpy()
+                
                 explainer = shap.KernelExplainer(
-                    tensor_wrapper,
-                    background_summary
+                    model_wrapper,
+                    bg_numpy
                 )
-                shap_values = explainer.shap_values(inputs_features)
+                shap_values = explainer.shap_values(inputs_numpy)
         else:
             # Standard tensor handling
             try:
@@ -228,18 +239,25 @@ def safe_compute_shap_values(model, background, inputs):
                 shap_values = explainer.shap_values(inputs)
             except Exception as e:
                 print(f"DeepExplainer failed: {str(e)}. Using KernelExplainer")
-                background_summary = shap.sample(background, 10)
+                # Convert to numpy for KernelExplainer
+                bg_numpy = background.cpu().detach().numpy()
+                inputs_numpy = inputs.cpu().detach().numpy()
+                
+                # Create model wrapper for KernelExplainer
+                def model_wrapper(x):
+                    x_tensor = torch.tensor(x, dtype=torch.float32).to(device)
+                    return wrapped_model(x_tensor).detach().cpu().numpy()
+                
                 explainer = shap.KernelExplainer(
-                    wrapped_model,
-                    background_summary
+                    model_wrapper,
+                    bg_numpy
                 )
-                shap_values = explainer.shap_values(inputs)
+                shap_values = explainer.shap_values(inputs_numpy)
         
         return shap.Explanation(
             values=shap_values,
             base_values=explainer.expected_value,
             data=to_numpy(inputs)
-        )
     except Exception as e:
         print(f"SHAP computation failed: {str(e)}")
         import traceback

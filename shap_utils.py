@@ -127,9 +127,9 @@ def get_background_batch(loader, size=64):
         return Batch.from_data_list(background[:size])
     return torch.cat(background, dim=0)[:size]
 
-def safe_compute_shap_values(model, background, inputs, nsamples=200):
+def safe_compute_shap_values(model, background, inputs):
     """
-    Compute SHAP values safely with PyG support
+    Compute SHAP values safely with PyG support (universal version)
     """
     try:
         # Get model device
@@ -212,39 +212,12 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
                 background_features
             )
             
-            # Compute SHAP values - use max_evals instead of nsamples for newer SHAP versions
-            try:
-                # Try new parameter name first
-                shap_values = explainer.shap_values(
-                    inputs_features,
-                    check_additivity=False,
-                    max_evals=min(nsamples, 50)  # Use max_evals for newer SHAP versions
-                )
-            except TypeError:
-                # Fallback to old parameter name
-                shap_values = explainer.shap_values(
-                    inputs_features,
-                    check_additivity=False,
-                    nsamples=min(nsamples, 50)  # Use nsamples for older versions
-            )
+            # Universal SHAP computation without parameters
+            shap_values = explainer.shap_values(inputs_features)
         else:
             # Standard tensor handling
-            explainer = shap.DeepExplainer(
-                wrapped_model,
-                background,
-            )
-            try:
-                shap_values = explainer.shap_values(
-                    inputs,
-                    check_additivity=False,
-                    max_evals=nsamples
-                )
-            except TypeError:
-                shap_values = explainer.shap_values(
-                    inputs,
-                    check_additivity=False,
-                    nsamples=nsamples
-                )
+            explainer = shap.DeepExplainer(wrapped_model, background)
+            shap_values = explainer.shap_values(inputs)
         
         return shap.Explanation(
             values=shap_values,

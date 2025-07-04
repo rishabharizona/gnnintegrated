@@ -299,7 +299,7 @@ class EnhancedTemporalGCN(TemporalGCN):
         self.use_tcn = use_tcn
         self.shap_mode = False  # Flag for SHAP compatibility mode
         
-        # Existing components from original implementation
+        # Existing components
         self.skip_conn = nn.Linear(self.hidden_dim, self.output_dim)
         
         self.gnn_layers = nn.ModuleList()
@@ -353,11 +353,12 @@ class EnhancedTemporalGCN(TemporalGCN):
         # SHAP-specific components
         self.shap_projection = None
         self.shap_classifier = nn.Sequential(
-            nn.Linear(self.output_dim, 128),
+            nn.Flatten(),
+            nn.Linear(8 * 200, 256),  # Match input dimensions [8, 200]
             nn.ReLU(),
-            nn.Linear(128, num_classes)
+            nn.Linear(256, num_classes)
         )
-        self._init_weights()
+        self._init_weights(
         
     def _init_weights(self):
         for layer in self.gnn_layers:
@@ -375,6 +376,7 @@ class EnhancedTemporalGCN(TemporalGCN):
                     nn.init.orthogonal_(param.data)
                 elif 'bias' in name:
                     param.data.fill_(0)
+        # Initialize SHAP classifier weights
         for layer in self.shap_classifier:
             if isinstance(layer, nn.Linear):
                 nn.init.xavier_uniform_(layer.weight)
@@ -469,25 +471,15 @@ class EnhancedTemporalGCN(TemporalGCN):
         # Debug output
         print(f"SHAP mode input shape: {features.shape}")
         
-        # Handle feature dimensions
+        # Handle feature dimensions - preserve original shape
         if features.dim() == 3:
-            # [batch, time, features] - take mean across time
-            features = features.mean(dim=1)
+            # [batch, channels, time] - flatten channels and time
+            features = features.flatten(start_dim=1)
         elif features.dim() == 4:
             # [batch, channels, height, width] - convert to 2D
             features = features.flatten(start_dim=1)
         
-        # Get current feature dimension
-        current_dim = features.size(-1)
-        
-        # Apply projection if needed
-        if current_dim != self.input_dim:
-            print(f"⚠️ SHAP Projecting features from {current_dim} to {self.input_dim}")
-            if self.shap_projection is None:
-                self.shap_projection = nn.Linear(current_dim, self.input_dim).to(features.device)
-            features = self.shap_projection(features)
-        
-        # Simplified processing - just pass through SHAP classifier
+        # Directly pass to SHAP classifier
         return self.shap_classifier(features)
 # ======================= DOMAIN ADVERSARIAL LOSS =======================
 class DomainAdversarialLoss(nn.Module):

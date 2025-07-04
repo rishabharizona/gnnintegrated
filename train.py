@@ -463,44 +463,44 @@ class EnhancedTemporalGCN(TemporalGCN):
         return output
     
     # In EnhancedTemporalGCN.forward_shap
-def forward_shap(self, x):
-    """Simplified forward pass for SHAP compatibility"""
-    # Extract features from PyG objects if needed
-    if hasattr(x, 'x'):
-        features = x.x
-    else:
-        features = x
+    def forward_shap(self, x):
+        """Simplified forward pass for SHAP compatibility"""
+        # Extract features from PyG objects if needed
+        if hasattr(x, 'x'):
+            features = x.x
+        else:
+            features = x
+            
+        # Debug print
+        print(f"SHAP input shape: {features.shape}")
         
-    # Debug print
-    print(f"SHAP input shape: {features.shape}")
-    
-    # Handle feature dimensions - flatten properly
-    if features.dim() == 2:  # [nodes, features]
-        # For single graph: [8, 200] -> [1, 1600]
-        features = features.flatten().unsqueeze(0)
-    elif features.dim() == 3:  # [batch, nodes, features]
-        # For batch: [batch, 8, 200] -> [batch, 1600]
-        features = features.flatten(start_dim=1)
-    elif features.dim() == 4:  # [batch, ch, spatial, time]
-        features = features.flatten(start_dim=1)
-    
-    # Debug print
-    print(f"SHAP flattened shape: {features.shape}")
-    
-    # Get actual feature dimension
-    actual_dim = features.size(1)
-    expected_dim = 8 * 200
-    
-    # Create projection if needed and not exists
-    if actual_dim != expected_dim:
-        if self.shap_projection is None:
-            print(f"Creating SHAP projection: {actual_dim} -> {expected_dim}")
-            self.shap_projection = nn.Linear(actual_dim, expected_dim).to(features.device)
-        features = self.shap_projection(features)
-        print(f"Projected to: {features.shape}")
-    
-    # Directly pass to SHAP classifier
-    return self.shap_classifier(features)
+        # Handle feature dimensions - flatten properly
+        if features.dim() == 2:  # [nodes, features]
+            # For single graph: [8, 200] -> [1, 1600]
+            features = features.flatten().unsqueeze(0)
+        elif features.dim() == 3:  # [batch, nodes, features]
+            # For batch: [batch, 8, 200] -> [batch, 1600]
+            features = features.flatten(start_dim=1)
+        elif features.dim() == 4:  # [batch, ch, spatial, time]
+            features = features.flatten(start_dim=1)
+        
+        # Debug print
+        print(f"SHAP flattened shape: {features.shape}")
+        
+        # Get actual feature dimension
+        actual_dim = features.size(1)
+        expected_dim = 8 * 200
+        
+        # Create projection if needed and not exists
+        if actual_dim != expected_dim:
+            if self.shap_projection is None:
+                print(f"Creating SHAP projection: {actual_dim} -> {expected_dim}")
+                self.shap_projection = nn.Linear(actual_dim, expected_dim).to(features.device)
+            features = self.shap_projection(features)
+            print(f"Projected to: {features.shape}")
+        
+        # Directly pass to SHAP classifier
+        return self.shap_classifier(features)
 # ======================= DOMAIN ADVERSARIAL LOSS =======================
 class DomainAdversarialLoss(nn.Module):
     def __init__(self, bottleneck_dim):

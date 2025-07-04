@@ -396,7 +396,6 @@ class EnhancedTemporalGCN(TemporalGCN):
         
         # Get actual feature dimension
         actual_dim = x.size(-1)
-        print(f"Detected actual feature dimension: {actual_dim}")
         
         # Dynamic projection for unexpected dimensions
         if actual_dim != self.input_dim:

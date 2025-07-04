@@ -147,6 +147,8 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
             background_features = extract_pyg_features(background)
             inputs_features = extract_pyg_features(inputs)
             
+            print(f"Detected actual feature dimension: {background_features.shape} to {inputs_features.shape}")
+            
             # Create a tensor-based wrapper that reconstructs PyG objects
             class TensorWrapper(torch.nn.Module):
                 def __init__(self, model, background):
@@ -163,7 +165,15 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
                         for i in range(len(self.background)):
                             data = self.background[i].clone()
                             num_nodes = data.num_nodes
-                            node_features = x[start_idx:start_idx+num_nodes]
+                            
+                            # Handle different feature dimensions
+                            if x.dim() == 3:
+                                # Time series features: [batch, time, features]
+                                node_features = x[start_idx:start_idx+num_nodes]
+                            else:
+                                # Standard features: [nodes, features]
+                                node_features = x[start_idx:start_idx+num_nodes]
+                            
                             start_idx += num_nodes
                             
                             if hasattr(data, 'x'):
@@ -202,10 +212,11 @@ def safe_compute_shap_values(model, background, inputs, nsamples=200):
                 background_features
             )
             
-            # Compute SHAP values
+            # Compute SHAP values with reduced nsamples to avoid memory issues
             shap_values = explainer.shap_values(
                 inputs_features,
-                check_additivity=False
+                check_additivity=False,
+                nsamples=min(nsamples, 50)  # Reduce samples for large inputs
             )
         else:
             # Standard tensor handling

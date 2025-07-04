@@ -24,14 +24,6 @@ def to_numpy(tensor):
     return tensor
 
 def safe_forward(model, x):
-    """
-    Forward pass that:
-    1. Clones inputs to prevent modification
-    2. Temporarily disables inplace operations
-    3. Runs with gradient context
-    4. Returns outputs with gradients preserved
-    """
-    # Clone inputs to prevent inplace modification
     x = x.clone().requires_grad_(True)
     
     # Disable inplace operations
@@ -43,65 +35,50 @@ def safe_forward(model, x):
     
     try:
         with torch.enable_grad():
-            # Run model components separately
-            if hasattr(model, 'gnn_transform'):
-                x = model.gnn_transform(x)
-            features = model.featurizer(x)
-            bottleneck = model.bottleneck(features)
-            output = model.classifier(bottleneck)
+            # Direct forward pass
+            output = model(x)
             return output
     finally:
-        # Restore original inplace states
+        # Restore inplace states
         for name, module in model.named_modules():
             if name in original_states:
                 module.inplace = original_states[name]
 
 class PredictWrapper(torch.nn.Module):
-    """Wrapper that uses safe_forward for SHAP compatibility"""
     def __init__(self, model):
         super().__init__()
         self.model = model
         
     def forward(self, x):
-        return safe_forward(self.model, x)
+        output = safe_forward(self.model, x)
+        # Return only logits if model returns tuple (logits, embeddings)
+        return output[0] if isinstance(output, tuple) else output
+
+from torch_geometric.data import Batch
 
 def get_background_batch(loader, size=64):
-    """Get a batch of background samples for SHAP"""
-    background = []
+    background_list = []
     for batch in loader:
-        background.append(batch[0])
-        if len(background) >= size:
+        data_batch = batch[0]  # Get DataBatch object
+        data_list = data_batch.to_data_list()
+        background_list.extend(data_list)
+        if len(background_list) >= size:
             break
-    return torch.cat(background, dim=0)[:size]
+    return Batch.from_data_list(background_list[:size])
 
 def safe_compute_shap_values(model, background, inputs, nsamples=200):
-    """
-    Compute SHAP values safely with:
-    - Custom forward pass
-    - Gradient preservation
-    - Error handling
-    """
-    # Create the explainer with our safe wrapper
-    wrapped_model = PredictWrapper(model)
-    
-    # Use DeepExplainer for model-specific interpretation
-    explainer = shap.DeepExplainer(
-        wrapped_model,
-        background,
-    )
-    
-    # Compute SHAP values without additivity check
-    shap_values = explainer.shap_values(
-        inputs,
-        check_additivity=False  # Disables problematic gradient check
-    )
-    
-    # Convert to SHAP Explanation object for better handling
-    return shap.Explanation(
-        values=shap_values,
-        base_values=explainer.expected_value,
-        data=to_numpy(inputs)
-    )
+    try:
+        wrapped_model = PredictWrapper(model)
+        explainer = shap.DeepExplainer(wrapped_model, background)
+        shap_values = explainer.shap_values(inputs, check_additivity=False)
+        return shap.Explanation(
+            values=shap_values,
+            base_values=explainer.expected_value,
+            data=to_numpy(inputs)
+        )
+    except Exception as e:
+        print(f"SHAP computation failed: {str(e)}")
+        return None
 
 def _get_shap_array(shap_values):
     """Extract SHAP values array from Explanation object or list"""

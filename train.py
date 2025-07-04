@@ -356,7 +356,7 @@ class EnhancedTemporalGCN(TemporalGCN):
             nn.Linear(self.output_dim, 128),
             nn.ReLU(),
             nn.Linear(128, num_classes)
-        
+        )
         self._init_weights()
         
     def _init_weights(self):

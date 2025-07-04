@@ -1026,6 +1026,9 @@ def main(args):
     # ======================= SHAP EXPLAINABILITY =======================
     if getattr(args, 'enable_shap', False):
         print("\n📊 Running SHAP explainability...")
+        def is_pyg_data(obj):
+            """Check if object is a PyG Data or Batch"""
+            return isinstance(obj, (Data, Batch)) or hasattr(obj, 'to_data_list')
         try:
             # Prepare background and evaluation data
             background_list = []

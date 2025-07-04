@@ -358,7 +358,7 @@ class EnhancedTemporalGCN(TemporalGCN):
             nn.ReLU(),
             nn.Linear(256, num_classes)
         )
-        self._init_weights(
+        self._init_weights()
         
     def _init_weights(self):
         for layer in self.gnn_layers:
@@ -376,12 +376,14 @@ class EnhancedTemporalGCN(TemporalGCN):
                     nn.init.orthogonal_(param.data)
                 elif 'bias' in name:
                     param.data.fill_(0)
+                     
         # Initialize SHAP classifier weights
         for layer in self.shap_classifier:
             if isinstance(layer, nn.Linear):
                 nn.init.xavier_uniform_(layer.weight)
                 if layer.bias is not None:
                     nn.init.constant_(layer.bias, 0)
+                    
 
     def forward(self, x):
         """Main forward pass with SHAP mode support"""

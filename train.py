@@ -377,8 +377,14 @@ class EnhancedTemporalGCN(TemporalGCN):
         if x.dim() == 4:
             x = x.squeeze(2).permute(0, 2, 1)
         
-        if x.size(-1) not in [8, 200]:
-            raise ValueError(f"Input features dim mismatch! Expected 8 or 200, got {x.size(-1)}")
+        if x.size(-1) not in [8, 16, 200]:
+            raise ValueError(f"Input features dim mismatch! Expected 8, 16 or 200, got {x.size(-1)}")
+
+        # Add projection for 16 features
+        if x.size(-1) == 16 and self.input_dim == 8:
+            if not hasattr(self, 'feature_projection_16'):
+                self.feature_projection_16 = nn.Linear(16, 8).to(x.device)
+            x = self.feature_projection_16(x)
         
         if x.size(-1) == 200 and self.input_dim == 8:
             if not hasattr(self, 'feature_projection'):
@@ -1065,6 +1071,12 @@ def main(args):
                     # For GNN: use first sample as background
                     background = background_list[0]
                     X_eval = Batch.from_data_list(background_list[:10])
+                    # Add debug prints
+                    print(f"Background sample node features shape: {background.x.shape}")
+                    print(f"Evaluation batch node features shape: {X_eval.x.shape}")
+                    
+                    print(f"Using first sample as background for GNN")
+                    print(f"Created evaluation batch with {len(background_list[:10])} graphs")
                     print(f"Using first sample as background for GNN")
                     print(f"Created evaluation batch with {len(background_list[:10])} graphs")
                 else:

@@ -2441,15 +2441,29 @@ class Diversify(Algorithm):
 
     def predict(self, x):
 
-
-        """Enhanced prediction with dynamic normalization"""
-
-
+        """Enhanced prediction with dynamic normalization and SHAP support"""
+        # Handle SHAP mode first
+        if hasattr(self.featurizer, 'shap_mode') and self.featurizer.shap_mode:
+            # Extract features from PyG objects if needed
+            if hasattr(x, 'x'):
+                features = x.x
+            else:
+                features = x
+                
+            # Handle feature dimensions - flatten properly
+            if features.dim() == 2:  # [nodes, features]
+                features = features.view(1, -1)  # Convert to [1, nodes*features]
+            elif features.dim() == 3:  # [batch, nodes, features]
+                features = features.flatten(start_dim=1)
+            elif features.dim() == 4:  # [batch, ch, spatial, time]
+                features = features.flatten(start_dim=1)
+            
+            # Directly pass to SHAP classifier
+            return self.featurizer.shap_classifier(features)
+    
+        # Original prediction code
         if not isinstance(x, (Data, Batch)):
-
-
             x = self.ensure_correct_dimensions(x)
-
 
         
 

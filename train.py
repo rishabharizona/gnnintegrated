@@ -1024,7 +1024,6 @@ def main(args):
     print(f'\n🎯 Final Target Accuracy: {target_acc:.4f}')
     
     # ======================= SHAP EXPLAINABILITY =======================
-    # ======================= SHAP EXPLAINABILITY =======================
     if getattr(args, 'enable_shap', False):
         print("\n📊 Running SHAP explainability...")
         try:
@@ -1135,9 +1134,18 @@ def main(args):
                 unified_predictor = UnifiedPredictor(algorithm).to(args.device)
                 unified_predictor.eval()
                 
+                # Move data to device
+                background = background.to(args.device)
+                X_eval = X_eval.to(args.device)
+                
                 # Compute SHAP values safely
                 print("Computing SHAP values...")
                 shap_explanation = safe_compute_shap_values(unified_predictor, background, X_eval)
+                
+                # Check if SHAP computation succeeded
+                if shap_explanation is None:
+                    print("⚠️ SHAP computation failed. Skipping analysis.")
+                    continue  # Skip the rest of SHAP analysis
                 
                 # Extract values from Explanation object
                 shap_vals = shap_explanation.values

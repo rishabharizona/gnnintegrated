@@ -1023,12 +1023,8 @@ def main(args):
             
     print(f'\n🎯 Final Target Accuracy: {target_acc:.4f}')
     
-    # ======================= SHAP EXPLAINABILITY =======================
     if getattr(args, 'enable_shap', False):
         print("\n📊 Running SHAP explainability...")
-        def is_pyg_data(obj):
-            """Check if object is a PyG Data or Batch"""
-            return isinstance(obj, (Data, Batch)) or hasattr(obj, 'to_data_list')
         try:
             # Prepare background and evaluation data
             background_list = []
@@ -1094,7 +1090,7 @@ def main(args):
                         self.model = model
                         
                     def forward(self, x):
-                        if is_pyg_data(x):
+                        if isinstance(x, (Data, Batch)) or hasattr(x, 'to_data_list'):
                             return self.model.predict(x)
                         elif isinstance(x, list) and isinstance(x[0], Data):
                             batch = Batch.from_data_list(x)
@@ -1292,6 +1288,7 @@ def main(args):
             print(f"[ERROR] SHAP analysis failed: {str(e)}")
             import traceback
             traceback.print_exc()
+    # ======================= END SHAP SECTION =======================
     # ======================= END SHAP SECTION =======================
         # ======================= END SHAP SECTION =======================
     

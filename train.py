@@ -285,16 +285,21 @@ class TemporalGCNLayer(nn.Module):
 
 # ======================= ENHANCED GNN ARCHITECTURE =======================
 class EnhancedTemporalGCN(TemporalGCN):
-    def __init__(self, *args, **kwargs):
-        self.n_layers = kwargs.pop('n_layers', 1)  # MINIMAL LAYERS
-        self.use_tcn = kwargs.pop('use_tcn', False)
+    def __init__(self, input_dim, hidden_dim, output_dim, graph_builder, 
+                 n_layers=1, use_tcn=False, lstm_hidden_size=64, 
+                 lstm_layers=1, bidirectional=False, num_classes=6):
+        super().__init__(input_dim, hidden_dim, output_dim, graph_builder)
         
-        lstm_hidden_size = kwargs.pop('lstm_hidden_size', 64)  # REDUCED
-        lstm_layers = kwargs.pop('lstm_layers', 1)
-        bidirectional = kwargs.pop('bidirectional', False)
+        # Store original parameters
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.graph_builder = graph_builder
+        self.n_layers = n_layers
+        self.use_tcn = use_tcn
+        self.shap_mode = False  # Flag for SHAP compatibility mode
         
-        super().__init__(*args, **kwargs)
-        
+        # Existing components from original implementation
         self.skip_conn = nn.Linear(self.hidden_dim, self.output_dim)
         
         self.gnn_layers = nn.ModuleList()
@@ -311,22 +316,22 @@ class EnhancedTemporalGCN(TemporalGCN):
         
         self.attention = nn.MultiheadAttention(
             embed_dim=self.hidden_dim,
-            num_heads=2,  # REDUCED HEADS
-            dropout=0.0,  # ZERO DROPOUT
+            num_heads=2,
+            dropout=0.0,
             batch_first=True
         )
         
         if self.use_tcn:
             tcn_layers = []
-            num_channels = [self.hidden_dim] * 2  # REDUCED LAYERS
-            kernel_size = 3  # REDUCED
+            num_channels = [self.hidden_dim] * 2
+            kernel_size = 3
             for i in range(len(num_channels)):
                 dilation = 2 ** i
                 in_channels = self.hidden_dim if i == 0 else num_channels[i-1]
                 out_channels = num_channels[i]
                 tcn_layers += [TemporalBlock(
                     in_channels, out_channels, kernel_size,
-                    stride=1, dilation=dilation, dropout=0.0  # ZERO DROPOUT
+                    stride=1, dilation=dilation, dropout=0.0
                 )]
             self.tcn = nn.Sequential(*tcn_layers)
             self.tcn_proj = nn.Linear(num_channels[-1], self.output_dim)
@@ -337,7 +342,7 @@ class EnhancedTemporalGCN(TemporalGCN):
                 num_layers=lstm_layers,
                 batch_first=True,
                 bidirectional=bidirectional,
-                dropout=0.0  # ZERO DROPOUT
+                dropout=0.0
             )
             lstm_output_dim = lstm_hidden_size * (2 if bidirectional else 1)
             self.lstm_proj = nn.Linear(lstm_output_dim, self.output_dim)
@@ -345,11 +350,13 @@ class EnhancedTemporalGCN(TemporalGCN):
         
         self.temporal_norm = nn.LayerNorm(self.output_dim)
         
-        self.projection_head = nn.Sequential(
-            nn.Linear(self.output_dim, self.output_dim),
-            nn.ReLU(),  # Changed from ReLU to ReLU (no change needed)
-            nn.Linear(self.output_dim, self.output_dim)
-        )
+        # SHAP-specific components
+        self.shap_projection = None
+        self.shap_classifier = nn.Sequential(
+            nn.Linear(self.output_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, num_classes)
+        
         self._init_weights()
         
     def _init_weights(self):
@@ -368,13 +375,18 @@ class EnhancedTemporalGCN(TemporalGCN):
                     nn.init.orthogonal_(param.data)
                 elif 'bias' in name:
                     param.data.fill_(0)
-        self.shap_mode = False
+        for layer in self.shap_classifier:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
+                if layer.bias is not None:
+                    nn.init.constant_(layer.bias, 0)
 
     def forward(self, x):
-        # Add SHAP compatibility mode
+        """Main forward pass with SHAP mode support"""
         if self.shap_mode:
             return self.forward_shap(x)
-        # Handle different input formats
+            
+        # Original forward pass implementation
         if hasattr(x, 'x') and hasattr(x, 'batch'):
             from torch_geometric.utils import to_dense_batch
             x, mask = to_dense_batch(x.x, x.batch)
@@ -403,19 +415,23 @@ class EnhancedTemporalGCN(TemporalGCN):
         
         # Dynamic projection for unexpected dimensions
         if actual_dim != self.input_dim:
-            print(f"⚠️ Projecting features from {actual_dim} to {self.input_dim}")
             if not hasattr(self, 'dynamic_projection'):
                 self.dynamic_projection = nn.Linear(actual_dim, self.input_dim).to(device)
             x = self.dynamic_projection(x)
         
-        # Original processing
+        # Continue with original processing
         original_x = x.clone()
+        
+        if x.size(-1) == 200 and self.input_dim == 8:
+            if not hasattr(self, 'feature_projection'):
+                self.feature_projection = nn.Linear(200, 8).to(x.device)
+            x = self.feature_projection(x)
         
         gnn_features = x
         for layer, norm in zip(self.gnn_layers, self.norms):
             gnn_features = layer(gnn_features)
             gnn_features = norm(gnn_features)
-            gnn_features = F.relu(gnn_features)  # Changed from gelu to relu
+            gnn_features = F.relu(gnn_features)
         
         attn_out, _ = self.attention(gnn_features, gnn_features, gnn_features)
         x = gnn_features + attn_out
@@ -441,23 +457,38 @@ class EnhancedTemporalGCN(TemporalGCN):
         output = gate * gnn_out + (1 - gate) * skip_out
         
         return output
+    
     def forward_shap(self, x):
         """Simplified forward pass for SHAP compatibility"""
-        # Bypass complex operations that might cause hook errors
+        # Extract features from PyG objects if needed
         if hasattr(x, 'x'):
             features = x.x
         else:
             features = x
             
-        # Simple feature projection
-        if features.size(-1) != self.input_dim:
-            if not hasattr(self, 'shap_projection'):
-                self.shap_projection = nn.Linear(features.size(-1), self.input_dim).to(features.device)
+        # Debug output
+        print(f"SHAP mode input shape: {features.shape}")
+        
+        # Handle feature dimensions
+        if features.dim() == 3:
+            # [batch, time, features] - take mean across time
+            features = features.mean(dim=1)
+        elif features.dim() == 4:
+            # [batch, channels, height, width] - convert to 2D
+            features = features.flatten(start_dim=1)
+        
+        # Get current feature dimension
+        current_dim = features.size(-1)
+        
+        # Apply projection if needed
+        if current_dim != self.input_dim:
+            print(f"⚠️ SHAP Projecting features from {current_dim} to {self.input_dim}")
+            if self.shap_projection is None:
+                self.shap_projection = nn.Linear(current_dim, self.input_dim).to(features.device)
             features = self.shap_projection(features)
         
-        # Simplified processing
-        features = features.mean(dim=1)  # Simple aggregation
-        return self.classifier(features)  # Direct classification
+        # Simplified processing - just pass through SHAP classifier
+        return self.shap_classifier(features)
 # ======================= DOMAIN ADVERSARIAL LOSS =======================
 class DomainAdversarialLoss(nn.Module):
     def __init__(self, bottleneck_dim):

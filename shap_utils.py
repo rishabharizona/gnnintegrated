@@ -145,18 +145,22 @@ def safe_compute_shap_values(model, background, inputs):
                 background_features = background_features.reshape(-1, TIMESTEPS)
                 inputs_features = inputs_features.reshape(-1, TIMESTEPS)
             
+            # In safe_compute_shap_values() -> TensorWrapper
             class TensorWrapper(torch.nn.Module):
                 def __init__(self, model, background):
                     super().__init__()
                     self.model = model
                     self.background = background
-                    self.orig_shape = extract_pyg_features(background).shape
                     self.device = next(model.parameters()).device
                     
                 def forward(self, x):
                     if isinstance(x, np.ndarray):
                         x = torch.tensor(x, dtype=torch.float32).to(self.device)
-                    x = x.reshape(-1, TIMESTEPS)  # Force 1600 timesteps
+                    
+                    # Reshape to [num_nodes, 1600]
+                    x = x.reshape(-1, 1600)
+                    
+                    # Reconstruct PyG data
                     if isinstance(self.background, Batch):
                         batch_list = []
                         start_idx = 0

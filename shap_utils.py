@@ -339,7 +339,6 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     shap_vals = _get_shap_array(shap_vals)
     shap_vals = to_numpy(shap_vals)
     
-    # Debug print shapes
     print(f"[Overlay] Signal shape: {signal.shape}, SHAP shape: {shap_vals.shape}")
     
     # Aggregate multi-class SHAP values if needed
@@ -348,18 +347,22 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     
     # Process first sample and channel
     if signal.ndim == 3:  # (samples, channels, timesteps)
-        signal = signal[0, 0, :]  # First sample, first channel
+        # For (200, 1, 1) shape
+        if signal.shape[0] > signal.shape[2]:
+            signal = signal[:, 0, 0]  # Time major format
+        else:
+            signal = signal[0, 0, :]  # Sample major format
     elif signal.ndim > 1:
-        signal = signal[0].squeeze()
+        signal = signal.flatten()
     
+    # Process SHAP values
     if shap_vals.ndim > 1:
-        shap_vals = shap_vals[0].squeeze()
+        shap_vals = shap_vals[0]  # First sample
+    shap_vals = np.abs(shap_vals).flatten()
     
     # Ensure 1D arrays
     signal = signal.flatten()
-    shap_vals = shap_vals.flatten()
     
-    # Debug print processed shapes
     print(f"[Overlay] Processed signal length: {len(signal)}, SHAP length: {len(shap_vals)}")
     
     # Truncate to same length
@@ -517,84 +520,59 @@ def compute_confidence_change(base_preds, masked_preds):
 
 def compute_aopc(model, inputs, shap_values, steps=10):
     model.eval()
-    
-    # Convert to numpy for processing
-    inputs_np = to_numpy(inputs)
-    shap_vals_np = to_numpy(shap_values)
-    
-    # Aggregate multi-class SHAP values
-    if shap_vals_np.ndim == 3:  # (samples, timesteps, classes)
-        shap_vals_np = np.abs(shap_vals_np).max(axis=-1)  # (samples, timesteps)
-    
-    # Ensure we have at least 2 dimensions
-    if inputs_np.ndim < 2:
-        inputs_np = inputs_np[np.newaxis, :]
-    if shap_vals_np.ndim < 2:
-        shap_vals_np = shap_vals_np[np.newaxis, :]
-    
-    # Get batch size
-    batch_size = inputs_np.shape[0]
-    
-    # Reshape inputs to 4D: [batch, channels, spatial, time]
-    inputs_np = inputs_np.reshape(batch_size, -1, 1, inputs_np.shape[-1])
-    
-    # Reshape SHAP values to match inputs
-    shap_vals_np = shap_vals_np.reshape(batch_size, -1, 1, inputs_np.shape[-1])
-    
-    # Now we can safely get dimensions
-    n_channels = inputs_np.shape[1]
-    n_timesteps = inputs_np.shape[3]
     device = next(model.parameters()).device
+    
+    # Handle PyG inputs
+    if isinstance(inputs, (Data, Batch)):
+        # Extract features and create clone
+        features = inputs.clone()
+        orig_features = features.x.clone()
+        n_timesteps = orig_features.shape[1]
+    else:
+        # Standard tensor handling
+        orig_features = inputs.clone()
+        n_timesteps = inputs.shape[-1]
     
     with torch.no_grad():
         base_preds = model.predict(inputs)
         base_conf = torch.softmax(base_preds, dim=1).max(dim=1).values.cpu().numpy()
     
+    # Convert SHAP to numpy and aggregate
+    shap_vals_np = to_numpy(shap_values)
+    if shap_vals_np.ndim == 3:
+        shap_vals_np = np.abs(shap_vals_np).max(axis=-1)
+    
     aopc_scores = []
     
-    for i in range(batch_size):
-        # Get importance scores (average across channels and spatial)
-        importance = np.abs(shap_vals_np[i]).mean(axis=(0, 1))
+    for i in range(len(base_conf)):
+        importance = shap_vals_np[i].flatten()
+        sorted_indices = np.argsort(importance)[::-1]
         
-        # Ensure importance array matches time dimension
-        if len(importance) > n_timesteps:
-            importance = importance[:n_timesteps]
+        confidences = [base_conf[i]]
+        current_features = orig_features.clone()
         
-        sorted_indices = np.argsort(importance)[::-1].copy()
-        mask_indices_tensor = torch.from_numpy(sorted_indices).to(device)
-        
-        current_input = inputs[i].clone().detach()
-        original_conf = base_conf[i]
-        confidences = [original_conf]
-        
-        # Gradually remove features
         for step in range(1, steps + 1):
             k = int(n_timesteps * step / steps)
-            mask_indices = mask_indices_tensor[:k]
+            mask_indices = sorted_indices[:k]
             
-            # Ensure indices are within valid range
-            mask_indices = mask_indices[mask_indices < n_timesteps]
-            
-            modified_input = current_input.clone()
-            
-            # Correct indexing based on tensor dimensions
-            if modified_input.dim() == 3:  # (channels, spatial, timesteps)
-                modified_input[:, :, mask_indices] = 0
-            else:  # Handle unexpected dimensions
-                modified_input[..., mask_indices] = 0
+            # Create modified features
+            modified_features = current_features.clone()
+            if isinstance(inputs, (Data, Batch)):
+                # For PyG: modify node features
+                modified_features.x[:, mask_indices] = 0
+            else:
+                # For tensors
+                modified_features[..., mask_indices] = 0
             
             # Get prediction
             with torch.no_grad():
-                pred = model.predict(modified_input.unsqueeze(0))
-                conf = torch.softmax(pred, dim=1).max().item()
+                pred = model.predict(modified_features)
+                conf = torch.softmax(pred, dim=1)[i].max().item()
             confidences.append(conf)
         
-        # Calculate AOPC as average of incremental drops
-        incremental_drops = []
-        for j in range(1, len(confidences)):
-            incremental_drop = confidences[j-1] - confidences[j]
-            incremental_drops.append(incremental_drop)
-        
+        # Calculate incremental drops
+        incremental_drops = [confidences[j-1] - confidences[j] 
+                            for j in range(1, len(confidences))]
         aopc = np.mean(incremental_drops) if incremental_drops else 0
         aopc_scores.append(aopc)
     
@@ -697,72 +675,44 @@ def evaluate_advanced_shap_metrics(shap_values, inputs):
 # ================== 4D Visualizations =====================
 
 def plot_emg_shap_4d(inputs, shap_values, output_path):
-    """4D interactive plot of SHAP values using Plotly"""
-    # Ensure HTML format
+    """4D interactive plot with robust dimension handling"""
     if not output_path.endswith('.html'):
-        output_path = os.path.splitext(output_path)[0] + ".html"
+        output_path += ".html"
     
     inputs = to_numpy(inputs)
-    
-    # Extract SHAP values array
     shap_vals = to_numpy(_get_shap_array(shap_values))
     
-    # For first sample only
+    print(f"[4D Plot] Inputs shape: {inputs.shape}, SHAP shape: {shap_vals.shape}")
+    
+    # Process first sample
     sample_idx = 0
     inputs = inputs[sample_idx]
     shap_vals = shap_vals[sample_idx]
     
-    # Safely reduce dimensions - remove all singleton dimensions
+    # Squeeze singleton dimensions
+    inputs = np.squeeze(inputs)
     shap_vals = np.squeeze(shap_vals)
     
-    # Get the number of time steps from input shape
-    n_timesteps = inputs.shape[-1]
-    
-    # If SHAP values have more dimensions than expected, take first n_timesteps
-    if shap_vals.ndim == 1:
-        shap_vals = shap_vals.reshape(1, -1)
-    elif shap_vals.ndim > 1:
-        shap_vals = shap_vals.reshape(shap_vals.shape[0], -1)
-        shap_vals = shap_vals[:, :n_timesteps]
-    
-    # Ensure we have 2D array (channels, time_steps)
-    if shap_vals.ndim == 1:
-        shap_vals = shap_vals.reshape(1, n_timesteps)
-    elif shap_vals.ndim > 2:
-        shap_vals = shap_vals.reshape(-1, n_timesteps)
-    
-    n_channels = shap_vals.shape[0]
+    # Ensure SHAP is 1D (time importance)
+    if shap_vals.ndim > 1:
+        shap_vals = np.abs(shap_vals).max(axis=0)  # Max across channels
     
     # Create time steps array
-    time_steps = np.arange(n_timesteps)
+    time_steps = np.arange(len(shap_vals))
+    n_channels = 1  # EMG has 1 channel
     
     # Create Plotly figure
-    fig = make_subplots(rows=1, cols=1, specs=[[{'type': 'scatter3d'}]])
+    fig = go.Figure(data=[go.Scatter3d(
+        x=time_steps,
+        y=np.full_like(time_steps, 0),  # Single channel
+        z=shap_vals,
+        mode='lines',
+        name='Channel 1',
+        line=dict(width=4, color='blue')
+    ])
     
-    # Add traces for each channel
-    for ch in range(n_channels):
-        shap_mag = np.abs(shap_vals[ch])
-        
-        # Ensure arrays have same length
-        if len(shap_mag) != len(time_steps):
-            min_len = min(len(shap_mag), len(time_steps))
-            shap_mag = shap_mag[:min_len]
-            ch_time_steps = time_steps[:min_len]
-        else:
-            ch_time_steps = time_steps
-        
-        fig.add_trace(go.Scatter3d(
-            x=ch_time_steps,
-            y=np.full_like(ch_time_steps, ch),  # Constant channel index
-            z=shap_mag,
-            mode='lines',
-            name=f'Channel {ch+1}',
-            line=dict(width=4)
-        ))
-    
-    # Set layout
     fig.update_layout(
-        title='4D SHAP Value Distribution (Sample 0)',
+        title='4D SHAP Value Distribution (First Sample)',
         scene=dict(
             xaxis_title='Time Steps',
             yaxis_title='EMG Channels',
@@ -772,86 +722,46 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
         width=1000
     )
     
-    # Save as HTML
-    fig.write_html(output_path, include_plotlyjs='cdn')
-    print(f"✅ Saved interactive 4D SHAP plot: {output_path}")
+    fig.write_html(output_path)
+    print(f"✅ Saved 4D SHAP plot: {output_path}")
 
 def plot_4d_shap_surface(shap_values, output_path):
-    """Interactive surface plot of aggregated SHAP values using Plotly"""
-    # Ensure HTML format
+    """Surface plot with robust aggregation"""
     if not output_path.endswith('.html'):
-        output_path = os.path.splitext(output_path)[0] + ".html"
+        output_path += ".html"
     
-    # Extract SHAP values array
     shap_vals = to_numpy(_get_shap_array(shap_values))
     
-    # Safely reduce dimensions
-    shap_vals = np.squeeze(shap_vals)
+    print(f"[Surface] SHAP shape: {shap_vals.shape}")
     
-    # Handle different dimensions
-    if shap_vals.ndim == 4:
-        # Average across spatial dimension: (batch, channels, spatial, time) -> (batch, channels, time)
-        shap_vals = shap_vals.mean(axis=2)
+    # Aggregate multi-class SHAP values
+    if shap_vals.ndim == 3:
+        shap_vals = np.abs(shap_vals).max(axis=-1)  # (samples, timesteps)
     
     # Aggregate across samples
-    if shap_vals.ndim == 3:
-        # (batch, channels, time) -> (channels, time)
-        aggregated = np.abs(shap_vals).mean(axis=0)
-    elif shap_vals.ndim == 2:
-        # (channels, time)
-        aggregated = np.abs(shap_vals)
-    else:
-        raise ValueError(f"Unsupported SHAP dimension: {shap_vals.ndim}")
+    aggregated = np.abs(shap_vals).mean(axis=0)  # (timesteps,)
     
-    # Ensure proper orientation: (channels, time)
-    if aggregated.shape[0] > aggregated.shape[1]:
-        aggregated = aggregated.T
+    # Create grid (time steps only)
+    time_steps = np.arange(len(aggregated))
+    channels = np.array([0])  # Single channel
     
-    # Create grid
-    channels = np.arange(aggregated.shape[0])
-    time_steps = np.arange(aggregated.shape[1])
     X, Y = np.meshgrid(time_steps, channels)
+    Z = np.array([aggregated])  # (1, timesteps)
     
-    # Create Plotly surface plot
-    fig = go.Figure(data=[
-        go.Surface(
-            z=aggregated,
-            x=X,  # Time steps
-            y=Y,  # Channels
-            colorscale='Viridis',
-            opacity=0.9,
-            contours={
-                "z": {"show": True, "usecolormap": True, "highlightcolor": "limegreen", "project_z": True}
-            }
-        )
-    ])
-    
-    # Customize layout
+    fig = go.Figure(data=[go.Surface(z=Z, x=X, y=Y)])
     fig.update_layout(
-        title='SHAP Value Surface (Avg Across Samples)',
+        title='SHAP Value Surface',
         scene=dict(
             xaxis_title='Time Steps',
-            yaxis_title='EMG Channels',
-            zaxis_title='|SHAP Value|',
-            camera=dict(
-                eye=dict(x=1.5, y=-1.5, z=0.5)  # Adjust camera angle for better view
-            )
+            yaxis_title='Channel',
+            zaxis_title='|SHAP Value|'
         ),
-        margin=dict(l=0, r=0, b=0, t=40),
         height=800,
         width=1000
     )
     
-    # Add colorbar
-    fig.update_layout(coloraxis_colorbar=dict(
-        title="|SHAP|",
-        thickness=15,
-        len=0.5
-    ))
-    
-    # Save as HTML
-    fig.write_html(output_path, include_plotlyjs='cdn')
-    print(f"✅ Saved interactive SHAP surface plot: {output_path}")
+    fig.write_html(output_path)
+    print(f"✅ Saved SHAP surface: {output_path}")
 
 # ================== Similarity Metrics =====================
 

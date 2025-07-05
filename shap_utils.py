@@ -288,9 +288,10 @@ def safe_compute_shap_values(model, background, inputs):
         return None
     
 def _get_shap_array(shap_values):
-    """Extract SHAP values array from Explanation object or list"""
+    """Improved handling for multi-class outputs"""
     if isinstance(shap_values, list):
-        return shap_values[0].values
+        # Stack class explanations: (n_classes, samples, features) -> (samples, features, classes)
+        return np.stack([v.values if hasattr(v, 'values') else v for v in shap_values], axis=-1)
     elif hasattr(shap_values, 'values'):
         return shap_values.values
     return shap_values
@@ -339,25 +340,22 @@ def plot_summary(shap_values, features, output_path, max_display=20):
     print(f"✅ Saved summary plot: {output_path}")
 
 def overlay_signal_with_shap(signal, shap_vals, output_path):
-    """Overlay SHAP values on original signal (detached)"""
     signal = to_numpy(signal)
     shap_vals = _get_shap_array(shap_vals)
     shap_vals = to_numpy(shap_vals)
     
-    # Handle different dimensions
-    if signal.ndim > 1:
-        signal = signal.squeeze()
-    if shap_vals.ndim > 1:
-        shap_vals = shap_vals.squeeze()
+    # Aggregate multi-class SHAP values
+    if shap_vals.ndim == 3:  # (samples, timesteps, classes)
+        shap_vals = np.abs(shap_vals).max(axis=-1)  # Max importance across classes
     
-    # Flatten both arrays
-    signal_flat = signal.reshape(-1)
-    shap_vals_flat = np.abs(shap_vals).reshape(-1)  # Use absolute SHAP values
+    # Handle channel dimension
+    if signal.ndim == 3:  # (samples, channels, timesteps)
+        signal = signal[:, 0, :]  # Use first channel
+        shap_vals = shap_vals.mean(axis=0) if shap_vals.ndim == 2 else shap_vals
     
-    # Truncate to same length
-    min_len = min(len(signal_flat), len(shap_vals_flat))
-    signal_flat = signal_flat[:min_len]
-    shap_vals_flat = shap_vals_flat[:min_len]
+    # Process first sample only
+    signal = signal[0].flatten()
+    shap_vals = shap_vals[0].flatten()
     
     # Create plot
     plt.figure(figsize=(12, 6))
@@ -385,23 +383,19 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     print(f"✅ Saved signal overlay: {output_path}")
 
 def plot_shap_heatmap(shap_values, output_path):
-    """Heatmap of SHAP values across time and channels"""
-    # Extract SHAP values array
     shap_vals = _get_shap_array(shap_values)
-    
-    # Convert to numpy and take absolute values
     abs_vals = np.abs(to_numpy(shap_vals))
     
-    # Reduce to 2D: average across samples and spatial dimension
-    while abs_vals.ndim > 2:
-        abs_vals = abs_vals.mean(axis=tuple(range(abs_vals.ndim - 2)))
+    # Aggregate multi-class SHAP values
+    if abs_vals.ndim == 3:  # (samples, timesteps, classes)
+        abs_vals = abs_vals.max(axis=-1)  # Max importance per timestep
     
-    # Now abs_vals should be 2D: (channels, time_steps)
-    if abs_vals.ndim != 2:
-        raise ValueError(f"Could not reduce SHAP values to 2D array. Final shape: {abs_vals.shape}")
+    # Average across samples
+    aggregated = abs_vals.mean(axis=0)
     
-    # Transpose to (channels, time_steps)
-    aggregated = abs_vals.T
+    # Reshape to (channels, timesteps)
+    if aggregated.ndim == 1:  # (timesteps,)
+        aggregated = aggregated.reshape(1, -1)  # (1, timesteps)
     
     plt.figure(figsize=(12, 8))
     plt.imshow(aggregated, 

@@ -470,9 +470,7 @@ class EnhancedTemporalGCN(TemporalGCN):
             features = x.x
         else:
             features = x
-            
-        # Debug print
-        print(f"SHAP input shape: {features.shape}")
+        
         
         # Handle feature dimensions - flatten properly
         if features.dim() == 2:  # [nodes, features]
@@ -484,8 +482,6 @@ class EnhancedTemporalGCN(TemporalGCN):
         elif features.dim() == 4:  # [batch, ch, spatial, time]
             features = features.flatten(start_dim=1)
         
-        # Debug print
-        print(f"SHAP flattened shape: {features.shape}")
         
         # Get actual feature dimension
         actual_dim = features.size(1)
@@ -494,10 +490,9 @@ class EnhancedTemporalGCN(TemporalGCN):
         # Create projection if needed and not exists
         if actual_dim != expected_dim:
             if self.shap_projection is None:
-                print(f"Creating SHAP projection: {actual_dim} -> {expected_dim}")
                 self.shap_projection = nn.Linear(actual_dim, expected_dim).to(features.device)
             features = self.shap_projection(features)
-            print(f"Projected to: {features.shape}")
+            
         
         # Directly pass to SHAP classifier
         return self.shap_classifier(features)

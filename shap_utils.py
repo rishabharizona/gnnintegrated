@@ -708,7 +708,7 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
         z=shap_vals,
         mode='lines',
         name='Channel 1',
-        line=dict(width=4, color='blue')
+        line=dict(width=4, color='blue'))
     ])
     
     fig.update_layout(

@@ -273,7 +273,18 @@ def safe_compute_shap_values(model, background, inputs):
         import traceback
         traceback.print_exc()
         return None
+def ensure_tensor_on_device(tensor, device):
+    """Ensure tensor is on the specified device"""
+    if isinstance(tensor, (Data, Batch)):
+        return tensor.to(device)
+    return tensor.to(device) if isinstance(tensor, torch.Tensor) else tensor
 
+def safe_model_predict(model, inputs):
+    """Safe prediction with device handling"""
+    device = next(model.parameters()).device
+    inputs = ensure_tensor_on_device(inputs, device)
+    return model.predict(inputs)
+    
 def _get_shap_array(shap_values):
     """Extract SHAP values array from Explanation object or list"""
     if isinstance(shap_values, list):

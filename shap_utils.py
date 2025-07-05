@@ -127,25 +127,21 @@ def get_background_batch(loader, size=64):
     return torch.cat(background, dim=0)[:size]
 
 def safe_compute_shap_values(model, background, inputs):
-    """
-    Compute SHAP values safely with PyG support
-    """
     try:
         device = next(model.parameters()).device
         background = background.to(device)
         inputs = inputs.to(device)
         wrapped_model = PredictWrapper(model)
         
-        if isinstance(background, (Data, Batch)) or hasattr(background, 'to_data_list'):
-            background_features = extract_pyg_features(background)
-            inputs_features = extract_pyg_features(inputs)
+        if isinstance(background, (Data, Batch)):
+            # Extract actual timesteps from data
+            timesteps = background.x.shape[-1]
+            print(f"Detected timesteps: {timesteps}")
             
-            # Ensure 1600 timesteps
-            if background_features.shape[-1] != TIMESTEPS:
-                background_features = background_features.reshape(-1, TIMESTEPS)
-                inputs_features = inputs_features.reshape(-1, TIMESTEPS)
+            # Flatten features while preserving timesteps
+            background_features = background.x.reshape(-1, timesteps)
+            inputs_features = inputs.x.reshape(-1, timesteps)
             
-            # In safe_compute_shap_values() -> TensorWrapper
             class TensorWrapper(torch.nn.Module):
                 def __init__(self, model, background):
                     super().__init__()
@@ -157,29 +153,17 @@ def safe_compute_shap_values(model, background, inputs):
                     if isinstance(x, np.ndarray):
                         x = torch.tensor(x, dtype=torch.float32).to(self.device)
                     
-                    # Reshape to [num_nodes, 1600]
-                    x = x.reshape(-1, 1600)
+                    # Reshape to original format [num_nodes, channels, timesteps]
+                    x = x.reshape(self.background.x.shape)
                     
                     # Reconstruct PyG data
-                    if isinstance(self.background, Batch):
-                        batch_list = []
-                        start_idx = 0
-                        for i in range(len(self.background)):
-                            data = self.background[i].clone()
-                            num_nodes = data.num_nodes
-                            node_features = x[start_idx:start_idx+num_nodes]
-                            start_idx += num_nodes
-                            if hasattr(data, 'x'):
-                                data.x = node_features
-                            batch_list.append(data)
-                        return self.model(Batch.from_data_list(batch_list))
-                    else:
-                        data = self.background.clone()
-                        if hasattr(data, 'x'):
-                            data.x = x
-                        return self.model(data)
+                    data = self.background.clone()
+                    data.x = x
+                    return self.model(data)
             
             tensor_wrapper = TensorWrapper(wrapped_model, background)
+            explainer = shap.DeepExplainer(tensor_wrapper, background_features)
+            shap_values = explainer.shap_values(inputs_features)
             
             try:
                 explainer = shap.DeepExplainer(tensor_wrapper, background_features)

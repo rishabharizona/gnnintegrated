@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
 import shap
 import torch
 import torch.nn as nn
@@ -273,15 +276,19 @@ def plot_summary(shap_values, features, output_path, max_display=20):
     
     shap_array = _get_shap_array(shap_values)
     
+    # Handle single-sample case
+    if shap_array.ndim == 1:
+        shap_array = shap_array.reshape(1, -1)
+    
     # Aggregate multi-class SHAP values
-    if shap_array.ndim == 3:  # (samples, features, classes)
+    if shap_array.ndim == 3:
         shap_array = np.abs(shap_array).max(axis=2)  # Max importance across classes
     
-    # Flatten features to match SHAP dimensions
+    # Flatten features to 2D
     if features.ndim > 2:
         features = features.reshape(features.shape[0], -1)
     
-    # Ensure matching dimensions
+    # Ensure matching sample count
     min_samples = min(shap_array.shape[0], features.shape[0])
     if min_samples == 0:
         print("⚠️ No samples to plot")
@@ -291,21 +298,24 @@ def plot_summary(shap_values, features, output_path, max_display=20):
     features = features[:min_samples]
     
     # Create feature names
-    feature_names = [f"Feature {i}" for i in range(shap_array.shape[1])]
+    feature_names = [f"F{i}" for i in range(shap_array.shape[1])]
     
-    shap.summary_plot(
-        shap_array, 
-        features,
-        feature_names=feature_names,
-        plot_type="bar",
-        max_display=max_display,
-        show=False,
-        rng=42
-    )
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300)
-    plt.close()
-    print(f"✅ Saved summary plot: {output_path}")
+    try:
+        shap.summary_plot(
+            shap_array, 
+            features,
+            feature_names=feature_names,
+            plot_type="bar",
+            max_display=max_display,
+            show=False,
+            rng=42
+        )
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=300)
+        plt.close()
+        print(f"✅ Saved summary plot: {output_path}")
+    except Exception as e:
+        print(f"Summary plot failed: {str(e)}")
 
 def overlay_signal_with_shap(signal, shap_vals, output_path):
     """Overlay SHAP values on original signal"""
@@ -424,7 +434,7 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
         if shap_vals_np.ndim == 1:
             shap_vals_np = shap_vals_np[np.newaxis, :]
         
-        batch_size = inputs_np.shape[0]
+        batch_size = min(inputs_np.shape[0], shap_vals_np.shape[0])
         features_per_sample = inputs_np.shape[1]
         
         # Create masked inputs
@@ -564,7 +574,7 @@ def compute_pca_alignment(shap_values):
     vals = to_numpy(_get_shap_array(shap_values))
     flat_vals = vals.reshape(vals.shape[0], -1)
     
-    # Skip PCA if not enough samples
+    # Skip PCA if not enough samples/features
     if flat_vals.shape[0] < 2 or flat_vals.shape[1] < 2:
         return 0.0
     
@@ -604,7 +614,7 @@ def evaluate_advanced_shap_metrics(shap_values, inputs):
 
 # ================== 4D Visualizations =====================
 def plot_emg_shap_4d(inputs, shap_values, output_path):
-    """4D interactive plot with dynamic dimension handling"""
+    """Robust 4D interactive plot"""
     if not output_path.endswith('.html'):
         output_path += ".html"
     
@@ -615,64 +625,48 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     
     # Process first sample
     sample_idx = 0
-    inputs = inputs[sample_idx]
-    shap_vals = shap_vals[sample_idx]
+    if inputs.ndim > 3:
+        inputs = inputs[sample_idx]
+    if shap_vals.ndim > 3:
+        shap_vals = shap_vals[sample_idx]
     
     # For SHAP: take max across classes if needed
     if shap_vals.ndim > 1:
         shap_vals = np.abs(shap_vals).max(axis=0)
     
-    # Handle different dimensions
-    if inputs.ndim == 1:
-        # Single channel data
-        channels = 1
-        timesteps = inputs.size
-        inputs = inputs.reshape(1, timesteps)
-    elif inputs.ndim == 2:
-        # Multi-channel data
-        channels, timesteps = inputs.shape
-    else:
-        # Higher dimensions
-        inputs = inputs.squeeze()
-        if inputs.ndim == 1:
-            channels = 1
-            timesteps = inputs.size
-            inputs = inputs.reshape(1, timesteps)
-        elif inputs.ndim == 2:
-            channels, timesteps = inputs.shape
-        else:
-            print(f"⚠️ Unsupported input dimension: {inputs.ndim}")
-            return
+    # Flatten both arrays
+    inputs_flat = inputs.flatten()
+    shap_flat = shap_vals.flatten()
     
-    # Create meshgrid
+    # Create time steps
+    timesteps = min(len(inputs_flat), len(shap_flat))
     time_steps = np.arange(timesteps)
-    channel_idx = np.arange(channels)
-    X, Y = np.meshgrid(time_steps, channel_idx)
     
-    # Create 3D surface
     fig = go.Figure()
-    
-    for ch in range(channels):
-        # Get SHAP values for this channel
-        start_idx = ch * timesteps
-        end_idx = (ch+1) * timesteps
-        channel_shap = shap_vals[start_idx:end_idx] if shap_vals.size > timesteps else shap_vals
-        
-        fig.add_trace(go.Scatter3d(
-            x=time_steps,
-            y=np.full(timesteps, ch),
-            z=channel_shap,
-            mode='lines',
-            name=f'Channel {ch+1}',
-            line=dict(width=4)
-        ))
+    fig.add_trace(go.Scatter3d(
+        x=time_steps,
+        y=np.zeros(timesteps),
+        z=inputs_flat[:timesteps],
+        mode='lines',
+        name='Signal',
+        line=dict(width=4, color='blue')
+    ))
+    fig.add_trace(go.Scatter3d(
+        x=time_steps,
+        y=np.ones(timesteps),
+        z=shap_flat[:timesteps],
+        mode='lines',
+        name='SHAP',
+        line=dict(width=4, color='red')
+    ))
     
     fig.update_layout(
-        title='4D SHAP Value Distribution',
+        title='4D Signal and SHAP Comparison',
         scene=dict(
             xaxis_title='Time Steps',
-            yaxis_title='Channels',
-            zaxis_title='|SHAP Value|',
+            yaxis_title='Type',
+            zaxis_title='Value',
+            yaxis=dict(tickvals=[0, 1], ticktext=['Signal', 'SHAP'])
         ),
         height=800,
         width=1000

@@ -546,20 +546,35 @@ def compute_confidence_change(base_preds, masked_preds):
 def compute_aopc(model, inputs, shap_values, steps=10):
     model.eval()
     
-    # Handle 3D inputs by adding dummy spatial dimension
-    if inputs.dim() == 3:
-        inputs = inputs.unsqueeze(2)  # Add spatial dimension
-    
+    # Convert to numpy for processing
     inputs_np = to_numpy(inputs)
-    batch_size, n_channels, n_spatial, n_timesteps = inputs_np.shape
+    shap_vals_np = to_numpy(shap_values)
+    
+    # Handle multi-class SHAP arrays
+    if shap_vals_np.ndim > 4:
+        shap_vals_np = np.abs(shap_vals_np).max(axis=1)
+    elif shap_vals_np.ndim == 4 and shap_vals_np.shape[1] > 1:
+        shap_vals_np = np.abs(shap_vals_np).max(axis=1)
+    
+    # Ensure we have at least 2 dimensions
+    if inputs_np.ndim < 2:
+        inputs_np = inputs_np[np.newaxis, :]
+    if shap_vals_np.ndim < 2:
+        shap_vals_np = shap_vals_np[np.newaxis, :]
+    
+    # Get batch size
+    batch_size = inputs_np.shape[0]
+    
+    # Reshape inputs to 4D: [batch, channels, spatial, time]
+    inputs_np = inputs_np.reshape(batch_size, -1, 1, inputs_np.shape[-1])
+    
+    # Reshape SHAP values to match inputs
+    shap_vals_np = shap_vals_np.reshape(batch_size, -1, 1, inputs_np.shape[-1])
+    
+    # Now we can safely get dimensions
+    n_channels = inputs_np.shape[1]
+    n_timesteps = inputs_np.shape[3]
     device = inputs.device
-    
-    # Extract SHAP values array
-    shap_vals_np = to_numpy(_get_shap_array(shap_values))
-    
-    # Handle 3D SHAP values
-    if shap_vals_np.ndim == 3:
-        shap_vals_np = shap_vals_np[:, :, np.newaxis, :]  # Match input dimensions
     
     with torch.no_grad():
         base_preds = model.predict(inputs)

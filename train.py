@@ -1126,7 +1126,7 @@ def main(args):
                 if background_list:
                     # For GNN: use first sample as background
                     background = background_list[0]
-                    X_eval = background_list[1]
+                    X_eval = background_list[0]
                     # Add debug prints
                     # Debug prints
                     print(f"Background shape: {background.x.shape}")

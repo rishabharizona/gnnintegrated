@@ -465,7 +465,7 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
     else:
         raise ValueError(f"Unsupported input dimension: {inputs_np.ndim}")
 
-batch_size = inputs_np.shape[0]
+    batch_size = inputs_np.shape[0]
     
     masked_inputs = inputs_np.copy()
     

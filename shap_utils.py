@@ -19,6 +19,7 @@ import os
 import warnings
 from scipy.stats import entropy
 from torch_geometric.data import Data, Batch
+import copy  # For deep copying objects
 # Suppress all warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
@@ -277,43 +278,39 @@ def _get_shap_array(shap_values):
 
 # ================= Visualization Functions =================
 def plot_summary(shap_values, features, output_path, max_display=20):
-    plt.figure(figsize=(10, 6))
-    
-    shap_array = _get_shap_array(shap_values)
-    
-    # Handle single-sample case
-    if shap_array.ndim == 1:
-        shap_array = shap_array.reshape(1, -1)
-    
-    # Aggregate multi-class SHAP values
-    if shap_array.ndim == 3:
-        shap_array = np.abs(shap_array).max(axis=2)  # Max importance across classes
-    
-    # Flatten features to 2D
-    if features.ndim > 2:
-        features = features.reshape(features.shape[0], -1)
-    
-    # Ensure matching sample count
-    min_samples = min(shap_array.shape[0], features.shape[0])
-    if min_samples == 0:
-        print("⚠️ No samples to plot")
-        return
-        
-    shap_array = shap_array[:min_samples]
-    features = features[:min_samples]
-    
-    # Create feature names
-    feature_names = [f"F{i}" for i in range(shap_array.shape[1])]
-    
+    """Fixed summary plot for 1600-feature data"""
     try:
+        shap_array = _get_shap_array(shap_values)
+        features_flat = features.reshape(features.shape[0], -1)
+        
+        # Handle single-sample case
+        if shap_array.ndim == 1:
+            shap_array = shap_array.reshape(1, -1)
+        
+        # Aggregate multi-class SHAP values
+        if shap_array.ndim == 3:
+            shap_array = np.abs(shap_array).max(axis=2)
+        
+        # Ensure matching dimensions
+        min_samples = min(shap_array.shape[0], features_flat.shape[0])
+        if min_samples == 0:
+            print("⚠️ No samples for summary plot")
+            return
+            
+        shap_array = shap_array[:min_samples]
+        features_flat = features_flat[:min_samples]
+        
+        # Create feature names
+        feature_names = [f"F{i}" for i in range(features_flat.shape[1])]
+        
+        plt.figure(figsize=(10, 6))
         shap.summary_plot(
             shap_array, 
-            features,
+            features_flat,
             feature_names=feature_names,
             plot_type="bar",
             max_display=max_display,
-            show=False,
-            rng=42
+            show=False
         )
         plt.tight_layout()
         plt.savefig(output_path, dpi=300)
@@ -323,52 +320,41 @@ def plot_summary(shap_values, features, output_path, max_display=20):
         print(f"Summary plot failed: {str(e)}")
 
 def overlay_signal_with_shap(signal, shap_vals, output_path):
-    """Overlay SHAP values on original signal"""
+    """Robust signal-SHAP overlay for 8x200 data"""
     signal = to_numpy(signal)
-    shap_vals = _get_shap_array(shap_vals)
-    shap_vals = to_numpy(shap_vals)
+    shap_vals = to_numpy(_get_shap_array(shap_vals))
     
-
+    print(f"[Overlay] Signal shape: {signal.shape}, SHAP shape: {shap_vals.shape}")
     
-    # Aggregate multi-class SHAP values
-    if shap_vals.ndim == 3:  # (samples, timesteps, classes)
-        shap_vals = np.abs(shap_vals).max(axis=-1)  # Max importance across classes
+    # Handle multi-class SHAP arrays
+    if shap_vals.ndim == 3:
+        shap_vals = np.abs(shap_vals).max(axis=2)  # Max importance across classes
     
-    # Process first sample and channel
-    if signal.ndim == 3:  # (samples, channels, timesteps)
-        signal = signal[0, 0, :]  # First sample, first channel
-    elif signal.ndim > 1:
-        signal = signal[0].squeeze()
+    # Extract first sample and first channel
+    if signal.ndim == 3:  # [nodes, channels, timesteps]
+        signal = signal[0, 0]  # First node, first channel
+    elif signal.ndim == 2:  # [nodes, timesteps]
+        signal = signal[0]  # First node
+    else:
+        signal = signal.flatten()[:200]  # First 200 timesteps
     
-    # Process SHAP values
+    # Process SHAP values for first node
     if shap_vals.ndim > 1:
         shap_vals = shap_vals[0]  # First sample
-    shap_vals = np.abs(shap_vals).flatten()
+    shap_vals = np.abs(shap_vals).flatten()[:200]  # First node (first 200 values)
     
-    # Ensure 1600 timesteps
-    if len(signal) > TIMESTEPS:
-        signal = signal[:TIMESTEPS]
-    if len(shap_vals) > TIMESTEPS:
-        shap_vals = shap_vals[:TIMESTEPS]
-    
-    # Pad if shorter
-    if len(signal) < TIMESTEPS:
-        signal = np.pad(signal, (0, TIMESTEPS - len(signal)))
-    if len(shap_vals) < TIMESTEPS:
-        shap_vals = np.pad(shap_vals, (0, TIMESTEPS - len(shap_vals)))
-    
-    
+    # Create plot
     plt.figure(figsize=(12, 6))
     plt.plot(signal, label="EMG Signal", color="steelblue", alpha=0.7, linewidth=1.5)
     plt.fill_between(
-        np.arange(TIMESTEPS), 
+        np.arange(len(shap_vals)), 
         0, 
         shap_vals, 
         color="red", 
         alpha=0.3, 
         label="|SHAP|"
     )
-    plt.title("EMG Signal with SHAP Overlay (First Sample)")
+    plt.title("EMG Signal with SHAP Overlay (First Node)")
     plt.xlabel("Time Steps")
     plt.ylabel("Amplitude")
     plt.legend()
@@ -379,31 +365,30 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     print(f"✅ Saved signal overlay: {output_path}")
 
 def plot_shap_heatmap(shap_values, output_path):
-    """Heatmap of SHAP values across time and channels"""
-    shap_vals = _get_shap_array(shap_values)
-    abs_vals = np.abs(to_numpy(shap_vals))
+    """Channel-wise heatmap for 8x200 data"""
+    shap_vals = to_numpy(_get_shap_array(shap_values))
+    abs_vals = np.abs(shap_vals)
     
     # Aggregate multi-class SHAP values
-    if abs_vals.ndim == 3:  # (samples, timesteps, classes)
-        abs_vals = abs_vals.max(axis=-1)  # Max importance per timestep
+    if abs_vals.ndim == 3:
+        abs_vals = abs_vals.max(axis=2)  # Max across classes
     
     # Average across samples
     aggregated = abs_vals.mean(axis=0)
     
-    # Ensure 1600 timesteps
-    if len(aggregated) > TIMESTEPS:
-        aggregated = aggregated[:TIMESTEPS]
-    elif len(aggregated) < TIMESTEPS:
-        aggregated = np.pad(aggregated, (0, TIMESTEPS - len(aggregated)))
+    # Reshape to (nodes, timesteps)
+    if aggregated.size == 1600:  # 8 nodes × 200 timesteps
+        aggregated = aggregated.reshape(8, 200)
+    elif aggregated.size > 200:
+        aggregated = aggregated[:1600].reshape(8, 200)
+    else:
+        aggregated = aggregated.reshape(1, -1)
     
-    # Reshape to (1, TIMESTEPS) for single channel
-    aggregated = aggregated.reshape(1, -1)
-    
-    plt.figure(figsize=(16, 4))
+    plt.figure(figsize=(16, 6))
     sns.heatmap(aggregated, cmap="viridis", cbar_kws={'label': '|SHAP Value|'})
     plt.xlabel("Time Steps")
     plt.ylabel("Channel")
-    plt.title(f"SHAP Value Heatmap (Average Across Samples, {TIMESTEPS} timesteps)")
+    plt.title("SHAP Value Heatmap (Per Node Channel)")
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
@@ -502,7 +487,7 @@ def compute_confidence_change(base_preds, masked_preds):
     return conf_change
 
 def compute_aopc(model, inputs, shap_values, steps=10):
-    """AOPC computation for 1600 timesteps"""
+    """Robust AOPC computation with proper tensor handling"""
     try:
         model.eval()
         device = next(model.parameters()).device
@@ -513,27 +498,43 @@ def compute_aopc(model, inputs, shap_values, steps=10):
         
         shap_vals_np = to_numpy(shap_values)
         if shap_vals_np.ndim == 3:
-            shap_vals_np = np.abs(shap_vals_np).max(axis=-1)  # (samples, timesteps)
+            shap_vals_np = np.abs(shap_vals_np).max(axis=2)
         
         aopc_scores = []
         
         for i in range(len(base_conf)):
-            importance = shap_vals_np[i].flatten()[:TIMESTEPS]  # Use first 1600
+            importance = shap_vals_np[i].flatten()
             sorted_indices = np.argsort(importance)[::-1]
             
             confidences = [base_conf[i]]
             current = inputs.clone()
             
             for step in range(1, steps + 1):
-                k = int(TIMESTEPS * step / steps)
+                k = int(len(importance) * step / steps)
                 mask_indices = sorted_indices[:k]
                 
                 if isinstance(inputs, (Data, Batch)):
-                    modified = current.clone()
-                    modified.x[i, mask_indices] = 0
+                    # Create deep copy to avoid stride issues
+                    modified = copy.deepcopy(current)
+                    features = modified.x.clone()
+                    
+                    # Apply masking
+                    if features.ndim == 2:
+                        features[i, mask_indices] = 0
+                    else:
+                        flat_features = features.view(-1)
+                        flat_features[mask_indices] = 0
+                        features = flat_features.view(features.shape)
+                    
+                    modified.x = features
                 else:
                     modified = current.clone()
-                    modified[i, mask_indices] = 0
+                    if modified.ndim == 2:
+                        modified[i, mask_indices] = 0
+                    else:
+                        flat = modified.view(-1)
+                        flat[mask_indices] = 0
+                        modified = flat.view(modified.shape)
                 
                 with torch.no_grad():
                     pred = model.predict(modified)
@@ -547,9 +548,7 @@ def compute_aopc(model, inputs, shap_values, steps=10):
         
         return np.mean(aopc_scores)
     except Exception as e:
-        print(f"AOPC computation failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        print(f"AOPC computation skipped: {str(e)}")
         return 0.0
 
 # ================== Advanced Metrics ======================

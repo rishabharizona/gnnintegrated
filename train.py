@@ -464,29 +464,26 @@ class EnhancedTemporalGCN(TemporalGCN):
     
     # In EnhancedTemporalGCN.forward_shap
     def forward_shap(self, x):
-        """Simplified forward pass for SHAP compatibility"""
-        if hasattr(x, 'x'):
+        """SHAP-compatible forward pass with fixed reshaping"""
+        # Extract features from PyG Data or Batch objects
+        if isinstance(x, (Data, Batch)):
             features = x.x
         else:
             features = x
         
-        # Reshape to [num_graphs, total_features]
-        if features.dim() == 3:
-            # [batch_size, num_nodes, num_features] -> flatten per graph
-            features = features.reshape(features.size(0), -1)
-        elif features.dim() == 2:
-            # [num_nodes, num_features] -> one graph
-            features = features.flatten().unsqueeze(0)
-        else:
-            features = features.reshape(1, -1)
+        # Handle batch dimension dynamically
+        batch_size = 1
+        if features.dim() > 2:
+            batch_size = features.size(0)
         
-        actual_dim = features.size(1)
-        expected_dim = 8 * 200  # 1,600 per graph
+        # Reshape to [batch_size, total_features]
+        features = features.reshape(batch_size, -1)
         
-        if actual_dim != expected_dim:
-            if self.shap_projection is None:
-                self.shap_projection = nn.Linear(actual_dim, expected_dim).to(features.device)
-            features = self.shap_projection(features)
+        # Enforce fixed input size (8 nodes * 200 features)
+        if features.size(1) != 1600:
+            # Use simple truncation since we know expected size
+            features = features[:, :1600] if features.size(1) > 1600 \
+                      else torch.cat([features, torch.zeros(batch_size, 1600 - features.size(1), device=features.device)], dim=1)
         
         return self.shap_classifier(features)
 # ======================= DOMAIN ADVERSARIAL LOSS =======================
@@ -1135,7 +1132,10 @@ def main(args):
                 if background_list:
                     # For GNN: use first sample as background
                     background = background_list[0]
-                    X_eval = background_list[1] 
+                    background.x = background.x[0:1] 
+
+                    X_eval = background_list[1]
+                    X_eval.x = X_eval.x[0:1]
                     # Add debug prints
                     # Debug prints
                     print(f"Background shape: {background.x.shape}")

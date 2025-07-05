@@ -1330,8 +1330,8 @@ def main(args):
                     try:
                         
                         plot_emg_shap_4d(
-                            X_eval_np[0], 
-                            shap_vals[0] if shap_vals.ndim > 2 else shap_vals_agg[0],
+                            X_eval_np[0] if X_eval_np.shape[0] > 0 else X_eval_np, 
+                            shap_vals[0] if shap_vals.shape[0] > 0 else shap_vals,
                             output_path=os.path.join(args.output, "shap_4d_scatter.html")
                         )
                     except Exception as e:
@@ -1340,7 +1340,7 @@ def main(args):
                     try:
                         
                         plot_4d_shap_surface(
-                            shap_vals if shap_vals.ndim > 2 else shap_vals_agg,
+                            shap_vals,
                             output_path=os.path.join(args.output, "shap_4d_surface.html")
                         )
                     except Exception as e:

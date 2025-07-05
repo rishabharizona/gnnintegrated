@@ -211,6 +211,7 @@ def safe_compute_shap_values(model, background, inputs):
             values=shap_values,
             base_values=explainer.expected_value,
             data=to_numpy(inputs)
+        )
     except Exception as e:
         print(f"SHAP computation failed: {str(e)}")
         import traceback

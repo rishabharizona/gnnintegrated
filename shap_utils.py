@@ -340,49 +340,50 @@ def plot_summary(shap_values, features, output_path, max_display=20):
     print(f"✅ Saved summary plot: {output_path}")
 
 def overlay_signal_with_shap(signal, shap_vals, output_path):
+    """Overlay SHAP values on original signal (fixed for EMG data)"""
     signal = to_numpy(signal)
     shap_vals = _get_shap_array(shap_vals)
     shap_vals = to_numpy(shap_vals)
     
-    # Aggregate multi-class SHAP values
-    if shap_vals.ndim == 3:  # (samples, timesteps, classes)
-        shap_vals = np.abs(shap_vals).max(axis=-1)  # Max importance across classes
-    
-    # Handle channel dimension
+    # Handle different dimensions
     if signal.ndim == 3:  # (samples, channels, timesteps)
-        signal = signal[:, 0, :]  # Use first channel
-        shap_vals = shap_vals.mean(axis=0) if shap_vals.ndim == 2 else shap_vals
+        signal = signal[0, 0, :]  # First sample, first channel
+    elif signal.ndim > 1:
+        signal = signal[0].squeeze()
     
-    # Process first sample only
-    signal = signal[0].flatten()
-    shap_vals = shap_vals[0].flatten()
+    if shap_vals.ndim == 3:  # (samples, timesteps, classes)
+        shap_vals = np.abs(shap_vals).max(axis=-1)[0]  # Max importance across classes
+    elif shap_vals.ndim > 1:
+        shap_vals = np.abs(shap_vals[0]).squeeze()
+    
+    # Truncate to same length
+    min_len = min(len(signal), len(shap_vals))
+    signal = signal[:min_len]
+    shap_vals = shap_vals[:min_len]
     
     # Create plot
     plt.figure(figsize=(12, 6))
-    
-    # Plot signal and SHAP overlay
-    plt.plot(signal_flat, label="Signal", color="steelblue", alpha=0.7, linewidth=1.5)
+    plt.plot(signal, label="EMG Signal", color="steelblue", alpha=0.7, linewidth=1.5)
     plt.fill_between(
         np.arange(min_len), 
         0, 
-        shap_vals_flat, 
+        shap_vals, 
         color="red", 
         alpha=0.3, 
         label="|SHAP|"
     )
-    
-    plt.title("Signal with SHAP Overlay")
-    plt.xlabel("Flattened Feature Index")
-    plt.ylabel("Value")
+    plt.title("EMG Signal with SHAP Overlay (First Sample)")
+    plt.xlabel("Time Steps")
+    plt.ylabel("Amplitude")
     plt.legend()
     plt.grid(True, alpha=0.2)
-    
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
     print(f"✅ Saved signal overlay: {output_path}")
 
 def plot_shap_heatmap(shap_values, output_path):
+    """Heatmap of SHAP values across time and channels (fixed)"""
     shap_vals = _get_shap_array(shap_values)
     abs_vals = np.abs(to_numpy(shap_vals))
     
@@ -390,27 +391,17 @@ def plot_shap_heatmap(shap_values, output_path):
     if abs_vals.ndim == 3:  # (samples, timesteps, classes)
         abs_vals = abs_vals.max(axis=-1)  # Max importance per timestep
     
-    # Average across samples
-    aggregated = abs_vals.mean(axis=0)
-    
-    # Reshape to (channels, timesteps)
-    if aggregated.ndim == 1:  # (timesteps,)
-        aggregated = aggregated.reshape(1, -1)  # (1, timesteps)
+    # Average across samples and handle channels
+    if abs_vals.ndim == 2:  # (samples, timesteps)
+        aggregated = abs_vals.mean(axis=0).reshape(1, -1)  # (1, timesteps)
+    else:
+        aggregated = abs_vals.mean(axis=0)  # (channels, timesteps)
     
     plt.figure(figsize=(12, 8))
-    plt.imshow(aggregated, 
-               aspect='auto', 
-               cmap='viridis',
-               interpolation='nearest')
-    plt.colorbar(label='|SHAP Value|')
+    sns.heatmap(aggregated, cmap="viridis", cbar_kws={'label': '|SHAP Value|'})
     plt.xlabel("Time Steps")
     plt.ylabel("EMG Channels")
-    plt.title("SHAP Value Heatmap")
-    
-    # Add channel labels
-    if aggregated.shape[0] <= 8:  # Only label if reasonable number of channels
-        plt.yticks(range(aggregated.shape[0]), [f"CH{i+1}" for i in range(aggregated.shape[0])])
-    
+    plt.title("SHAP Value Heatmap (Average Across Samples)")
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
@@ -419,11 +410,12 @@ def plot_shap_heatmap(shap_values, output_path):
 # ================== SHAP Impact Analysis ===================
 
 def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
-    """Robust SHAP impact evaluation without dimension unpacking"""
+    """Robust SHAP impact evaluation without device errors"""
     try:
         model.eval()
+        device = next(model.parameters()).device
         
-        # Get original predictions safely
+        # Get original predictions
         with torch.no_grad():
             base_preds = safe_model_predict(model, inputs)
             base_preds = torch.softmax(base_preds, dim=1)
@@ -439,108 +431,56 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
         elif shap_vals_np.ndim == 4 and shap_vals_np.shape[1] > 1:
             shap_vals_np = np.abs(shap_vals_np).max(axis=1)
         
-        # Ensure we have at least 2 dimensions
+        # Ensure proper dimensions
         if inputs_np.ndim < 2:
             inputs_np = inputs_np[np.newaxis, :]
         if shap_vals_np.ndim < 2:
             shap_vals_np = shap_vals_np[np.newaxis, :]
         
-        # Get batch size and time dimension
+        # Get dimensions
         batch_size = inputs_np.shape[0]
-        n_timesteps = inputs_np.shape[-1] if inputs_np.ndim > 1 else inputs_np.shape[0]
+        n_timesteps = inputs_np.shape[-1]
         
         # Reshape inputs to 4D: [batch, channels, spatial, time]
         inputs_4d = inputs_np.reshape(batch_size, -1, 1, n_timesteps)
-        
-        # Reshape SHAP values to match
         shap_4d = shap_vals_np.reshape(batch_size, -1, 1, n_timesteps)
         
         # Create masked inputs
         masked_inputs = inputs_4d.copy()
         
-        # Process each sample individually
+        # Process each sample
         for i in range(batch_size):
-            # Get importance scores (flatten to 1D time importance)
             importance = np.abs(shap_4d[i]).mean(axis=(0, 1))
-            
-            # Ensure we have the correct number of timesteps
-            if len(importance) > n_timesteps:
-                importance = importance[:n_timesteps]
-            
-            # Get top-k important timesteps
             k = max(1, int(n_timesteps * top_k))
             top_indices = np.argsort(importance)[-k:]
-            
-            # Mask important timesteps
             masked_inputs[i, :, :, top_indices] = 0
         
-        # Convert back to tensor format
-        device = next(model.parameters()).device
-        
-        # Handle PyG objects with custom device handling
-        if hasattr(inputs, 'to_data_list') or hasattr(inputs, 'batch'):
-            # Handle PyG objects - create new object with modified features
-            if hasattr(inputs, 'x') and inputs.x is not None:
-                # Get dtype from existing features
-                dtype = inputs.x.dtype
-                # Reshape and convert to tensor
-                new_features = torch.tensor(
-                    masked_inputs.reshape(inputs.x.shape),
-                    dtype=dtype
-                ).to(device)
-                # Create new Data/Batch object with modified features
-                masked_tensor = inputs.__class__(
-                    x=new_features,
-                    edge_index=inputs.edge_index,
-                    batch=inputs.batch if hasattr(inputs, 'batch') else None
-                )
-            elif hasattr(inputs, 'node_features') and inputs.node_features is not None:
-                dtype = inputs.node_features.dtype
-                new_features = torch.tensor(
-                    masked_inputs.reshape(inputs.node_features.shape),
-                    dtype=dtype
-                ).to(device)
-                masked_tensor = inputs.__class__(
-                    node_features=new_features,
-                    edge_index=inputs.edge_index,
-                    batch=inputs.batch if hasattr(inputs, 'batch') else None
-                )
-            else:
-                # Fallback: try to find any feature attribute
-                for attr in ['x', 'node_features', 'features', 'feat', 'data']:
-                    if hasattr(inputs, attr) and getattr(inputs, attr) is not None:
-                        features = getattr(inputs, attr)
-                        dtype = features.dtype
-                        new_features = torch.tensor(
-                            masked_inputs.reshape(features.shape),
-                            dtype=dtype
-                        ).to(device)
-                        # Create new object with modified features
-                        new_kwargs = {
-                            attr: new_features,
-                            'edge_index': inputs.edge_index
-                        }
-                        if hasattr(inputs, 'batch'):
-                            new_kwargs['batch'] = inputs.batch
-                        masked_tensor = inputs.__class__(**new_kwargs)
-                        break
-                else:
-                    raise ValueError("Couldn't find feature attribute in PyG object")
-        else:
-            # Handle standard tensors
-            original_shape = inputs_np.shape
-            reshaped = masked_inputs.reshape(original_shape)
-            masked_tensor = torch.tensor(
-                reshaped, 
-                dtype=torch.float32
+        # Convert back to tensor format - PyG safe method
+        if hasattr(inputs, 'to_data_list'):  # PyG Batch object
+            # Create new features tensor
+            new_features = torch.tensor(
+                masked_inputs.reshape(inputs.x.shape),
+                dtype=inputs.x.dtype
             ).to(device)
+            
+            # Create new Batch with original structure
+            masked_tensor = Batch(
+                x=new_features,
+                edge_index=inputs.edge_index,
+                batch=inputs.batch,
+                # Add other attributes as needed
+            )
+        else:  # Standard tensor
+            original_shape = inputs.shape
+            reshaped = masked_inputs.reshape(original_shape)
+            masked_tensor = torch.tensor(reshaped, dtype=torch.float32).to(device)
         
         # Get predictions on masked inputs
         with torch.no_grad():
             masked_preds = safe_model_predict(model, masked_tensor)
             masked_preds = torch.softmax(masked_preds, dim=1)
         
-        # Calculate accuracy drop
+        # Calculate metrics
         base_classes = base_preds.argmax(dim=1)
         masked_classes = masked_preds.argmax(dim=1)
         acc_drop = 100 * (1 - (base_classes == masked_classes).float().mean().item())

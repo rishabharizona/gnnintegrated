@@ -425,109 +425,101 @@ def plot_shap_heatmap(shap_values, output_path):
 # ================== SHAP Impact Analysis ===================
 
 def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
-    """
-    Evaluate the impact of SHAP values by masking important features
-    Returns:
-        base_preds: Original predictions
-        masked_preds: Predictions after masking top features
-        acc_drop: Accuracy drop percentage
-    """
-    model.eval()
-    
-    # Get original predictions
-    with torch.no_grad():
-        base_preds = safe_model_predict(model, inputs)
-        base_preds = torch.softmax(base_preds, dim=1)
-    
-    # Convert to numpy for processing
-    base_preds_np = to_numpy(base_preds)
-    inputs_np = to_numpy(inputs)
-    shap_vals_np = to_numpy(shap_values)
-    
-    # Handle multi-class SHAP arrays
-    if shap_vals_np.ndim > 4:
-        # Reduce class dimension by taking max absolute values
-        shap_vals_np = np.abs(shap_vals_np).max(axis=1)
-    elif shap_vals_np.ndim == 4 and shap_vals_np.shape[1] > 1:
-        # (batch, classes, ...) -> reduce to single importance
-        shap_vals_np = np.abs(shap_vals_np).max(axis=1)
-    
-    # Ensure we have at least 2 dimensions
-    if inputs_np.ndim < 2:
-        inputs_np = inputs_np[np.newaxis, :]
-    if shap_vals_np.ndim < 2:
-        shap_vals_np = shap_vals_np[np.newaxis, :]
-    
-    # Get batch size
-    batch_size = inputs_np.shape[0]
-    
-    # Reshape inputs to 4D: [batch, channels, spatial, time]
-    # Without unpacking dimensions
-    inputs_np = inputs_np.reshape(batch_size, -1, 1, inputs_np.shape[-1])
-    
-    # Reshape SHAP values to match inputs
-    shap_vals_np = shap_vals_np.reshape(batch_size, -1, 1, inputs_np.shape[-1])
-
-    if inputs_np.shape != shap_vals_np.shape:
-        # Find the smallest dimensions
-        min_batch = min(inputs_np.shape[0], shap_vals_np.shape[0])
-        min_channels = min(inputs_np.shape[1], shap_vals_np.shape[1])
-        min_time = min(inputs_np.shape[3], shap_vals_np.shape[3])
+    """Robust SHAP impact evaluation without dimension unpacking"""
+    try:
+        model.eval()
         
-        # Trim both arrays to match
-        inputs_np = inputs_np[:min_batch, :min_channels, :, :min_time]
-        shap_vals_np = shap_vals_np[:min_batch, :min_channels, :, :min_time]
+        # Get original predictions safely
+        with torch.no_grad():
+            base_preds = safe_model_predict(model, inputs)
+            base_preds = torch.softmax(base_preds, dim=1)
         
-        print(f"⚠️ Trimmed arrays to shape {inputs_np.shape}")
-    # Now we can safely get dimensions
-    n_channels = inputs_np.shape[1]
-    n_timesteps = inputs_np.shape[3]
-    
-    # Rest of function remains unchanged...
-    masked_inputs = inputs_np.copy()
-    # Mask top-K important features for each sample
-    for i in range(batch_size):
-        # Calculate importance per time step (average across channels and spatial)
-        importance = np.abs(shap_vals_np[i]).mean(axis=(0, 1))
+        # Convert to numpy arrays
+        base_preds_np = to_numpy(base_preds)
+        inputs_np = to_numpy(inputs)
+        shap_vals_np = to_numpy(shap_values)
         
-        # Ensure importance array matches time dimension
-        if len(importance) > n_timesteps:
-            importance = importance[:n_timesteps]
+        # Handle multi-class SHAP arrays
+        if shap_vals_np.ndim > 4:
+            shap_vals_np = np.abs(shap_vals_np).max(axis=1)
+        elif shap_vals_np.ndim == 4 and shap_vals_np.shape[1] > 1:
+            shap_vals_np = np.abs(shap_vals_np).max(axis=1)
         
-        # Determine threshold for top K%
-        k = int(n_timesteps * top_k)
-        top_indices = np.argsort(importance)[-k:]
+        # Ensure we have at least 2 dimensions
+        if inputs_np.ndim < 2:
+            inputs_np = inputs_np[np.newaxis, :]
+        if shap_vals_np.ndim < 2:
+            shap_vals_np = shap_vals_np[np.newaxis, :]
         
-        # Ensure indices are within valid range
-        top_indices = top_indices[top_indices < n_timesteps]
+        # Get batch size and time dimension
+        batch_size = inputs_np.shape[0]
+        n_timesteps = inputs_np.shape[-1] if inputs_np.ndim > 1 else inputs_np.shape[0]
         
-        # Mask important timesteps across all channels
-        masked_inputs[i, :, :, top_indices] = 0
-    
-    # Convert back to tensor
-    # Handle PyG Data objects differently
-    if isinstance(inputs, (Data, Batch)):
-        # Create new PyG object with masked features
-        masked_tensor = inputs.clone()
-        if hasattr(masked_tensor, 'x'):
-            masked_tensor.x = torch.tensor(masked_inputs, dtype=masked_tensor.x.dtype).to(masked_tensor.x.device)
-        elif hasattr(masked_tensor, 'node_features'):
-            masked_tensor.node_features = torch.tensor(masked_inputs, dtype=masked_tensor.node_features.dtype).to(masked_tensor.node_features.device)
-    else:
-        # Standard tensor handling
-        masked_tensor = torch.tensor(masked_inputs, dtype=inputs.dtype).to(inputs.device)
-    
-    # Get predictions on masked inputs
-    with torch.no_grad():
-        masked_preds = safe_model_predict(model, masked_tensor)
-        masked_preds = torch.softmax(masked_preds, dim=1)
-    
-    # Calculate accuracy drop
-    base_classes = base_preds.argmax(dim=1)
-    masked_classes = masked_preds.argmax(dim=1)
-    acc_drop = 100 * (1 - (base_classes == masked_classes).float().mean().item())
-    
-    return to_numpy(base_preds), to_numpy(masked_preds), acc_drop
+        # Reshape inputs to 4D: [batch, channels, spatial, time]
+        inputs_4d = inputs_np.reshape(batch_size, -1, 1, n_timesteps)
+        
+        # Reshape SHAP values to match
+        shap_4d = shap_vals_np.reshape(batch_size, -1, 1, n_timesteps)
+        
+        # Create masked inputs
+        masked_inputs = inputs_4d.copy()
+        
+        # Process each sample individually
+        for i in range(batch_size):
+            # Get importance scores (flatten to 1D time importance)
+            importance = np.abs(shap_4d[i]).mean(axis=(0, 1))
+            
+            # Ensure we have the correct number of timesteps
+            if len(importance) > n_timesteps:
+                importance = importance[:n_timesteps]
+            
+            # Get top-k important timesteps
+            k = max(1, int(n_timesteps * top_k))
+            top_indices = np.argsort(importance)[-k:]
+            
+            # Mask important timesteps
+            masked_inputs[i, :, :, top_indices] = 0
+        
+        # Convert back to tensor format matching original input type
+        if isinstance(inputs, (Data, Batch)):
+            # Handle PyG objects
+            masked_tensor = inputs.clone()
+            if hasattr(masked_tensor, 'x'):
+                masked_tensor.x = torch.tensor(
+                    masked_inputs.reshape(inputs.x.shape), 
+                    dtype=inputs.x.dtype
+                ).to(inputs.x.device)
+            elif hasattr(masked_tensor, 'node_features'):
+                masked_tensor.node_features = torch.tensor(
+                    masked_inputs.reshape(inputs.node_features.shape),
+                    dtype=inputs.node_features.dtype
+                ).to(inputs.node_features.device)
+        else:
+            # Handle standard tensors
+            original_shape = inputs.shape
+            reshaped = masked_inputs.reshape(original_shape)
+            masked_tensor = torch.tensor(
+                reshaped, 
+                dtype=inputs.dtype
+            ).to(inputs.device)
+        
+        # Get predictions on masked inputs
+        with torch.no_grad():
+            masked_preds = safe_model_predict(model, masked_tensor)
+            masked_preds = torch.softmax(masked_preds, dim=1)
+        
+        # Calculate accuracy drop
+        base_classes = base_preds.argmax(dim=1)
+        masked_classes = masked_preds.argmax(dim=1)
+        acc_drop = 100 * (1 - (base_classes == masked_classes).float().mean().item())
+        
+        return to_numpy(base_preds), to_numpy(masked_preds), acc_drop
+        
+    except Exception as e:
+        print(f"SHAP impact evaluation failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None, None, 0
 
 def compute_flip_rate(base_preds, masked_preds):
     """Compute the class flip rate after masking"""

@@ -525,7 +525,9 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     
     # Convert SHAP to numpy and aggregate
     shap_vals_np = to_numpy(shap_values)
-    shap_vals_np = shap_vals_np.copy()
+    # Force contiguous memory layout with explicit copy
+    shap_vals_np = np.array(shap_vals_np.copy(), order='C')  # FIX: Ensure C-contiguous memory
+    
     if shap_vals_np.ndim == 3:
         shap_vals_np = np.abs(shap_vals_np).max(axis=-1)  # (samples, timesteps)
     
@@ -542,10 +544,12 @@ def compute_aopc(model, inputs, shap_values, steps=10):
         if isinstance(inputs, (Data, Batch)):
             # For PyG: create a clone
             current = inputs.clone()
-            original_features = current.x.clone()
+            # FIX: Explicitly convert to contiguous tensor
+            original_features = current.x.clone().contiguous()
         else:
             current = inputs.clone()
-            original_features = current
+            # FIX: Explicitly convert to contiguous tensor
+            original_features = current.contiguous()
         
         for step in range(1, steps + 1):
             k = int(len(importance) * step / steps)
@@ -555,11 +559,13 @@ def compute_aopc(model, inputs, shap_values, steps=10):
             if isinstance(inputs, (Data, Batch)):
                 modified_features = original_features.clone()
                 modified_features[i, mask_indices] = 0
-                current.x = modified_features
+                # FIX: Ensure contiguous before assignment
+                current.x = modified_features.contiguous()
             else:
                 modified_features = original_features.clone()
                 modified_features[i, mask_indices] = 0
-                current = modified_features
+                # FIX: Ensure contiguous before prediction
+                current = modified_features.contiguous()
             
             # Get prediction
             with torch.no_grad():
@@ -569,7 +575,7 @@ def compute_aopc(model, inputs, shap_values, steps=10):
         
         # Calculate incremental drops
         incremental_drops = [confidences[j-1] - confidences[j] 
-                            for j in range(1, len(confidences))]
+                           for j in range(1, len(confidences))]
         aopc = np.mean(incremental_drops) if incremental_drops else 0
         aopc_scores.append(aopc)
     

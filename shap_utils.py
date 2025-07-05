@@ -278,31 +278,27 @@ def _get_shap_array(shap_values):
 
 # ================= Visualization Functions =================
 def plot_summary(shap_values, features, output_path, max_display=20):
-    """Fixed summary plot with dimension matching"""
+    """Fixed summary plot for node-wise data"""
     try:
         shap_array = _get_shap_array(shap_values)
+        features_flat = features.reshape(features.shape[0], -1)
         
         # Handle multi-class SHAP arrays
         if shap_array.ndim == 3:
             shap_array = np.abs(shap_array).max(axis=2)  # Max across classes
         
-        # Flatten features to match SHAP dimensions
-        features_flat = features.reshape(features.shape[0], -1)
-        
-        # Ensure matching sample count
+        # Ensure matching dimensions
         min_samples = min(shap_array.shape[0], features_flat.shape[0])
         if min_samples == 0:
             print("⚠️ No samples for summary plot")
             return
             
-        # Align arrays
         shap_array = shap_array[:min_samples]
         features_flat = features_flat[:min_samples]
         
         # Create feature names
-        feature_names = [f"F{i}" for i in range(features_flat.shape[1])]
+        feature_names = [f"Node {i//200}-Timestep {i%200}" for i in range(features_flat.shape[1])]
         
-        # Plot with SHAP's summary_plot
         plt.figure(figsize=(14, 8))
         shap.summary_plot(
             shap_array, 
@@ -312,7 +308,7 @@ def plot_summary(shap_values, features, output_path, max_display=20):
             max_display=max_display,
             show=False
         )
-        plt.title("SHAP Feature Importance Summary")
+        plt.title("SHAP Feature Importance (Node-Timestep Level)")
         plt.tight_layout()
         plt.savefig(output_path, dpi=300)
         plt.close()
@@ -321,51 +317,31 @@ def plot_summary(shap_values, features, output_path, max_display=20):
         print(f"Summary plot skipped: {str(e)}")
 
 def overlay_signal_with_shap(signal, shap_vals, output_path):
-    """Robust signal-SHAP overlay for all 8 nodes"""
+    """Robust signal-SHAP overlay for per-node data"""
     signal = to_numpy(signal)
-    shap_vals = to_numpy(_get_shap_array(shap_vals))
+    shap_vals = to_numpy(shap_vals)
     
     print(f"[Overlay] Signal shape: {signal.shape}, SHAP shape: {shap_vals.shape}")
-    
-    # Handle multi-class SHAP arrays
-    if shap_vals.ndim == 3:
-        shap_vals = np.abs(shap_vals).max(axis=2)  # Max importance across classes
-    
-    # Process SHAP values
-    if shap_vals.ndim > 1:
-        shap_vals = shap_vals[0]  # First sample
-    shap_vals = np.abs(shap_vals).flatten()
-    
-    # Process signal - average across all nodes
-    if signal.ndim == 3:  # [nodes, channels, timesteps]
-        signal = signal.mean(axis=0)  # Average across nodes
-        signal = signal[0]  # First channel
-    elif signal.ndim == 2:  # [nodes, timesteps]
-        signal = signal.mean(axis=0)  # Average across nodes
     
     # Ensure same length
     min_length = min(len(signal), len(shap_vals))
     signal = signal[:min_length]
     shap_vals = shap_vals[:min_length]
     
-    # Normalize for better visualization
-    signal = (signal - signal.min()) / (signal.max() - signal.min())
-    shap_vals = (shap_vals - shap_vals.min()) / (shap_vals.max() - shap_vals.min())
-    
     # Create plot
     plt.figure(figsize=(14, 8))
     plt.plot(signal, label="EMG Signal", color="steelblue", alpha=0.8, linewidth=2)
     plt.fill_between(
         np.arange(len(shap_vals)), 
-        0, 
+        shap_vals.min(), 
         shap_vals, 
         color="red", 
         alpha=0.3, 
-        label="|SHAP|"
+        label="SHAP Importance"
     )
-    plt.title("EMG Signal with SHAP Overlay (All Nodes Averaged)")
+    plt.title("EMG Signal with SHAP Overlay")
     plt.xlabel("Time Steps")
-    plt.ylabel("Normalized Amplitude")
+    plt.ylabel("Amplitude")
     plt.legend()
     plt.grid(True, alpha=0.2)
     plt.tight_layout()
@@ -374,31 +350,19 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     print(f"✅ Saved signal overlay: {output_path}")
 
 def plot_shap_heatmap(shap_values, output_path):
-    """Node-wise heatmap for all 8 nodes"""
-    shap_vals = to_numpy(_get_shap_array(shap_values))
-    abs_vals = np.abs(shap_vals)
+    """Node-wise heatmap for all nodes"""
+    shap_vals = to_numpy(shap_values)
     
-    # Aggregate multi-class SHAP values
-    if abs_vals.ndim == 3:
-        abs_vals = abs_vals.max(axis=2)  # Max across classes
-    
-    # Average across samples
-    aggregated = abs_vals.mean(axis=0)
-    
-    # Reshape to (nodes, timesteps)
-    if aggregated.size == 1600:  # 8 nodes × 200 timesteps
-        aggregated = aggregated.reshape(8, 200)
-    elif aggregated.size > 200:
-        aggregated = aggregated[:1600].reshape(8, 200)
-    else:
-        aggregated = aggregated.reshape(1, -1)
+    # Ensure proper dimensions
+    if shap_vals.ndim == 3:
+        shap_vals = np.abs(shap_vals).max(axis=2)  # Max across classes
     
     plt.figure(figsize=(16, 8))
-    sns.heatmap(aggregated, cmap="viridis", cbar_kws={'label': '|SHAP Value|'})
+    sns.heatmap(shap_vals, cmap="viridis", cbar_kws={'label': '|SHAP Value|'})
     plt.xlabel("Time Steps")
     plt.ylabel("Node")
     plt.title("SHAP Value Heatmap (Per Node)")
-    plt.yticks(np.arange(8), [f"Node {i+1}" for i in range(8)])
+    plt.yticks(np.arange(shap_vals.shape[0]), [f"Node {i+1}" for i in range(shap_vals.shape[0])])
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
@@ -525,7 +489,7 @@ def compute_aopc(model, inputs, shap_values, steps=10):
                 
                 if isinstance(inputs, (Data, Batch)):
                     # Create deep copy to avoid stride issues
-                    modified = copy.deepcopy(current)
+                    modified = current.clone()
                     features = modified.x.clone()
                     
                     # Apply masking

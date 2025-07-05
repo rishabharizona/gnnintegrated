@@ -757,43 +757,66 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     print(f"✅ Saved 4D SHAP plot: {output_path}")
 
 def plot_4d_shap_surface(shap_values, output_path):
-    """Surface plot with robust aggregation"""
+    """Robust surface plot for SHAP values"""
     if not output_path.endswith('.html'):
         output_path += ".html"
     
     shap_vals = to_numpy(_get_shap_array(shap_values))
-    
-    print(f"[Surface] SHAP shape: {shap_vals.shape}")
+    print(f"[Surface] RAW SHAP shape: {shap_vals.shape}")
     
     # Aggregate multi-class SHAP values
-    if shap_vals.ndim == 3:
-        shap_vals = np.abs(shap_vals).max(axis=-1)  # (samples, timesteps)
+    if shap_vals.ndim == 3:  # (samples, timesteps, classes)
+        shap_vals = np.abs(shap_vals).max(axis=-1)  # Max importance per timestep
     
     # Aggregate across samples
     aggregated = np.abs(shap_vals).mean(axis=0)  # (timesteps,)
+    print(f"[Surface] Aggregated SHAP shape: {aggregated.shape}")
     
-    # Create grid
-    time_steps = np.arange(len(aggregated))
-    channels = np.array([0, 1])  # Two channels for visualization
+    # Create grid dimensions
+    time_len = len(aggregated)
+    channels = 8  # Fixed number of EMG channels
+    spatial_dim = 1  # Fixed spatial dimension
     
-    X, Y = np.meshgrid(time_steps, channels)
-    Z = np.array([aggregated, aggregated])  # (2, timesteps)
+    # Create full grid
+    X, Y, Z = np.mgrid[
+        0:time_len:1, 
+        0:channels:1, 
+        0:spatial_dim:1
+    ]
     
-    fig = go.Figure(data=[go.Surface(z=Z, x=X, y=Y)])
+    # Create value grid (repeat aggregated values across channels and spatial dim)
+    values = np.zeros((time_len, channels, spatial_dim))
+    for i in range(channels):
+        for j in range(spatial_dim):
+            values[:, i, j] = aggregated
+    
+    # Create Plotly figure
+    fig = go.Figure(data=go.Volume(
+        x=X.flatten(),
+        y=Y.flatten(),
+        z=Z.flatten(),
+        value=values.flatten(),
+        isomin=0,
+        isomax=values.max(),
+        opacity=0.3,
+        surface_count=20,
+        colorscale='Viridis'
+    ))
+    
     fig.update_layout(
-        title='SHAP Value Surface',
+        title='3D SHAP Value Volume',
         scene=dict(
             xaxis_title='Time Steps',
-            yaxis_title='Channel',
-            zaxis_title='|SHAP Value|',
-            zaxis=dict(range=[0, aggregated.max() * 1.1])
+            yaxis_title='EMG Channels',
+            zaxis_title='Spatial Dimension',
+            camera=dict(eye=dict(x=1.5, y=1.5, z=0.8))
         ),
         height=800,
         width=1000
     )
     
     fig.write_html(output_path)
-    print(f"✅ Saved SHAP surface: {output_path}")
+    print(f"✅ Saved SHAP volume: {output_path}")
 
 # ================== Similarity Metrics =====================
 

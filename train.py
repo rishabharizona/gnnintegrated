@@ -1208,7 +1208,15 @@ def main(args):
                     # Extract values from Explanation object
                     shap_vals = shap_explanation.values
                     print(f"SHAP values shape: {shap_vals.shape}")
-                    
+
+                    # ==== ADD THIS AGGREGATION BLOCK HERE ====
+                    # Create aggregated version for visualizations
+                    if shap_vals.ndim == 3:  # (samples, timesteps, classes)
+                        shap_vals_agg = np.abs(shap_vals).max(axis=-1)
+                        print(f"Aggregated SHAP values shape: {shap_vals_agg.shape}")
+                    else:
+                        shap_vals_agg = shap_vals.copy()
+                    # ==== END OF AGGREGATION BLOCK ====
                     # Convert to numpy safely before visualization
                     if args.use_gnn and GNN_AVAILABLE:
                         # For GNN, convert batched graph to numpy
@@ -1247,19 +1255,22 @@ def main(args):
                     
                     # Generate core visualizations for ALL models (including GNN)
                     try:
-                        plot_summary(shap_vals, X_eval_np, 
+                        # USE shap_vals_agg HERE
+                        plot_summary(shap_vals_agg, X_eval_np, 
                                     output_path=os.path.join(args.output, "shap_summary.png"))
                     except Exception as e:
                         print(f"Summary plot failed: {str(e)}")
                     
                     try:
-                        overlay_signal_with_shap(X_eval_np[0], shap_vals, 
+                        # USE shap_vals_agg HERE
+                        overlay_signal_with_shap(X_eval_np[0], shap_vals_agg, 
                                                 output_path=os.path.join(args.output, "shap_overlay.png"))
                     except Exception as e:
                         print(f"Signal overlay failed: {str(e)}")
                     
                     try:
-                        plot_shap_heatmap(shap_vals, 
+                        # USE shap_vals_agg HERE
+                        plot_shap_heatmap(shap_vals_agg, 
                                          output_path=os.path.join(args.output, "shap_heatmap.png"))
                     except Exception as e:
                         print(f"Heatmap failed: {str(e)}")

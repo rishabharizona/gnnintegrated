@@ -17,6 +17,19 @@ import warnings
 from scipy.stats import entropy
 from torch_geometric.data import Data, Batch
 
+
+def ensure_tensor_on_device(tensor, device):
+    """Ensure tensor is on the specified device"""
+    if isinstance(tensor, (Data, Batch)):
+        return tensor.to(device)
+    return tensor.to(device) if isinstance(tensor, torch.Tensor) else tensor
+
+def safe_model_predict(model, inputs):
+    """Safe prediction with device handling"""
+    device = next(model.parameters()).device
+    inputs = ensure_tensor_on_device(inputs, device)
+    return model.predict(inputs)
+
 # Helper function to safely convert tensors to numpy
 def to_numpy(tensor):
     """Safely convert tensor to numpy array with detachment"""
@@ -273,17 +286,6 @@ def safe_compute_shap_values(model, background, inputs):
         import traceback
         traceback.print_exc()
         return None
-def ensure_tensor_on_device(tensor, device):
-    """Ensure tensor is on the specified device"""
-    if isinstance(tensor, (Data, Batch)):
-        return tensor.to(device)
-    return tensor.to(device) if isinstance(tensor, torch.Tensor) else tensor
-
-def safe_model_predict(model, inputs):
-    """Safe prediction with device handling"""
-    device = next(model.parameters()).device
-    inputs = ensure_tensor_on_device(inputs, device)
-    return model.predict(inputs)
     
 def _get_shap_array(shap_values):
     """Extract SHAP values array from Explanation object or list"""
@@ -434,7 +436,7 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
     
     # Get original predictions
     with torch.no_grad():
-        base_preds = model.predict(inputs)
+        base_preds = safe_model_predict(model, inputs)
         base_preds = torch.softmax(base_preds, dim=1)
     
     # Convert to numpy for processing
@@ -476,7 +478,7 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
     
     # Get predictions on masked inputs
     with torch.no_grad():
-        masked_preds = model.predict(masked_tensor)
+        masked_preds = safe_model_predict(model, masked_tensor)
         masked_preds = torch.softmax(masked_preds, dim=1)
     
     # Calculate accuracy drop

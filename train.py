@@ -464,21 +464,21 @@ class EnhancedTemporalGCN(TemporalGCN):
     
     # In EnhancedTemporalGCN.forward_shap
     def forward_shap(self, x):
-        """SHAP-compatible forward pass with dynamic reshaping"""
-        # Extract features from PyG Data or Batch objects
+        """SHAP-compatible forward pass for entire graphs"""
         if isinstance(x, (Data, Batch)):
-            features = x.x
+            # Process entire graph: flatten all node features
+            features = x.x.reshape(1, -1)  # [1, num_nodes * num_features]
         else:
-            features = x
+            features = x.reshape(1, -1)    # Force batch dimension
         
-        # Handle batch dimension
-        if features.dim() == 3:  # [batch, nodes, features]
-            batch_size = features.size(0)
-            features = features.reshape(batch_size, -1)
-        else:  # Single sample
-            features = features.flatten().unsqueeze(0)
+        # Ensure fixed input size (8 nodes * 200 features)
+        if features.size(1) < 1600:
+            features = torch.cat([features, 
+                                 torch.zeros(1, 1600 - features.size(1), 
+                                             device=features.device)], dim=1)
+        elif features.size(1) > 1600:
+            features = features[:, :1600]
         
-        # Directly pass to classifier without projection
         return self.shap_classifier(features)
 # ======================= DOMAIN ADVERSARIAL LOSS =======================
 class DomainAdversarialLoss(nn.Module):

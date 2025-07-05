@@ -464,21 +464,37 @@ class EnhancedTemporalGCN(TemporalGCN):
     
     # In EnhancedTemporalGCN.forward_shap
     def forward_shap(self, x):
-        """SHAP-compatible forward pass for entire graphs"""
-        if isinstance(x, (Data, Batch)):
-            # Process entire graph: flatten all node features
-            features = x.x.reshape(1, -1)  # [1, num_nodes * num_features]
+        """Simplified forward pass for SHAP compatibility"""
+        # Extract features from PyG objects if needed
+        if hasattr(x, 'x'):
+            features = x.x
         else:
-            features = x.reshape(1, -1)    # Force batch dimension
+            features = x
         
-        # Ensure fixed input size (8 nodes * 200 features)
-        if features.size(1) < 1600:
-            features = torch.cat([features, 
-                                 torch.zeros(1, 1600 - features.size(1), 
-                                             device=features.device)], dim=1)
-        elif features.size(1) > 1600:
-            features = features[:, :1600]
         
+        # Handle feature dimensions - flatten properly
+        if features.dim() == 2:  # [nodes, features]
+            # For single graph: [8, 200] -> [1, 1600]
+            features = features.flatten().unsqueeze(0)
+        elif features.dim() == 3:  # [batch, nodes, features]
+            # For batch: [batch, 8, 200] -> [batch, 1600]
+            features = features.flatten(start_dim=1)
+        elif features.dim() == 4:  # [batch, ch, spatial, time]
+            features = features.flatten(start_dim=1)
+        
+        
+        # Get actual feature dimension
+        actual_dim = features.size(1)
+        expected_dim = 8 * 200
+        
+        # Create projection if needed and not exists
+        if actual_dim != expected_dim:
+            if self.shap_projection is None:
+                self.shap_projection = nn.Linear(actual_dim, expected_dim).to(features.device)
+            features = self.shap_projection(features)
+            
+        
+        # Directly pass to SHAP classifier
         return self.shap_classifier(features)
 # ======================= DOMAIN ADVERSARIAL LOSS =======================
 class DomainAdversarialLoss(nn.Module):
@@ -1126,11 +1142,10 @@ def main(args):
                 if background_list:
                     # For GNN: use first sample as background
                     background = background_list[0]
-                    X_eval = background_list[0]
+                    X_eval = Batch.from_data_list(background_list[:10])
                     # Add debug prints
-                    # Debug prints
-                    print(f"Background shape: {background.x.shape}")
-                    print(f"Evaluation shape: {X_eval.x.shape}")
+                    print(f"Background sample node features shape: {background.x.shape}")
+                    print(f"Evaluation batch node features shape: {X_eval.x.shape}")
                     
                     print(f"Using first sample as background for GNN")
                     print(f"Created evaluation batch with {len(background_list[:10])} graphs")
@@ -1302,8 +1317,8 @@ def main(args):
                         shap_array = _get_shap_array(shap_vals)
                         if len(shap_array) >= 2:
                             # Extract SHAP values for first two samples
-                            sample1 = shap_array[0].flatten()
-                            sample2 = shap_array[1].flatten()
+                            sample1 = shap_array[0]
+                            sample2 = shap_array[1]
                             
                             print(f"[SHAP] Jaccard (top-10): {compute_jaccard_topk(sample1, sample2, k=10):.4f}")
                             print(f"[SHAP] Kendall's Tau: {compute_kendall_tau(sample1, sample2):.4f}")

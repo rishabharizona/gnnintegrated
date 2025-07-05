@@ -529,6 +529,7 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     
     # Convert SHAP to numpy and aggregate
     shap_vals_np = to_numpy(shap_values)
+    shap_vals_np = shap_vals_np.copy()
     if shap_vals_np.ndim == 3:
         shap_vals_np = np.abs(shap_vals_np).max(axis=-1)  # (samples, timesteps)
     

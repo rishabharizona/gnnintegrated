@@ -525,7 +525,6 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     
     # Convert SHAP to numpy and ensure contiguous memory
     shap_vals_np = to_numpy(shap_values)
-    # FIX: Create C-contiguous copy with explicit memory layout
     shap_vals_np = np.ascontiguousarray(shap_vals_np)
     
     if shap_vals_np.ndim == 3:
@@ -533,7 +532,10 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     
     aopc_scores = []
     
-    for i in range(len(base_conf)):
+    # FIX: Ensure we only process available samples
+    num_samples = min(len(base_conf), shap_vals_np.shape[0])
+    
+    for i in range(num_samples):  # Only process available samples
         # Get importance scores
         importance = shap_vals_np[i].flatten()
         sorted_indices = np.argsort(importance)[::-1]
@@ -543,30 +545,32 @@ def compute_aopc(model, inputs, shap_values, steps=10):
         # Create modified input
         if isinstance(inputs, (Data, Batch)):
             current = inputs.clone()
-            # FIX: Explicitly create contiguous tensor
+            # FIX: Handle batch indexing properly
             original_features = current.x.detach().clone().contiguous()
         else:
             current = inputs.clone()
-            # FIX: Explicitly create contiguous tensor
             original_features = current.detach().clone().contiguous()
         
         for step in range(1, steps + 1):
             k = int(len(importance) * step / steps)
-            mask_indices = sorted_indices[:k].copy()  # FIX: Ensure contiguous indices
+            mask_indices = sorted_indices[:k].copy()
             
             # Create modified features
             if isinstance(inputs, (Data, Batch)):
                 modified_features = original_features.clone()
-                # FIX: Use advanced indexing with torch tensors
-                mask = torch.zeros(modified_features.shape[1:], dtype=torch.bool)
-                mask[mask_indices] = True
-                modified_features[i, mask] = 0
+                # FIX: Correct indexing for PyG data
+                if modified_features.dim() > 1:
+                    modified_features[i, mask_indices] = 0
+                else:
+                    modified_features[mask_indices] = 0
                 current.x = modified_features.contiguous()
             else:
                 modified_features = original_features.clone()
-                mask = torch.zeros(modified_features.shape[1:], dtype=torch.bool)
-                mask[mask_indices] = True
-                modified_features[i, mask] = 0
+                # FIX: Correct indexing for standard tensors
+                if modified_features.dim() > 1:
+                    modified_features[i, mask_indices] = 0
+                else:
+                    modified_features[mask_indices] = 0
                 current = modified_features.contiguous()
             
             # Get prediction
@@ -581,7 +585,7 @@ def compute_aopc(model, inputs, shap_values, steps=10):
         aopc = np.mean(incremental_drops) if incremental_drops else 0
         aopc_scores.append(aopc)
     
-    return np.mean(aopc_scores)
+    return np.mean(aopc_scores) if aopc_scores else 0
 
 # ================== Advanced Metrics ======================
 
@@ -687,31 +691,21 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     inputs = to_numpy(inputs)
     shap_vals = to_numpy(_get_shap_array(shap_values))
     
-    # DEBUG: Print original shapes
     print(f"[4D Plot] RAW Inputs shape: {inputs.shape}, SHAP shape: {shap_vals.shape}")
     
-    # Process first sample
-    sample_idx = 0
-    inputs = inputs[sample_idx]
-    shap_vals = shap_vals[sample_idx]
+    # Handle multi-sample data by selecting first sample
+    if inputs.ndim > 1 and inputs.shape[0] > 1:
+        inputs = inputs[0]
+    if shap_vals.ndim > 1 and shap_vals.shape[0] > 1:
+        shap_vals = shap_vals[0]
     
     # Handle SHAP values - max across classes if needed
     if shap_vals.ndim > 1:
         shap_vals = np.abs(shap_vals).max(axis=0)  # Max across classes
     
-    # Fix dimension order (time, channel) -> (channel, time)
-    if inputs.shape[0] > inputs.shape[-1]:
-        inputs = inputs.T
-    if shap_vals.shape[0] > shap_vals.shape[-1]:
-        shap_vals = shap_vals.T
-    
-    # Squeeze singleton dimensions
-    inputs = np.squeeze(inputs)
-    shap_vals = np.squeeze(shap_vals)
-    
-    # DEBUG: Print processed shapes
-    print(f"[4D Plot] PROCESSED Inputs shape: {inputs.shape}, SHAP shape: {shap_vals.shape}")
-    print(f"[4D Plot] SHAP range: {shap_vals.min()} - {shap_vals.max()}")
+    # Ensure proper dimensions
+    if inputs.ndim == 0:
+        inputs = np.array([inputs])
     
     # Create time steps array
     time_steps = np.arange(len(shap_vals))
@@ -723,7 +717,7 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     fig.add_trace(go.Scatter3d(
         x=time_steps,
         y=np.zeros_like(time_steps),
-        z=inputs.flatten() if inputs.ndim > 1 else inputs,
+        z=inputs.flatten() if inputs.size > 1 else np.full_like(time_steps, inputs),
         mode='lines',
         name='EMG Signal',
         line=dict(width=2, color='blue'))
@@ -762,6 +756,8 @@ def plot_4d_shap_surface(shap_values, output_path):
     
     shap_vals = to_numpy(_get_shap_array(shap_values))
     
+    print(f"[Surface] SHAP shape: {shap_vals.shape}")
+    
     # Aggregate multi-class SHAP values
     if shap_vals.ndim == 3:
         shap_vals = np.abs(shap_vals).max(axis=-1)  # (samples, timesteps)
@@ -769,12 +765,12 @@ def plot_4d_shap_surface(shap_values, output_path):
     # Aggregate across samples
     aggregated = np.abs(shap_vals).mean(axis=0)  # (timesteps,)
     
-    # Create grid (time steps only)
+    # Create grid
     time_steps = np.arange(len(aggregated))
-    channels = np.array([0])  # Single channel
+    channels = np.array([0, 1])  # Two channels for visualization
     
     X, Y = np.meshgrid(time_steps, channels)
-    Z = np.array([aggregated])  # (1, timesteps)
+    Z = np.array([aggregated, aggregated])  # (2, timesteps)
     
     fig = go.Figure(data=[go.Surface(z=Z, x=X, y=Y)])
     fig.update_layout(
@@ -783,7 +779,7 @@ def plot_4d_shap_surface(shap_values, output_path):
             xaxis_title='Time Steps',
             yaxis_title='Channel',
             zaxis_title='|SHAP Value|',
-            zaxis=dict(range=[0, aggregated.max() * 1.1])  # Set z-axis range
+            zaxis=dict(range=[0, aggregated.max() * 1.1])
         ),
         height=800,
         width=1000

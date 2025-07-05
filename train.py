@@ -1349,54 +1349,30 @@ def main(args):
                         print(f"4D surface plot failed: {str(e)}")
                     
                     # Confusion matrix
+                    # Confusion matrix
                     try:
                         print("Generating confusion matrix...")
-                        true_labels, pred_labels = [], []
-                        device = next(unified_predictor.parameters()).device  # Get model device
-        
-                        for data in valid_loader:
+                        # Use existing evaluate_accuracy function to get predictions
+                        algorithm.eval()
+                        all_preds = []
+                        all_labels = []
+                        
+                        for batch in valid_loader:
                             if args.use_gnn and GNN_AVAILABLE:
-                                # Handle different data formats
-                                if isinstance(data, Data):
-                                    x = data
-                                    y = data.y
-                                elif hasattr(data, 'y'):
-                                    # Batch object
-                                    x = data
-                                    y = data.y
-                                elif isinstance(data, (list, tuple)) and len(data) >= 2:
-                                    # Standard format: [inputs, labels, ...]
-                                    x = data[0]
-                                    y = data[1]
-                                else:
-                                    # Unsupported format
-                                    continue
+                                inputs = batch[0].to(args.device)
+                                labels = batch[1].to(args.device)
+                                inputs = transform_for_gnn(inputs)
                             else:
-                                x = data[0].float()
-                                y = data[1]
-                            
-                            # Move data to model's device
-                            if isinstance(x, (Data, Batch)):
-                                x = x.to(device)
-                            elif isinstance(x, torch.Tensor):
-                                x = x.to(device)
+                                inputs = batch[0].to(args.device).float()
+                                labels = batch[1].to(args.device).long()
                             
                             with torch.no_grad():
-                                # Use UnifiedPredictor's predict method
-                                preds = unified_predictor.predict(x).cpu()
-                                
-                                # Handle single values vs tensors
-                                if isinstance(y, torch.Tensor):
-                                    y = y.cpu().numpy()
-                                elif isinstance(y, list):
-                                    y = np.array(y)
-                                else:
-                                    y = np.array([y])
-                                    
-                                true_labels.extend(y)
-                                pred_labels.extend(torch.argmax(preds, dim=1).detach().cpu().numpy())
+                                outputs = algorithm.predict(inputs)
+                                _, preds = torch.max(outputs, 1)
+                                all_preds.extend(preds.cpu().numpy())
+                                all_labels.extend(labels.cpu().numpy())
                         
-                        cm = confusion_matrix(true_labels, pred_labels)
+                        cm = confusion_matrix(all_labels, all_preds)
                         disp = ConfusionMatrixDisplay(confusion_matrix=cm)
                         disp.plot(cmap="Blues")
                         plt.title("Confusion Matrix (Validation Set)")

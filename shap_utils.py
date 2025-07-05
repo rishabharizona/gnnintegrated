@@ -523,10 +523,10 @@ def compute_aopc(model, inputs, shap_values, steps=10):
         base_preds = model.predict(inputs)
         base_conf = torch.softmax(base_preds, dim=1).max(dim=1).values.cpu().numpy()
     
-    # Convert SHAP to numpy and aggregate
+    # Convert SHAP to numpy and ensure contiguous memory
     shap_vals_np = to_numpy(shap_values)
-    # Force contiguous memory layout with explicit copy
-    shap_vals_np = np.array(shap_vals_np.copy(), order='C')  # FIX: Ensure C-contiguous memory
+    # FIX: Create C-contiguous copy with explicit memory layout
+    shap_vals_np = np.ascontiguousarray(shap_vals_np)
     
     if shap_vals_np.ndim == 3:
         shap_vals_np = np.abs(shap_vals_np).max(axis=-1)  # (samples, timesteps)
@@ -542,29 +542,31 @@ def compute_aopc(model, inputs, shap_values, steps=10):
         
         # Create modified input
         if isinstance(inputs, (Data, Batch)):
-            # For PyG: create a clone
             current = inputs.clone()
-            # FIX: Explicitly convert to contiguous tensor
-            original_features = current.x.clone().contiguous()
+            # FIX: Explicitly create contiguous tensor
+            original_features = current.x.detach().clone().contiguous()
         else:
             current = inputs.clone()
-            # FIX: Explicitly convert to contiguous tensor
-            original_features = current.contiguous()
+            # FIX: Explicitly create contiguous tensor
+            original_features = current.detach().clone().contiguous()
         
         for step in range(1, steps + 1):
             k = int(len(importance) * step / steps)
-            mask_indices = sorted_indices[:k]
+            mask_indices = sorted_indices[:k].copy()  # FIX: Ensure contiguous indices
             
             # Create modified features
             if isinstance(inputs, (Data, Batch)):
                 modified_features = original_features.clone()
-                modified_features[i, mask_indices] = 0
-                # FIX: Ensure contiguous before assignment
+                # FIX: Use advanced indexing with torch tensors
+                mask = torch.zeros(modified_features.shape[1:], dtype=torch.bool)
+                mask[mask_indices] = True
+                modified_features[i, mask] = 0
                 current.x = modified_features.contiguous()
             else:
                 modified_features = original_features.clone()
-                modified_features[i, mask_indices] = 0
-                # FIX: Ensure contiguous before prediction
+                mask = torch.zeros(modified_features.shape[1:], dtype=torch.bool)
+                mask[mask_indices] = True
+                modified_features[i, mask] = 0
                 current = modified_features.contiguous()
             
             # Get prediction
@@ -684,12 +686,18 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     
     inputs = to_numpy(inputs)
     shap_vals = to_numpy(_get_shap_array(shap_values))
-
+    
+    # DEBUG: Print original shapes
+    print(f"[4D Plot] RAW Inputs shape: {inputs.shape}, SHAP shape: {shap_vals.shape}")
     
     # Process first sample
     sample_idx = 0
     inputs = inputs[sample_idx]
     shap_vals = shap_vals[sample_idx]
+    
+    # Handle SHAP values - max across classes if needed
+    if shap_vals.ndim > 1:
+        shap_vals = np.abs(shap_vals).max(axis=0)  # Max across classes
     
     # Fix dimension order (time, channel) -> (channel, time)
     if inputs.shape[0] > inputs.shape[-1]:
@@ -701,31 +709,44 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     inputs = np.squeeze(inputs)
     shap_vals = np.squeeze(shap_vals)
     
-    # Ensure SHAP is 1D (time importance)
-    if shap_vals.ndim > 1:
-        shap_vals = np.abs(shap_vals).max(axis=0)  # Max across channels
+    # DEBUG: Print processed shapes
+    print(f"[4D Plot] PROCESSED Inputs shape: {inputs.shape}, SHAP shape: {shap_vals.shape}")
+    print(f"[4D Plot] SHAP range: {shap_vals.min()} - {shap_vals.max()}")
     
     # Create time steps array
     time_steps = np.arange(len(shap_vals))
-    n_channels = 1  # EMG has 1 channel
     
     # Create Plotly figure
-    fig = go.Figure(data=[go.Scatter3d(
+    fig = go.Figure()
+    
+    # Add EMG signal trace
+    fig.add_trace(go.Scatter3d(
         x=time_steps,
-        y=np.full_like(time_steps, 0),  # Single channel
-        z=shap_vals,
+        y=np.zeros_like(time_steps),
+        z=inputs.flatten() if inputs.ndim > 1 else inputs,
         mode='lines',
-        name='Channel 1',
-        line=dict(width=4, color='blue'))
-    ])
+        name='EMG Signal',
+        line=dict(width=2, color='blue'))
+    )
+    
+    # Add SHAP values trace
+    fig.add_trace(go.Scatter3d(
+        x=time_steps,
+        y=np.ones_like(time_steps),
+        z=shap_vals,
+        mode='lines+markers',
+        name='SHAP Values',
+        line=dict(width=4, color='red'))
+    )
     
     fig.update_layout(
-        title='4D SHAP Value Distribution (First Sample)',
+        title='4D EMG Signal and SHAP Values',
         scene=dict(
             xaxis_title='Time Steps',
-            yaxis_title='EMG Channels',
-            zaxis_title='|SHAP Value|',
-            zaxis=dict(range=[0, shap_vals.max() * 1.1])  # Set z-axis range
+            yaxis_title='Channel',
+            zaxis_title='Value',
+            yaxis=dict(tickvals=[0, 1], ticktext=['Signal', 'SHAP']),
+            camera=dict(eye=dict(x=1.5, y=1.5, z=0.8))
         ),
         height=800,
         width=1000

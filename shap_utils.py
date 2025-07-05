@@ -482,12 +482,10 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
         
         # Convert back to tensor format matching original input type
             # Convert back to tensor format matching original input type
+        device = next(model.parameters()).device
         if isinstance(inputs, (Data, Batch)):
             # Handle PyG objects
             masked_tensor = inputs.clone()
-            
-            # Get device from model instead of Data object
-            device = next(model.parameters()).device
             
             if hasattr(masked_tensor, 'x') and masked_tensor.x is not None:
                 # Get dtype from existing features

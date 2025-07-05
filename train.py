@@ -1149,15 +1149,13 @@ def main(args):
                     
                     print(f"Using first sample as background for GNN")
                     print(f"Created evaluation batch with {len(background_list[:10])} graphs")
-                    print(f"Using first sample as background for GNN")
-                    print(f"Created evaluation batch with {len(background_list[:10])} graphs")
                 else:
                     print("⚠️ Couldn't collect background data for SHAP")
                     background = None
                     X_eval = None
             else:
                 # Standard tensor handling for CNN
-                background = get_background_batch(valid_loader, size=64).cuda()
+                background = get_background_batch(valid_loader, size=64).to(args.device)
                 X_eval = background[:10]
                 print(f"Collected CNN background shape: {background.shape}")
             
@@ -1185,7 +1183,7 @@ def main(args):
                     # ADD THIS METHOD TO FIX PREDICTION ISSUE
                     def predict(self, x):
                         return self.forward(x)
-
+    
                 # Set SHAP mode in the GNN model
                 if args.use_gnn and GNN_AVAILABLE:
                     algorithm.featurizer.shap_mode = True
@@ -1246,40 +1244,44 @@ def main(args):
                                              output_path=os.path.join(args.output, "shap_gnn_sample.html"))
                         except Exception as e:
                             print(f"4D plot failed: {str(e)}")
-                    else:
-                        # Generate core visualizations for non-GNN data
-                        try:
-                            plot_summary(shap_vals, X_eval_np, 
-                                        output_path=os.path.join(args.output, "shap_summary.png"))
-                        except Exception as e:
-                            print(f"Summary plot failed: {str(e)}")
-                        
-                        try:
-                            overlay_signal_with_shap(X_eval_np[0], shap_vals, 
-                                                    output_path=os.path.join(args.output, "shap_overlay.png"))
-                        except Exception as e:
-                            print(f"Signal overlay failed: {str(e)}")
-                        
-                        try:
-                            plot_shap_heatmap(shap_vals, 
-                                             output_path=os.path.join(args.output, "shap_heatmap.png"))
-                        except Exception as e:
-                            print(f"Heatmap failed: {str(e)}")
+                    
+                    # Generate core visualizations for ALL models (including GNN)
+                    try:
+                        plot_summary(shap_vals, X_eval_np, 
+                                    output_path=os.path.join(args.output, "shap_summary.png"))
+                    except Exception as e:
+                        print(f"Summary plot failed: {str(e)}")
+                    
+                    try:
+                        overlay_signal_with_shap(X_eval_np[0], shap_vals, 
+                                                output_path=os.path.join(args.output, "shap_overlay.png"))
+                    except Exception as e:
+                        print(f"Signal overlay failed: {str(e)}")
+                    
+                    try:
+                        plot_shap_heatmap(shap_vals, 
+                                         output_path=os.path.join(args.output, "shap_heatmap.png"))
+                    except Exception as e:
+                        print(f"Heatmap failed: {str(e)}")
                     
                     # Evaluate SHAP impact
                     try:
                         print("Evaluating SHAP impact...")
                         base_preds, masked_preds, acc_drop = evaluate_shap_impact(unified_predictor, X_eval, shap_vals)
                         
-                        # Save SHAP values
-                        save_path = os.path.join(args.output, "shap_values.npy")
-                        save_shap_numpy(shap_vals, save_path=save_path)
-                        
-                        # Compute impact metrics
-                        print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
-                        print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
-                        print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
-                        print(f"[SHAP] AOPC: {compute_aopc(unified_predictor, X_eval, shap_vals):.4f}")
+                        if base_preds is not None and masked_preds is not None:
+                            # Save SHAP values
+                            save_path = os.path.join(args.output, "shap_values.npy")
+                            save_shap_numpy(shap_vals, save_path=save_path)
+                            
+                            # Compute impact metrics
+                            print(f"[SHAP] Accuracy Drop: {acc_drop:.4f}")
+                            print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
+                            print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
+                            try:
+                                print(f"[SHAP] AOPC: {compute_aopc(unified_predictor, X_eval, shap_vals):.4f}")
+                            except:
+                                print("AOPC computation failed")
                     except Exception as e:
                         print(f"SHAP impact evaluation failed: {str(e)}")
                     
@@ -1311,8 +1313,8 @@ def main(args):
                     except Exception as e:
                         print(f"Similarity metrics failed: {str(e)}")
                     
-                    # Generate 4D visualizations
-                    if not (args.use_gnn and GNN_AVAILABLE):  # Skip for GNN for now
+                    # Generate 4D visualizations for non-GNN models
+                    if not (args.use_gnn and GNN_AVAILABLE):
                         try:
                             plot_emg_shap_4d(X_eval, shap_vals, 
                                             output_path=os.path.join(args.output, "shap_4d_scatter.html"))
@@ -1326,12 +1328,11 @@ def main(args):
                             print(f"4D surface plot failed: {str(e)}")
                     
                     # Confusion matrix
-                    
                     try:
                         print("Generating confusion matrix...")
                         true_labels, pred_labels = [], []
                         device = next(unified_predictor.parameters()).device  # Get model device
-
+    
                         for data in valid_loader:
                             if args.use_gnn and GNN_AVAILABLE:
                                 # Handle different data formats

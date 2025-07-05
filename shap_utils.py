@@ -532,10 +532,16 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     
     aopc_scores = []
     
-    # FIX: Ensure we only process available samples
-    num_samples = min(len(base_conf), shap_vals_np.shape[0])
+    # FIX: Get batch size safely
+    if isinstance(inputs, (Data, Batch)):
+        batch_size = get_pyg_batch_size(inputs)
+    else:
+        batch_size = inputs.shape[0]
     
-    for i in range(num_samples):  # Only process available samples
+    # FIX: Ensure we only process available samples
+    num_samples = min(len(base_conf), batch_size, shap_vals_np.shape[0])
+    
+    for i in range(num_samples):
         # Get importance scores
         importance = shap_vals_np[i].flatten()
         sorted_indices = np.argsort(importance)[::-1]
@@ -545,32 +551,33 @@ def compute_aopc(model, inputs, shap_values, steps=10):
         # Create modified input
         if isinstance(inputs, (Data, Batch)):
             current = inputs.clone()
-            # FIX: Handle batch indexing properly
+            # FIX: Get feature count for this sample
+            sample_feature_count = inputs[i].num_nodes if hasattr(inputs[i], 'num_nodes') else inputs.x.size(1)
             original_features = current.x.detach().clone().contiguous()
         else:
             current = inputs.clone()
+            # FIX: Get feature count for this sample
+            sample_feature_count = inputs.shape[1]
             original_features = current.detach().clone().contiguous()
         
         for step in range(1, steps + 1):
-            k = int(len(importance) * step / steps)
+            k = min(int(len(importance) * step / steps), sample_feature_count)
             mask_indices = sorted_indices[:k].copy()
+            
+            # FIX: Validate indices are within bounds
+            mask_indices = mask_indices[mask_indices < sample_feature_count]
             
             # Create modified features
             if isinstance(inputs, (Data, Batch)):
                 modified_features = original_features.clone()
-                # FIX: Correct indexing for PyG data
-                if modified_features.dim() > 1:
-                    modified_features[i, mask_indices] = 0
-                else:
-                    modified_features[mask_indices] = 0
+                # FIX: Use safe indexing
+                mask_indices_tensor = torch.tensor(mask_indices, device=device, dtype=torch.long)
+                modified_features.index_fill_(0, mask_indices_tensor, 0)
                 current.x = modified_features.contiguous()
             else:
                 modified_features = original_features.clone()
-                # FIX: Correct indexing for standard tensors
-                if modified_features.dim() > 1:
-                    modified_features[i, mask_indices] = 0
-                else:
-                    modified_features[mask_indices] = 0
+                # FIX: Use safe indexing
+                modified_features[i, mask_indices] = 0
                 current = modified_features.contiguous()
             
             # Get prediction

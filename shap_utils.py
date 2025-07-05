@@ -278,7 +278,7 @@ def _get_shap_array(shap_values):
 
 # ================= Visualization Functions =================
 def plot_summary(shap_values, features, output_path, max_display=20):
-    """Fixed summary plot for all 1600 features"""
+    """Fixed summary plot with dimension matching"""
     try:
         shap_array = _get_shap_array(shap_values)
         
@@ -286,20 +286,21 @@ def plot_summary(shap_values, features, output_path, max_display=20):
         if shap_array.ndim == 3:
             shap_array = np.abs(shap_array).max(axis=2)  # Max across classes
         
-        # Flatten features
+        # Flatten features to match SHAP dimensions
         features_flat = features.reshape(features.shape[0], -1)
         
-        # Ensure matching dimensions
+        # Ensure matching sample count
         min_samples = min(shap_array.shape[0], features_flat.shape[0])
         if min_samples == 0:
             print("⚠️ No samples for summary plot")
             return
             
+        # Align arrays
         shap_array = shap_array[:min_samples]
         features_flat = features_flat[:min_samples]
         
         # Create feature names
-        feature_names = [f"Feature {i}" for i in range(features_flat.shape[1])]
+        feature_names = [f"F{i}" for i in range(features_flat.shape[1])]
         
         # Plot with SHAP's summary_plot
         plt.figure(figsize=(14, 8))
@@ -311,7 +312,7 @@ def plot_summary(shap_values, features, output_path, max_display=20):
             max_display=max_display,
             show=False
         )
-        plt.title("SHAP Feature Importance (All Nodes and Timesteps)")
+        plt.title("SHAP Feature Importance Summary")
         plt.tight_layout()
         plt.savefig(output_path, dpi=300)
         plt.close()

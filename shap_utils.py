@@ -483,46 +483,59 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
         # Convert back to tensor format
         device = next(model.parameters()).device
         
-        # Handle PyG objects
+        # Handle PyG objects with custom device handling
         if hasattr(inputs, 'to_data_list') or hasattr(inputs, 'batch'):
-            # Handle PyG objects
-            masked_tensor = inputs.clone()
-            
-            if hasattr(masked_tensor, 'x') and masked_tensor.x is not None:
-                dtype = masked_tensor.x.dtype
+            # Handle PyG objects - create new object with modified features
+            if hasattr(inputs, 'x') and inputs.x is not None:
+                # Get dtype from existing features
+                dtype = inputs.x.dtype
+                # Reshape and convert to tensor
                 new_features = torch.tensor(
-                    masked_inputs.reshape(masked_tensor.x.shape),
+                    masked_inputs.reshape(inputs.x.shape),
                     dtype=dtype
                 ).to(device)
-                masked_tensor.x = new_features
-                
-            elif hasattr(masked_tensor, 'node_features') and masked_tensor.node_features is not None:
-                dtype = masked_tensor.node_features.dtype
+                # Create new Data/Batch object with modified features
+                masked_tensor = inputs.__class__(
+                    x=new_features,
+                    edge_index=inputs.edge_index,
+                    batch=inputs.batch if hasattr(inputs, 'batch') else None
+                )
+            elif hasattr(inputs, 'node_features') and inputs.node_features is not None:
+                dtype = inputs.node_features.dtype
                 new_features = torch.tensor(
-                    masked_inputs.reshape(masked_tensor.node_features.shape),
+                    masked_inputs.reshape(inputs.node_features.shape),
                     dtype=dtype
                 ).to(device)
-                masked_tensor.node_features = new_features
-                
+                masked_tensor = inputs.__class__(
+                    node_features=new_features,
+                    edge_index=inputs.edge_index,
+                    batch=inputs.batch if hasattr(inputs, 'batch') else None
+                )
             else:
                 # Fallback: try to find any feature attribute
                 for attr in ['x', 'node_features', 'features', 'feat', 'data']:
-                    if hasattr(masked_tensor, attr) and getattr(masked_tensor, attr) is not None:
-                        features = getattr(masked_tensor, attr)
+                    if hasattr(inputs, attr) and getattr(inputs, attr) is not None:
+                        features = getattr(inputs, attr)
                         dtype = features.dtype
                         new_features = torch.tensor(
                             masked_inputs.reshape(features.shape),
                             dtype=dtype
                         ).to(device)
-                        setattr(masked_tensor, attr, new_features)
+                        # Create new object with modified features
+                        new_kwargs = {
+                            attr: new_features,
+                            'edge_index': inputs.edge_index
+                        }
+                        if hasattr(inputs, 'batch'):
+                            new_kwargs['batch'] = inputs.batch
+                        masked_tensor = inputs.__class__(**new_kwargs)
                         break
+                else:
+                    raise ValueError("Couldn't find feature attribute in PyG object")
         else:
             # Handle standard tensors
-            # Use numpy array's shape instead of original input's shape
             original_shape = inputs_np.shape
             reshaped = masked_inputs.reshape(original_shape)
-            
-            # Create tensor from numpy array
             masked_tensor = torch.tensor(
                 reshaped, 
                 dtype=torch.float32

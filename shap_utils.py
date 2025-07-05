@@ -1,6 +1,10 @@
-import warnings
+# Add at the top
+from sklearn.exceptions import ConvergenceWarning
+
+# Suppress warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 import shap
 import torch
 import torch.nn as nn

@@ -480,17 +480,16 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
             # Mask important timesteps
             masked_inputs[i, :, :, top_indices] = 0
         
-        # Convert back to tensor format matching original input type
+        # Convert back to tensor format
         device = next(model.parameters()).device
         
-        if isinstance(inputs, (Data, Batch)):
+        # Handle PyG objects
+        if hasattr(inputs, 'to_data_list') or hasattr(inputs, 'batch'):
             # Handle PyG objects
             masked_tensor = inputs.clone()
             
             if hasattr(masked_tensor, 'x') and masked_tensor.x is not None:
-                # Get dtype from existing features
                 dtype = masked_tensor.x.dtype
-                # Reshape and convert to tensor
                 new_features = torch.tensor(
                     masked_inputs.reshape(masked_tensor.x.shape),
                     dtype=dtype
@@ -518,13 +517,15 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
                         setattr(masked_tensor, attr, new_features)
                         break
         else:
-            # Handle standard tensors - use numpy shape instead of .shape
-            # For PyG objects, we never reach this branch
-            original_shape = inputs_np.shape  # Use numpy shape instead of inputs.shape
+            # Handle standard tensors
+            # Use numpy array's shape instead of original input's shape
+            original_shape = inputs_np.shape
             reshaped = masked_inputs.reshape(original_shape)
+            
+            # Create tensor from numpy array
             masked_tensor = torch.tensor(
                 reshaped, 
-                dtype=torch.float32  # Default dtype
+                dtype=torch.float32
             ).to(device)
         
         # Get predictions on masked inputs

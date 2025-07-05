@@ -1348,36 +1348,39 @@ def main(args):
                     
                     
                     # Confusion matrix
+                    # Confusion matrix
                     try:
                         print("Generating confusion matrix...")
-                        # Use existing evaluate_accuracy function to get predictions
-                        algorithm.eval()
-                        all_preds = []
-                        all_labels = []
+                        true_labels = []
+                        pred_labels = []
+                        device = next(algorithm.parameters()).device
                         
                         for batch in valid_loader:
                             if args.use_gnn and GNN_AVAILABLE:
-                                inputs = batch[0].to(args.device)
-                                labels = batch[1].to(args.device)
+                                inputs = batch[0].to(device)
+                                labels = batch[1].cpu().numpy()  # Move to CPU early
                                 inputs = transform_for_gnn(inputs)
                             else:
-                                inputs = batch[0].to(args.device).float()
-                                labels = batch[1].to(args.device).long()
+                                inputs = batch[0].to(device).float()
+                                labels = batch[1].cpu().numpy()  # Move to CPU early
                             
                             with torch.no_grad():
                                 outputs = algorithm.predict(inputs)
                                 _, preds = torch.max(outputs, 1)
-                                all_preds.extend(preds.cpu().numpy())
-                                all_labels.extend(labels.cpu().numpy())
+                                preds = preds.cpu().numpy()
+                                
+                                # FIX: Validate label ranges
+                                valid_labels = labels < args.num_classes
+                                true_labels.extend(labels[valid_labels])
+                                pred_labels.extend(preds[valid_labels])
                         
-                        cm = confusion_matrix(all_labels, all_preds)
+                        cm = confusion_matrix(true_labels, pred_labels)
                         disp = ConfusionMatrixDisplay(confusion_matrix=cm)
                         disp.plot(cmap="Blues")
                         plt.title("Confusion Matrix (Validation Set)")
                         plt.savefig(os.path.join(args.output, "confusion_matrix.png"), dpi=300)
                         plt.close()
-                        
-                        print("✅ SHAP analysis completed successfully")
+                        print("✅ Confusion matrix saved")
                     except Exception as e:
                         print(f"Confusion matrix failed: {str(e)}")
         except Exception as e:

@@ -444,11 +444,13 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
     inputs_np = to_numpy(inputs)
     shap_vals_np = to_numpy(shap_values)
     
-    # Ensure we have at least 2 dimensions
-    if inputs_np.ndim < 2:
-        inputs_np = inputs_np[np.newaxis, :]
-    if shap_vals_np.ndim < 2:
-        shap_vals_np = shap_vals_np[np.newaxis, :]
+    # Handle multi-class SHAP arrays
+    if shap_vals_np.ndim > 4:
+        # Reduce class dimension by taking max absolute values
+        shap_vals_np = np.abs(shap_vals_np).max(axis=1)
+    elif shap_vals_np.ndim == 4 and shap_vals_np.shape[1] > 1:
+        # (batch, classes, ...) -> reduce to single importance
+        shap_vals_np = np.abs(shap_vals_np).max(axis=1)
     
     # Get batch size and time dimension
     batch_size = inputs_np.shape[0]
@@ -464,13 +466,30 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
     else:
         inputs_np = inputs_np.reshape(batch_size, -1, 1, n_timesteps)
     
-    # Reshape SHAP values to match inputs
-    shap_vals_np = shap_vals_np.reshape(inputs_np.shape)
+    # Reshape SHAP values to match inputs' spatial dimensions
+    if shap_vals_np.ndim == 2:
+        shap_vals_np = shap_vals_np.reshape(batch_size, 1, 1, n_timesteps)
+    elif shap_vals_np.ndim == 3:
+        shap_vals_np = shap_vals_np.reshape(batch_size, shap_vals_np.shape[1], 1, n_timesteps)
+    elif shap_vals_np.ndim == 4:
+        # Preserve existing dimensions
+        pass
+    else:
+        # Flatten to 4D: [batch, channels, spatial, time]
+        shap_vals_np = shap_vals_np.reshape(batch_size, -1, 1, n_timesteps)
     
-    # Validate shapes
+    # Final safety check
     if inputs_np.shape != shap_vals_np.shape:
-        print(f"⚠️ Shape mismatch after reshaping: inputs {inputs_np.shape} vs SHAP {shap_vals_np.shape}")
-        shap_vals_np = shap_vals_np.reshape(inputs_np.shape)
+        # Automatic alignment to smallest dimensions
+        new_shape = (
+            min(inputs_np.shape[0], shap_vals_np.shape[0]),
+            min(inputs_np.shape[1], shap_vals_np.shape[1]),
+            min(inputs_np.shape[2], shap_vals_np.shape[2]),
+            min(inputs_np.shape[3], shap_vals_np.shape[3])
+        )
+        inputs_np = inputs_np[:new_shape[0], :new_shape[1], :new_shape[2], :new_shape[3]]
+        shap_vals_np = shap_vals_np[:new_shape[0], :new_shape[1], :new_shape[2], :new_shape[3]]
+        print(f"⚠️ Aligned shapes to {new_shape}")
     
     # Rest of function remains unchanged...
     masked_inputs = inputs_np.copy()

@@ -1260,21 +1260,21 @@ def main(args):
                     
                     # Generate core visualizations for ALL models (including GNN)
                     try:
-                        # USE shap_vals_agg HERE
+                        print(f"Visualizing: Summary plot with SHAP shape {shap_vals_agg.shape}, Features shape {X_eval_np.shape}")
                         plot_summary(shap_vals_agg, X_eval_np, 
                                     output_path=os.path.join(args.output, "shap_summary.png"))
                     except Exception as e:
                         print(f"Summary plot failed: {str(e)}")
                     
                     try:
-                        # USE shap_vals_agg HERE
+                        print(f"Visualizing: Overlay with SHAP shape {shap_vals_agg.shape}, Signal shape {X_eval_np[0].shape}")
                         overlay_signal_with_shap(X_eval_np[0], shap_vals_agg, 
                                                 output_path=os.path.join(args.output, "shap_overlay.png"))
                     except Exception as e:
                         print(f"Signal overlay failed: {str(e)}")
                     
                     try:
-                        # USE shap_vals_agg HERE
+                        print(f"Visualizing: Heatmap with SHAP shape {shap_vals_agg.shape}")
                         plot_shap_heatmap(shap_vals_agg, 
                                          output_path=os.path.join(args.output, "shap_heatmap.png"))
                     except Exception as e:
@@ -1332,7 +1332,7 @@ def main(args):
                     # Generate 4D visualizations for non-GNN models
                     if not (args.use_gnn and GNN_AVAILABLE):
                         try:
-                            # For scatter plot - use first sample
+                            print(f"Visualizing: 4D Scatter with SHAP shape {shap_vals.shape}, Features shape {X_eval_np[0].shape}")
                             plot_emg_shap_4d(
                                 X_eval_np[0], 
                                 shap_vals[0] if shap_vals.ndim > 2 else shap_vals_agg[0],
@@ -1342,7 +1342,7 @@ def main(args):
                             print(f"4D scatter plot failed: {str(e)}")
                         
                         try:
-                            # For surface plot
+                            print(f"Visualizing: 4D Surface with SHAP shape {shap_vals.shape}")
                             plot_4d_shap_surface(
                                 shap_vals if shap_vals.ndim > 2 else shap_vals_agg,
                                 output_path=os.path.join(args.output, "shap_4d_surface.html")

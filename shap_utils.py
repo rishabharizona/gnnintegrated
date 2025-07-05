@@ -156,6 +156,7 @@ def safe_compute_shap_values(model, background, inputs):
                     super().__init__()
                     self.model = model
                     self.background = background
+                    self.orig_shape = extract_pyg_features(background).shape
                     self.device = next(model.parameters()).device
                  # Ensure background features are properly formatted
                 if isinstance(background, (Data, Batch)):
@@ -167,7 +168,9 @@ def safe_compute_shap_values(model, background, inputs):
                     # Convert numpy arrays to tensors
                     if isinstance(x, np.ndarray):
                         x = torch.tensor(x, dtype=torch.float32).to(self.device)
-                    
+
+                    # Reshape to original graph structure
+                    x = x.reshape(-1, *self.orig_shape[1:])  # Restore original dimensions
                     # Reconstruct PyG data from features
                     if isinstance(self.background, Batch):
                         # For batch data, reconstruct each graph
@@ -227,7 +230,11 @@ def safe_compute_shap_values(model, background, inputs):
                 # Convert to numpy for KernelExplainer
                 bg_numpy = background_features.cpu().detach().numpy()
                 inputs_numpy = inputs_features.cpu().detach().numpy()
-                
+
+                # FLATTEN TO 2D HERE
+                bg_numpy = bg_numpy.reshape(bg_numpy.shape[0], -1)
+                inputs_numpy = inputs_numpy.reshape(inputs_numpy.shape[0], -1)
+                print(f"KernelExplainer shapes - bg: {bg_numpy.shape}, inputs: {inputs_numpy.shape}")
                 # Create model wrapper for KernelExplainer
                 def model_wrapper(x):
                     return tensor_wrapper(x).detach().cpu().numpy()

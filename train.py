@@ -1216,6 +1216,9 @@ def main(args):
                         print(f"Aggregated SHAP values shape: {shap_vals_agg.shape}")
                     else:
                         shap_vals_agg = shap_vals.copy()
+                    # Debug print sample data
+                    print(f"Sample SHAP values (min, max, mean): {shap_vals_agg.min()}, {shap_vals_agg.max()}, {shap_vals_agg.mean()}")
+                    print(f"Sample signal data (min, max, mean): {X_eval_np.min()}, {X_eval_np.max()}, {X_eval_np.mean()}")
                     # ==== END OF AGGREGATION BLOCK ====
                     # Convert to numpy safely before visualization
                     if args.use_gnn and GNN_AVAILABLE:
@@ -1327,14 +1330,21 @@ def main(args):
                     # Generate 4D visualizations for non-GNN models
                     if not (args.use_gnn and GNN_AVAILABLE):
                         try:
-                            plot_emg_shap_4d(X_eval, shap_vals, 
-                                            output_path=os.path.join(args.output, "shap_4d_scatter.html"))
+                            # For scatter plot - use first sample
+                            plot_emg_shap_4d(
+                                X_eval_np[0] if not (args.use_gnn and GNN_AVAILABLE) else X_eval_np[0].squeeze(),
+                                shap_vals[0] if not (args.use_gnn and GNN_AVAILABLE) else shap_vals[0].squeeze(),
+                                output_path=os.path.join(args.output, "shap_4d_scatter.html")
+                            )
                         except Exception as e:
                             print(f"4D scatter plot failed: {str(e)}")
                         
                         try:
-                            plot_4d_shap_surface(shap_vals, 
-                                                output_path=os.path.join(args.output, "shap_4d_surface.html"))
+                            # For surface plot
+                            plot_4d_shap_surface(
+                                shap_vals,
+                                output_path=os.path.join(args.output, "shap_4d_surface.html")
+                            )
                         except Exception as e:
                             print(f"4D surface plot failed: {str(e)}")
                     

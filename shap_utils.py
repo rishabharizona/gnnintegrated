@@ -474,7 +474,19 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
     
     # Rest of function remains unchanged...
     masked_inputs = inputs_np.copy()
-    
+
+     
+    if inputs_np.shape != shap_vals_np.shape:
+        # Find the smallest dimensions
+        min_batch = min(inputs_np.shape[0], shap_vals_np.shape[0])
+        min_channels = min(inputs_np.shape[1], shap_vals_np.shape[1])
+        min_time = min(inputs_np.shape[3], shap_vals_np.shape[3])
+        
+        # Trim both arrays to match
+        inputs_np = inputs_np[:min_batch, :min_channels, :, :min_time]
+        shap_vals_np = shap_vals_np[:min_batch, :min_channels, :, :min_time]
+        
+        print(f"⚠️ Trimmed arrays to shape {inputs_np.shape}")
     # Mask top-K important features for each sample
     for i in range(batch_size):
         # Calculate importance per time step (average across channels and spatial)

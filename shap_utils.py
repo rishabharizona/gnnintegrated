@@ -481,19 +481,44 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
             masked_inputs[i, :, :, top_indices] = 0
         
         # Convert back to tensor format matching original input type
+            # Convert back to tensor format matching original input type
         if isinstance(inputs, (Data, Batch)):
             # Handle PyG objects
             masked_tensor = inputs.clone()
-            if hasattr(masked_tensor, 'x'):
-                masked_tensor.x = torch.tensor(
-                    masked_inputs.reshape(inputs.x.shape), 
-                    dtype=inputs.x.dtype
-                ).to(inputs.x.device)
-            elif hasattr(masked_tensor, 'node_features'):
-                masked_tensor.node_features = torch.tensor(
-                    masked_inputs.reshape(inputs.node_features.shape),
-                    dtype=inputs.node_features.dtype
-                ).to(inputs.node_features.device)
+            
+            # Get device from model instead of Data object
+            device = next(model.parameters()).device
+            
+            if hasattr(masked_tensor, 'x') and masked_tensor.x is not None:
+                # Get dtype from existing features
+                dtype = masked_tensor.x.dtype
+                # Reshape and convert to tensor
+                new_features = torch.tensor(
+                    masked_inputs.reshape(masked_tensor.x.shape),
+                    dtype=dtype
+                ).to(device)
+                masked_tensor.x = new_features
+                
+            elif hasattr(masked_tensor, 'node_features') and masked_tensor.node_features is not None:
+                dtype = masked_tensor.node_features.dtype
+                new_features = torch.tensor(
+                    masked_inputs.reshape(masked_tensor.node_features.shape),
+                    dtype=dtype
+                ).to(device)
+                masked_tensor.node_features = new_features
+                
+            else:
+                # Fallback: try to find any feature attribute
+                for attr in ['x', 'node_features', 'features', 'feat', 'data']:
+                    if hasattr(masked_tensor, attr) and getattr(masked_tensor, attr) is not None:
+                        features = getattr(masked_tensor, attr)
+                        dtype = features.dtype
+                        new_features = torch.tensor(
+                            masked_inputs.reshape(features.shape),
+                            dtype=dtype
+                        ).to(device)
+                        setattr(masked_tensor, attr, new_features)
+                        break
         else:
             # Handle standard tensors
             original_shape = inputs.shape

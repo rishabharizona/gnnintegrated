@@ -1183,7 +1183,7 @@ def main(args):
                     # ADD THIS METHOD TO FIX PREDICTION ISSUE
                     def predict(self, x):
                         return self.forward(x)
-    
+        
                 # Set SHAP mode in the GNN model
                 if args.use_gnn and GNN_AVAILABLE:
                     algorithm.featurizer.shap_mode = True
@@ -1208,26 +1208,25 @@ def main(args):
                     # Extract values from Explanation object
                     shap_vals = shap_explanation.values
                     print(f"SHAP values shape: {shap_vals.shape}")
-
-                    # ==== ADD THIS AGGREGATION BLOCK HERE ====
+    
                     # Create aggregated version for visualizations
                     if shap_vals.ndim == 3:  # (samples, timesteps, classes)
                         shap_vals_agg = np.abs(shap_vals).max(axis=-1)
                         print(f"Aggregated SHAP values shape: {shap_vals_agg.shape}")
                     else:
                         shap_vals_agg = shap_vals.copy()
-
+    
+                    # Convert to numpy safely before visualization
                     if args.use_gnn and GNN_AVAILABLE:
                         # For GNN, convert batched graph to numpy
                         X_eval_np = X_eval.x.detach().cpu().numpy()
                     else:
                         # For standard models
                         X_eval_np = X_eval.detach().cpu().numpy()
+                    
                     # Debug print sample data
                     print(f"Sample SHAP values (min, max, mean): {shap_vals_agg.min()}, {shap_vals_agg.max()}, {shap_vals_agg.mean()}")
                     print(f"Sample signal data (min, max, mean): {X_eval_np.min()}, {X_eval_np.max()}, {X_eval_np.mean()}")
-                    # ==== END OF AGGREGATION BLOCK ====
-                    
                     
                     # Handle GNN dimensionality for visualization
                     if args.use_gnn and GNN_AVAILABLE:
@@ -1236,7 +1235,6 @@ def main(args):
                         
                         # If 4D, reduce to 3D by summing over classes
                         if shap_vals.ndim == 4:
-                            # Sum across classes to get overall feature importance
                             shap_vals = np.abs(shap_vals).sum(axis=-1)
                             print(f"SHAP values after class sum: {shap_vals.shape}")
                         
@@ -1250,12 +1248,7 @@ def main(args):
                             X_eval_np = np.expand_dims(X_eval_np, axis=2)
                         else:
                             print(f"⚠️ Unexpected SHAP values dimension: {shap_vals.ndim}")
-
-                        # After getting X_eval_np and before visualizations
-                        if X_eval_np.shape[1] == 200 and X_eval_np.shape[2] == 1 and X_eval_np.shape[3] == 1:
-                            print("Correcting dimension order: (samples, time, channel, spatial) -> (samples, channel, spatial, time)")
-                            X_eval_np = np.transpose(X_eval_np, (0, 2, 3, 1))  # (80, 1, 1, 200)
-                            print(f"New X_eval shape: {X_eval_np.shape}")
+                        
                         # Visualize the first sample
                         try:
                             plot_emg_shap_4d(X_eval_np[0], shap_vals[0], 
@@ -1300,9 +1293,10 @@ def main(args):
                             print(f"[SHAP] Flip Rate: {compute_flip_rate(base_preds, masked_preds):.4f}")
                             print(f"[SHAP] Confidence Δ: {compute_confidence_change(base_preds, masked_preds):.4f}")
                             try:
-                                print(f"[SHAP] AOPC: {compute_aopc(unified_predictor, X_eval, shap_vals):.4f}")
-                            except:
-                                print("AOPC computation failed")
+                                aopc = compute_aopc(unified_predictor, X_eval, shap_vals)
+                                print(f"[SHAP] AOPC: {aopc:.4f}")
+                            except Exception as e:
+                                print(f"AOPC computation failed: {str(e)}")
                     except Exception as e:
                         print(f"SHAP impact evaluation failed: {str(e)}")
                     
@@ -1334,33 +1328,32 @@ def main(args):
                     except Exception as e:
                         print(f"Similarity metrics failed: {str(e)}")
                     
-                    # Generate 4D visualizations for non-GNN models
-                    if not (args.use_gnn and GNN_AVAILABLE):
-                        try:
-                            print(f"Visualizing: 4D Scatter with SHAP shape {shap_vals.shape}, Features shape {X_eval_np[0].shape}")
-                            plot_emg_shap_4d(
-                                X_eval_np[0], 
-                                shap_vals[0] if shap_vals.ndim > 2 else shap_vals_agg[0],
-                                output_path=os.path.join(args.output, "shap_4d_scatter.html")
-                            )
-                        except Exception as e:
-                            print(f"4D scatter plot failed: {str(e)}")
-                        
-                        try:
-                            print(f"Visualizing: 4D Surface with SHAP shape {shap_vals.shape}")
-                            plot_4d_shap_surface(
-                                shap_vals if shap_vals.ndim > 2 else shap_vals_agg,
-                                output_path=os.path.join(args.output, "shap_4d_surface.html")
-                            )
-                        except Exception as e:
-                            print(f"4D surface plot failed: {str(e)}")
+                    # Generate 4D visualizations for ALL models
+                    try:
+                        print(f"Visualizing: 4D Scatter with SHAP shape {shap_vals.shape}, Features shape {X_eval_np[0].shape}")
+                        plot_emg_shap_4d(
+                            X_eval_np[0], 
+                            shap_vals[0] if shap_vals.ndim > 2 else shap_vals_agg[0],
+                            output_path=os.path.join(args.output, "shap_4d_scatter.html")
+                        )
+                    except Exception as e:
+                        print(f"4D scatter plot failed: {str(e)}")
+                    
+                    try:
+                        print(f"Visualizing: 4D Surface with SHAP shape {shap_vals.shape}")
+                        plot_4d_shap_surface(
+                            shap_vals if shap_vals.ndim > 2 else shap_vals_agg,
+                            output_path=os.path.join(args.output, "shap_4d_surface.html")
+                        )
+                    except Exception as e:
+                        print(f"4D surface plot failed: {str(e)}")
                     
                     # Confusion matrix
                     try:
                         print("Generating confusion matrix...")
                         true_labels, pred_labels = [], []
                         device = next(unified_predictor.parameters()).device  # Get model device
-    
+        
                         for data in valid_loader:
                             if args.use_gnn and GNN_AVAILABLE:
                                 # Handle different data formats
@@ -1379,7 +1372,7 @@ def main(args):
                                     # Unsupported format
                                     continue
                             else:
-                                x = data[0].float()  # Remove .to(device) here
+                                x = data[0].float()
                                 y = data[1]
                             
                             # Move data to model's device

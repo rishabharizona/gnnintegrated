@@ -1,10 +1,5 @@
-# Add at the top
+import warnings
 from sklearn.exceptions import ConvergenceWarning
-
-# Suppress warnings
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", category=ConvergenceWarning)
-warnings.filterwarnings("ignore", category=RuntimeWarning)
 import shap
 import torch
 import torch.nn as nn
@@ -24,6 +19,12 @@ import os
 import warnings
 from scipy.stats import entropy
 from torch_geometric.data import Data, Batch
+# Suppress all warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 # Constants
 TIMESTEPS = 1600  # Fixed number of timesteps
 

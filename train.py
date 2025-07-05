@@ -465,36 +465,29 @@ class EnhancedTemporalGCN(TemporalGCN):
     # In EnhancedTemporalGCN.forward_shap
     def forward_shap(self, x):
         """Simplified forward pass for SHAP compatibility"""
-        # Extract features from PyG objects if needed
         if hasattr(x, 'x'):
             features = x.x
         else:
             features = x
         
-        
-        # Handle feature dimensions - flatten properly
-        if features.dim() == 2:  # [nodes, features]
-            # For single graph: [8, 200] -> [1, 1600]
+        # Reshape to [num_graphs, total_features]
+        if features.dim() == 3:
+            # [batch_size, num_nodes, num_features] -> flatten per graph
+            features = features.reshape(features.size(0), -1)
+        elif features.dim() == 2:
+            # [num_nodes, num_features] -> one graph
             features = features.flatten().unsqueeze(0)
-        elif features.dim() == 3:  # [batch, nodes, features]
-            # For batch: [batch, 8, 200] -> [batch, 1600]
-            features = features.flatten(start_dim=1)
-        elif features.dim() == 4:  # [batch, ch, spatial, time]
-            features = features.flatten(start_dim=1)
+        else:
+            features = features.reshape(1, -1)
         
-        
-        # Get actual feature dimension
         actual_dim = features.size(1)
-        expected_dim = 8 * 200
+        expected_dim = 8 * 200  # 1,600 per graph
         
-        # Create projection if needed and not exists
         if actual_dim != expected_dim:
             if self.shap_projection is None:
                 self.shap_projection = nn.Linear(actual_dim, expected_dim).to(features.device)
             features = self.shap_projection(features)
-            
         
-        # Directly pass to SHAP classifier
         return self.shap_classifier(features)
 # ======================= DOMAIN ADVERSARIAL LOSS =======================
 class DomainAdversarialLoss(nn.Module):
@@ -1142,10 +1135,11 @@ def main(args):
                 if background_list:
                     # For GNN: use first sample as background
                     background = background_list[0]
-                    X_eval = Batch.from_data_list(background_list[:10])
+                    X_eval = background_list[1] 
                     # Add debug prints
-                    print(f"Background sample node features shape: {background.x.shape}")
-                    print(f"Evaluation batch node features shape: {X_eval.x.shape}")
+                    # Debug prints
+                    print(f"Background shape: {background.x.shape}")
+                    print(f"Evaluation shape: {X_eval.x.shape}")
                     
                     print(f"Using first sample as background for GNN")
                     print(f"Created evaluation batch with {len(background_list[:10])} graphs")

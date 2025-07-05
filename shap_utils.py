@@ -192,21 +192,26 @@ def safe_compute_shap_values(model, background, inputs):
                         graph.x = features_tensor[i]
                         data_list.append(graph)
                     
-                    return self.model(Batch.from_data_list(data_list))
+                    # Get model predictions
+                    batch = Batch.from_data_list(data_list)
+                    predictions = self.model(batch)
+                    
+                    # Return predictions as numpy array
+                    return predictions.detach().cpu().numpy()
             
             # Create reconstructor with background as template
             reconstructor = GraphReconstructor(wrapped_model, background)
             
             # Use KernelExplainer
             explainer = shap.KernelExplainer(
-                lambda x: reconstructor(x).detach().cpu().numpy(),
+                reconstructor,
                 background_features
             )
             
-            # Compute SHAP values
+            # Compute SHAP values - use 1 sample for efficiency
             shap_values = explainer.shap_values(
                 inputs_features, 
-                nsamples=100  # Reduce for faster computation
+                nsamples=1  # Use minimal samples for GNN
             )
             
             return shap.Explanation(

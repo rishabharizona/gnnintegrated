@@ -278,15 +278,24 @@ def plot_summary(shap_values, features, output_path, max_display=20):
         shap_array = np.abs(shap_array).max(axis=2)  # Max importance across classes
     
     # Flatten features to match SHAP dimensions
-    features_flat = features.reshape(features.shape[0], -1)
-    shap_flat = shap_array.reshape(shap_array.shape[0], -1)
+    if features.ndim > 2:
+        features = features.reshape(features.shape[0], -1)
+    
+    # Ensure matching dimensions
+    min_samples = min(shap_array.shape[0], features.shape[0])
+    if min_samples == 0:
+        print("⚠️ No samples to plot")
+        return
+        
+    shap_array = shap_array[:min_samples]
+    features = features[:min_samples]
     
     # Create feature names
-    feature_names = [f"Feature {i}" for i in range(shap_flat.shape[1])]
+    feature_names = [f"Feature {i}" for i in range(shap_array.shape[1])]
     
     shap.summary_plot(
-        shap_flat, 
-        features_flat,
+        shap_array, 
+        features,
         feature_names=feature_names,
         plot_type="bar",
         max_display=max_display,
@@ -304,7 +313,7 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     shap_vals = _get_shap_array(shap_vals)
     shap_vals = to_numpy(shap_vals)
     
-    print(f"[Overlay] Signal shape: {signal.shape}, SHAP shape: {shap_vals.shape}")
+
     
     # Aggregate multi-class SHAP values
     if shap_vals.ndim == 3:  # (samples, timesteps, classes)
@@ -333,7 +342,6 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     if len(shap_vals) < TIMESTEPS:
         shap_vals = np.pad(shap_vals, (0, TIMESTEPS - len(shap_vals)))
     
-    print(f"[Overlay] Processed signal length: {len(signal)}, SHAP length: {len(shap_vals)}")
     
     plt.figure(figsize=(12, 6))
     plt.plot(signal, label="EMG Signal", color="steelblue", alpha=0.7, linewidth=1.5)
@@ -403,29 +411,33 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
         # Handle PyG Data objects
         if isinstance(inputs, (Data, Batch)):
             inputs_np = inputs.x.detach().cpu().numpy()
+            if inputs_np.ndim > 2:
+                inputs_np = inputs_np.squeeze()
         
         # Handle multi-class SHAP arrays
-        if shap_vals_np.ndim > 4:
-            shap_vals_np = np.abs(shap_vals_np).max(axis=1)
-        elif shap_vals_np.ndim == 4 and shap_vals_np.shape[1] > 1:
-            shap_vals_np = np.abs(shap_vals_np).max(axis=1)
+        if shap_vals_np.ndim == 3:  # (samples, features, classes)
+            shap_vals_np = np.abs(shap_vals_np).max(axis=2)
         
         # Ensure proper dimensions
-        if inputs_np.ndim < 2:
+        if inputs_np.ndim == 1:
             inputs_np = inputs_np[np.newaxis, :]
-        if shap_vals_np.ndim < 2:
+        if shap_vals_np.ndim == 1:
             shap_vals_np = shap_vals_np[np.newaxis, :]
         
         batch_size = inputs_np.shape[0]
+        features_per_sample = inputs_np.shape[1]
         
         # Create masked inputs
         masked_inputs = inputs_np.copy()
         
         for i in range(batch_size):
             importance = np.abs(shap_vals_np[i])
-            k = max(1, int(importance.size * top_k))
+            k = max(1, int(features_per_sample * top_k))
             top_indices = np.argsort(importance)[-k:]
-            masked_inputs[i, top_indices] = 0
+            
+            # Ensure indices are within bounds
+            valid_indices = top_indices[top_indices < features_per_sample]
+            masked_inputs[i, valid_indices] = 0
         
         # Convert back to tensor format
         if isinstance(inputs, (Data, Batch)):
@@ -440,6 +452,7 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
             masked_tensor.x = new_features
         else:  # Standard tensor
             masked_tensor = torch.tensor(masked_inputs, dtype=torch.float32).to(device)
+            masked_tensor = masked_tensor.reshape(inputs.shape)
         
         # Get predictions
         with torch.no_grad():
@@ -552,7 +565,7 @@ def compute_pca_alignment(shap_values):
     flat_vals = vals.reshape(vals.shape[0], -1)
     
     # Skip PCA if not enough samples
-    if flat_vals.shape[0] < 2:
+    if flat_vals.shape[0] < 2 or flat_vals.shape[1] < 2:
         return 0.0
     
     pca = PCA(n_components=min(2, flat_vals.shape[1]))
@@ -625,8 +638,11 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
             channels = 1
             timesteps = inputs.size
             inputs = inputs.reshape(1, timesteps)
-        else:
+        elif inputs.ndim == 2:
             channels, timesteps = inputs.shape
+        else:
+            print(f"⚠️ Unsupported input dimension: {inputs.ndim}")
+            return
     
     # Create meshgrid
     time_steps = np.arange(timesteps)
@@ -637,10 +653,15 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     fig = go.Figure()
     
     for ch in range(channels):
+        # Get SHAP values for this channel
+        start_idx = ch * timesteps
+        end_idx = (ch+1) * timesteps
+        channel_shap = shap_vals[start_idx:end_idx] if shap_vals.size > timesteps else shap_vals
+        
         fig.add_trace(go.Scatter3d(
             x=time_steps,
             y=np.full(timesteps, ch),
-            z=shap_vals[ch * timesteps : (ch+1) * timesteps] if shap_vals.size > timesteps else shap_vals,
+            z=channel_shap,
             mode='lines',
             name=f'Channel {ch+1}',
             line=dict(width=4)

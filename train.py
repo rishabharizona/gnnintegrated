@@ -1299,7 +1299,7 @@ def main(args):
                     
                     # Compute similarity metrics between first two samples
                     try:
-                        shap_array = _get_shap_array(shap_values)
+                        shap_array = _get_shap_array(shap_vals)
                         if len(shap_array) >= 2:
                             # Extract SHAP values for first two samples
                             sample1 = shap_array[0]

@@ -269,30 +269,24 @@ def _get_shap_array(shap_values):
 
 # ================= Visualization Functions =================
 def plot_summary(shap_values, features, output_path, max_display=20):
-    """Global feature importance summary plot"""
     plt.figure(figsize=(10, 6))
     
     shap_array = _get_shap_array(shap_values)
     
     # Aggregate multi-class SHAP values
-    if shap_array.ndim == 3:  # (samples, timesteps, classes)
-        shap_array = np.abs(shap_array).max(axis=-1)  # Max importance across classes
+    if shap_array.ndim == 3:  # (samples, features, classes)
+        shap_array = np.abs(shap_array).max(axis=2)  # Max importance across classes
     
-    # Reshape to (samples, timesteps)
-    features = features.reshape(features.shape[0], -1)
-    flat_shap = shap_array.reshape(shap_array.shape[0], -1)
+    # Flatten features to match SHAP dimensions
+    features_flat = features.reshape(features.shape[0], -1)
+    shap_flat = shap_array.reshape(shap_array.shape[0], -1)
     
-    # Ensure 1600 timesteps
-    if features.shape[1] != TIMESTEPS:
-        features = features[:, :TIMESTEPS]
-        flat_shap = flat_shap[:, :TIMESTEPS]
-    
-    # Create time-step feature names
-    feature_names = [f"T{t}" for t in range(TIMESTEPS)]
+    # Create feature names
+    feature_names = [f"Feature {i}" for i in range(shap_flat.shape[1])]
     
     shap.summary_plot(
-        flat_shap, 
-        features,
+        shap_flat, 
+        features_flat,
         feature_names=feature_names,
         plot_type="bar",
         max_display=max_display,
@@ -394,7 +388,6 @@ def plot_shap_heatmap(shap_values, output_path):
 
 # ================== SHAP Impact Analysis ===================
 def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
-    """Robust SHAP impact evaluation for 1600 timesteps"""
     try:
         model.eval()
         device = next(model.parameters()).device
@@ -406,6 +399,10 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
         base_preds_np = to_numpy(base_preds)
         inputs_np = to_numpy(inputs)
         shap_vals_np = to_numpy(shap_values)
+        
+        # Handle PyG Data objects
+        if isinstance(inputs, (Data, Batch)):
+            inputs_np = inputs.x.detach().cpu().numpy()
         
         # Handle multi-class SHAP arrays
         if shap_vals_np.ndim > 4:
@@ -421,37 +418,28 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
         
         batch_size = inputs_np.shape[0]
         
-        # Reshape to (batch, TIMESTEPS)
-        inputs_np = inputs_np.reshape(batch_size, -1)[:, :TIMESTEPS]
-        shap_vals_np = shap_vals_np.reshape(batch_size, -1)[:, :TIMESTEPS]
-        
         # Create masked inputs
         masked_inputs = inputs_np.copy()
         
         for i in range(batch_size):
             importance = np.abs(shap_vals_np[i])
-            k = max(1, int(TIMESTEPS * top_k))
+            k = max(1, int(importance.size * top_k))
             top_indices = np.argsort(importance)[-k:]
             masked_inputs[i, top_indices] = 0
         
         # Convert back to tensor format
-        if hasattr(inputs, 'to_data_list'):  # PyG Batch object
+        if isinstance(inputs, (Data, Batch)):
             # Create new features tensor
             new_features = torch.tensor(
-                masked_inputs.reshape(inputs.x.shape),
+                masked_inputs,
                 dtype=inputs.x.dtype
             ).to(device)
             
             # Create new Batch with original structure
-            masked_tensor = Batch(
-                x=new_features,
-                edge_index=inputs.edge_index,
-                batch=inputs.batch,
-            )
+            masked_tensor = inputs.clone()
+            masked_tensor.x = new_features
         else:  # Standard tensor
-            original_shape = inputs.shape
-            reshaped = masked_inputs.reshape(original_shape)
-            masked_tensor = torch.tensor(reshaped, dtype=torch.float32).to(device)
+            masked_tensor = torch.tensor(masked_inputs, dtype=torch.float32).to(device)
         
         # Get predictions
         with torch.no_grad():
@@ -562,7 +550,12 @@ def compute_feature_coherence(shap_values):
 def compute_pca_alignment(shap_values):
     vals = to_numpy(_get_shap_array(shap_values))
     flat_vals = vals.reshape(vals.shape[0], -1)
-    pca = PCA(n_components=2)
+    
+    # Skip PCA if not enough samples
+    if flat_vals.shape[0] < 2:
+        return 0.0
+    
+    pca = PCA(n_components=min(2, flat_vals.shape[1]))
     pca.fit(np.abs(flat_vals))
     return pca.explained_variance_ratio_.sum()
 
@@ -598,7 +591,7 @@ def evaluate_advanced_shap_metrics(shap_values, inputs):
 
 # ================== 4D Visualizations =====================
 def plot_emg_shap_4d(inputs, shap_values, output_path):
-    """4D interactive plot for 1600 timesteps"""
+    """4D interactive plot with dynamic dimension handling"""
     if not output_path.endswith('.html'):
         output_path += ".html"
     
@@ -616,36 +609,49 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     if shap_vals.ndim > 1:
         shap_vals = np.abs(shap_vals).max(axis=0)
     
-    # Ensure 1600 timesteps
-    if len(inputs) > TIMESTEPS:
-        inputs = inputs[:TIMESTEPS]
-    if len(shap_vals) > TIMESTEPS:
-        shap_vals = shap_vals[:TIMESTEPS]
+    # Handle different dimensions
+    if inputs.ndim == 1:
+        # Single channel data
+        channels = 1
+        timesteps = inputs.size
+        inputs = inputs.reshape(1, timesteps)
+    elif inputs.ndim == 2:
+        # Multi-channel data
+        channels, timesteps = inputs.shape
+    else:
+        # Higher dimensions
+        inputs = inputs.squeeze()
+        if inputs.ndim == 1:
+            channels = 1
+            timesteps = inputs.size
+            inputs = inputs.reshape(1, timesteps)
+        else:
+            channels, timesteps = inputs.shape
     
-    # Pad if shorter
-    if len(inputs) < TIMESTEPS:
-        inputs = np.pad(inputs, (0, TIMESTEPS - len(inputs)))
-    if len(shap_vals) < TIMESTEPS:
-        shap_vals = np.pad(shap_vals, (0, TIMESTEPS - len(shap_vals)))
+    # Create meshgrid
+    time_steps = np.arange(timesteps)
+    channel_idx = np.arange(channels)
+    X, Y = np.meshgrid(time_steps, channel_idx)
     
-    time_steps = np.arange(TIMESTEPS)
+    # Create 3D surface
+    fig = go.Figure()
     
-    fig = go.Figure(data=[go.Scatter3d(
-        x=time_steps,
-        y=np.full_like(time_steps, 0),  # Single channel
-        z=shap_vals,
-        mode='lines',
-        name='Channel 1',
-        line=dict(width=4, color='blue'))
-    ])
+    for ch in range(channels):
+        fig.add_trace(go.Scatter3d(
+            x=time_steps,
+            y=np.full(timesteps, ch),
+            z=shap_vals[ch * timesteps : (ch+1) * timesteps] if shap_vals.size > timesteps else shap_vals,
+            mode='lines',
+            name=f'Channel {ch+1}',
+            line=dict(width=4)
+        ))
     
     fig.update_layout(
-        title='4D SHAP Value Distribution (First Sample)',
+        title='4D SHAP Value Distribution',
         scene=dict(
             xaxis_title='Time Steps',
-            yaxis_title='EMG Channels',
+            yaxis_title='Channels',
             zaxis_title='|SHAP Value|',
-            zaxis=dict(range=[0, shap_vals.max() * 1.1])
         ),
         height=800,
         width=1000

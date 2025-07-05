@@ -522,17 +522,7 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     model.eval()
     device = next(model.parameters()).device
     
-    # Handle PyG inputs
-    if isinstance(inputs, (Data, Batch)):
-        # Extract features and create clone
-        features = inputs.clone()
-        orig_features = features.x.clone()
-        n_timesteps = orig_features.shape[1]
-    else:
-        # Standard tensor handling
-        orig_features = inputs.clone()
-        n_timesteps = inputs.shape[-1]
-    
+    # Get original predictions
     with torch.no_grad():
         base_preds = model.predict(inputs)
         base_conf = torch.softmax(base_preds, dim=1).max(dim=1).values.cpu().numpy()
@@ -540,33 +530,43 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     # Convert SHAP to numpy and aggregate
     shap_vals_np = to_numpy(shap_values)
     if shap_vals_np.ndim == 3:
-        shap_vals_np = np.abs(shap_vals_np).max(axis=-1)
+        shap_vals_np = np.abs(shap_vals_np).max(axis=-1)  # (samples, timesteps)
     
     aopc_scores = []
     
     for i in range(len(base_conf)):
+        # Get importance scores
         importance = shap_vals_np[i].flatten()
         sorted_indices = np.argsort(importance)[::-1]
         
         confidences = [base_conf[i]]
-        current_features = orig_features.clone()
+        
+        # Create modified input
+        if isinstance(inputs, (Data, Batch)):
+            # For PyG: create a clone
+            current = inputs.clone()
+            original_features = current.x.clone()
+        else:
+            current = inputs.clone()
+            original_features = current
         
         for step in range(1, steps + 1):
-            k = int(n_timesteps * step / steps)
+            k = int(len(importance) * step / steps)
             mask_indices = sorted_indices[:k]
             
             # Create modified features
-            modified_features = current_features.clone()
             if isinstance(inputs, (Data, Batch)):
-                # For PyG: modify node features
-                modified_features.x[:, mask_indices] = 0
+                modified_features = original_features.clone()
+                modified_features[i, mask_indices] = 0
+                current.x = modified_features
             else:
-                # For tensors
-                modified_features[..., mask_indices] = 0
+                modified_features = original_features.clone()
+                modified_features[i, mask_indices] = 0
+                current = modified_features
             
             # Get prediction
             with torch.no_grad():
-                pred = model.predict(modified_features)
+                pred = model.predict(current)
                 conf = torch.softmax(pred, dim=1)[i].max().item()
             confidences.append(conf)
         
@@ -689,6 +689,12 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     inputs = inputs[sample_idx]
     shap_vals = shap_vals[sample_idx]
     
+    # Fix dimension order (time, channel) -> (channel, time)
+    if inputs.shape[0] > inputs.shape[-1]:
+        inputs = inputs.T
+    if shap_vals.shape[0] > shap_vals.shape[-1]:
+        shap_vals = shap_vals.T
+    
     # Squeeze singleton dimensions
     inputs = np.squeeze(inputs)
     shap_vals = np.squeeze(shap_vals)
@@ -716,7 +722,8 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
         scene=dict(
             xaxis_title='Time Steps',
             yaxis_title='EMG Channels',
-            zaxis_title='|SHAP Value|'
+            zaxis_title='|SHAP Value|',
+            zaxis=dict(range=[0, shap_vals.max() * 1.1])  # Set z-axis range
         ),
         height=800,
         width=1000
@@ -754,7 +761,8 @@ def plot_4d_shap_surface(shap_values, output_path):
         scene=dict(
             xaxis_title='Time Steps',
             yaxis_title='Channel',
-            zaxis_title='|SHAP Value|'
+            zaxis_title='|SHAP Value|',
+            zaxis=dict(range=[0, aggregated.max() * 1.1])  # Set z-axis range
         ),
         height=800,
         width=1000

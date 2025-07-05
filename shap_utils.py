@@ -339,8 +339,6 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     shap_vals = _get_shap_array(shap_vals)
     shap_vals = to_numpy(shap_vals)
     
-    print(f"[Overlay] Signal shape: {signal.shape}, SHAP shape: {shap_vals.shape}")
-    
     # Aggregate multi-class SHAP values if needed
     if shap_vals.ndim == 3:  # (samples, timesteps, classes)
         shap_vals = np.abs(shap_vals).max(axis=-1)  # Max importance across classes
@@ -362,8 +360,6 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     
     # Ensure 1D arrays
     signal = signal.flatten()
-    
-    print(f"[Overlay] Processed signal length: {len(signal)}, SHAP length: {len(shap_vals)}")
     
     # Truncate to same length
     min_len = min(len(signal), len(shap_vals))
@@ -682,8 +678,7 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     
     inputs = to_numpy(inputs)
     shap_vals = to_numpy(_get_shap_array(shap_values))
-    
-    print(f"[4D Plot] Inputs shape: {inputs.shape}, SHAP shape: {shap_vals.shape}")
+
     
     # Process first sample
     sample_idx = 0
@@ -739,8 +734,6 @@ def plot_4d_shap_surface(shap_values, output_path):
         output_path += ".html"
     
     shap_vals = to_numpy(_get_shap_array(shap_values))
-    
-    print(f"[Surface] SHAP shape: {shap_vals.shape}")
     
     # Aggregate multi-class SHAP values
     if shap_vals.ndim == 3:

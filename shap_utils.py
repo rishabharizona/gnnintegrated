@@ -278,18 +278,16 @@ def _get_shap_array(shap_values):
 
 # ================= Visualization Functions =================
 def plot_summary(shap_values, features, output_path, max_display=20):
-    """Fixed summary plot for 1600-feature data"""
+    """Fixed summary plot for all 1600 features"""
     try:
         shap_array = _get_shap_array(shap_values)
-        features_flat = features.reshape(features.shape[0], -1)
         
-        # Handle single-sample case
-        if shap_array.ndim == 1:
-            shap_array = shap_array.reshape(1, -1)
-        
-        # Aggregate multi-class SHAP values
+        # Handle multi-class SHAP arrays
         if shap_array.ndim == 3:
-            shap_array = np.abs(shap_array).max(axis=2)
+            shap_array = np.abs(shap_array).max(axis=2)  # Max across classes
+        
+        # Flatten features
+        features_flat = features.reshape(features.shape[0], -1)
         
         # Ensure matching dimensions
         min_samples = min(shap_array.shape[0], features_flat.shape[0])
@@ -301,9 +299,10 @@ def plot_summary(shap_values, features, output_path, max_display=20):
         features_flat = features_flat[:min_samples]
         
         # Create feature names
-        feature_names = [f"F{i}" for i in range(features_flat.shape[1])]
+        feature_names = [f"Feature {i}" for i in range(features_flat.shape[1])]
         
-        plt.figure(figsize=(10, 6))
+        # Plot with SHAP's summary_plot
+        plt.figure(figsize=(14, 8))
         shap.summary_plot(
             shap_array, 
             features_flat,
@@ -312,15 +311,16 @@ def plot_summary(shap_values, features, output_path, max_display=20):
             max_display=max_display,
             show=False
         )
+        plt.title("SHAP Feature Importance (All Nodes and Timesteps)")
         plt.tight_layout()
         plt.savefig(output_path, dpi=300)
         plt.close()
         print(f"✅ Saved summary plot: {output_path}")
     except Exception as e:
-        print(f"Summary plot failed: {str(e)}")
+        print(f"Summary plot skipped: {str(e)}")
 
 def overlay_signal_with_shap(signal, shap_vals, output_path):
-    """Robust signal-SHAP overlay for 8x200 data"""
+    """Robust signal-SHAP overlay for all 8 nodes"""
     signal = to_numpy(signal)
     shap_vals = to_numpy(_get_shap_array(shap_vals))
     
@@ -330,22 +330,30 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     if shap_vals.ndim == 3:
         shap_vals = np.abs(shap_vals).max(axis=2)  # Max importance across classes
     
-    # Extract first sample and first channel
-    if signal.ndim == 3:  # [nodes, channels, timesteps]
-        signal = signal[0, 0]  # First node, first channel
-    elif signal.ndim == 2:  # [nodes, timesteps]
-        signal = signal[0]  # First node
-    else:
-        signal = signal.flatten()[:200]  # First 200 timesteps
-    
-    # Process SHAP values for first node
+    # Process SHAP values
     if shap_vals.ndim > 1:
         shap_vals = shap_vals[0]  # First sample
-    shap_vals = np.abs(shap_vals).flatten()[:200]  # First node (first 200 values)
+    shap_vals = np.abs(shap_vals).flatten()
+    
+    # Process signal - average across all nodes
+    if signal.ndim == 3:  # [nodes, channels, timesteps]
+        signal = signal.mean(axis=0)  # Average across nodes
+        signal = signal[0]  # First channel
+    elif signal.ndim == 2:  # [nodes, timesteps]
+        signal = signal.mean(axis=0)  # Average across nodes
+    
+    # Ensure same length
+    min_length = min(len(signal), len(shap_vals))
+    signal = signal[:min_length]
+    shap_vals = shap_vals[:min_length]
+    
+    # Normalize for better visualization
+    signal = (signal - signal.min()) / (signal.max() - signal.min())
+    shap_vals = (shap_vals - shap_vals.min()) / (shap_vals.max() - shap_vals.min())
     
     # Create plot
-    plt.figure(figsize=(12, 6))
-    plt.plot(signal, label="EMG Signal", color="steelblue", alpha=0.7, linewidth=1.5)
+    plt.figure(figsize=(14, 8))
+    plt.plot(signal, label="EMG Signal", color="steelblue", alpha=0.8, linewidth=2)
     plt.fill_between(
         np.arange(len(shap_vals)), 
         0, 
@@ -354,9 +362,9 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
         alpha=0.3, 
         label="|SHAP|"
     )
-    plt.title("EMG Signal with SHAP Overlay (First Node)")
+    plt.title("EMG Signal with SHAP Overlay (All Nodes Averaged)")
     plt.xlabel("Time Steps")
-    plt.ylabel("Amplitude")
+    plt.ylabel("Normalized Amplitude")
     plt.legend()
     plt.grid(True, alpha=0.2)
     plt.tight_layout()
@@ -365,7 +373,7 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     print(f"✅ Saved signal overlay: {output_path}")
 
 def plot_shap_heatmap(shap_values, output_path):
-    """Channel-wise heatmap for 8x200 data"""
+    """Node-wise heatmap for all 8 nodes"""
     shap_vals = to_numpy(_get_shap_array(shap_values))
     abs_vals = np.abs(shap_vals)
     
@@ -384,11 +392,12 @@ def plot_shap_heatmap(shap_values, output_path):
     else:
         aggregated = aggregated.reshape(1, -1)
     
-    plt.figure(figsize=(16, 6))
+    plt.figure(figsize=(16, 8))
     sns.heatmap(aggregated, cmap="viridis", cbar_kws={'label': '|SHAP Value|'})
     plt.xlabel("Time Steps")
-    plt.ylabel("Channel")
-    plt.title("SHAP Value Heatmap (Per Node Channel)")
+    plt.ylabel("Node")
+    plt.title("SHAP Value Heatmap (Per Node)")
+    plt.yticks(np.arange(8), [f"Node {i+1}" for i in range(8)])
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
@@ -618,7 +627,7 @@ def evaluate_advanced_shap_metrics(shap_values, inputs):
 
 # ================== 4D Visualizations =====================
 def plot_emg_shap_4d(inputs, shap_values, output_path):
-    """Robust 4D interactive plot"""
+    """4D plot showing all 8 nodes"""
     if not output_path.endswith('.html'):
         output_path += ".html"
     
@@ -627,53 +636,61 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     
     print(f"[4D Plot] Inputs shape: {inputs.shape}, SHAP shape: {shap_vals.shape}")
     
-    # Process first sample
-    sample_idx = 0
-    if inputs.ndim > 3:
-        inputs = inputs[sample_idx]
-    if shap_vals.ndim > 3:
-        shap_vals = shap_vals[sample_idx]
-    
-    # For SHAP: take max across classes if needed
+    # Process SHAP values
     if shap_vals.ndim > 1:
-        shap_vals = np.abs(shap_vals).max(axis=0)
+        shap_vals = shap_vals[0]  # First sample
+    shap_vals = np.abs(shap_vals).flatten()
     
-    # Flatten both arrays
-    inputs_flat = inputs.flatten()
-    shap_flat = shap_vals.flatten()
+    # Process inputs - average across channels
+    if inputs.ndim == 3:  # [nodes, channels, timesteps]
+        inputs = inputs.mean(axis=1)  # Average across channels
+    elif inputs.ndim == 2:  # [nodes, timesteps]
+        inputs = inputs
+    else:
+        inputs = inputs.squeeze()
     
-    # Create time steps
-    timesteps = min(len(inputs_flat), len(shap_flat))
-    time_steps = np.arange(timesteps)
+    # Ensure 8 nodes
+    if inputs.shape[0] != 8:
+        inputs = inputs.reshape(8, -1)[:,:200]
     
+    # Create 3D visualization
     fig = go.Figure()
-    fig.add_trace(go.Scatter3d(
-        x=time_steps,
-        y=np.zeros(timesteps),
-        z=inputs_flat[:timesteps],
-        mode='lines',
-        name='Signal',
-        line=dict(width=4, color='blue')
-    ))
-    fig.add_trace(go.Scatter3d(
-        x=time_steps,
-        y=np.ones(timesteps),
-        z=shap_flat[:timesteps],
-        mode='lines',
-        name='SHAP',
-        line=dict(width=4, color='red')
-    ))
+    
+    for node_idx in range(8):
+        # Get node data
+        node_signal = inputs[node_idx]
+        node_shap = shap_vals[node_idx*200 : (node_idx+1)*200]
+        
+        # Add signal trace
+        fig.add_trace(go.Scatter3d(
+            x=np.arange(len(node_signal)),
+            y=np.full(len(node_signal), node_idx),
+            z=node_signal,
+            mode='lines',
+            name=f'Signal Node {node_idx+1}',
+            line=dict(width=4)
+        ))
+        
+        # Add SHAP trace
+        fig.add_trace(go.Scatter3d(
+            x=np.arange(len(node_shap)),
+            y=np.full(len(node_shap), node_idx + 0.5),
+            z=node_shap,
+            mode='lines',
+            name=f'SHAP Node {node_idx+1}',
+            line=dict(width=4, dash='dot')
+        ))
     
     fig.update_layout(
-        title='4D Signal and SHAP Comparison',
+        title='4D Signal and SHAP Visualization (All Nodes)',
         scene=dict(
             xaxis_title='Time Steps',
-            yaxis_title='Type',
+            yaxis_title='Node',
             zaxis_title='Value',
-            yaxis=dict(tickvals=[0, 1], ticktext=['Signal', 'SHAP'])
+            yaxis=dict(tickvals=np.arange(8), ticktext=[f"Node {i+1}" for i in range(8)])
         ),
-        height=800,
-        width=1000
+        height=900,
+        width=1200
     )
     
     fig.write_html(output_path)

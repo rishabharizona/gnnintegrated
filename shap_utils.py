@@ -127,79 +127,112 @@ def get_background_batch(loader, size=64):
     return torch.cat(background, dim=0)[:size]
 
 def safe_compute_shap_values(model, background, inputs):
+    """
+    Compute SHAP values with robust handling for both GNN and CNN models
+    using appropriate explainers and graph reconstruction for PyG data
+    """
     try:
         device = next(model.parameters()).device
         background = background.to(device)
         inputs = inputs.to(device)
-        wrapped_model = PredictWrapper(model)
         
+        # Create prediction wrapper
+        class UnifiedPredictor(nn.Module):
+            def __init__(self, model):
+                super().__init__()
+                self.model = model
+                
+            def forward(self, x):
+                return self.model.predict(x)
+        
+        wrapped_model = UnifiedPredictor(model).to(device)
+        wrapped_model.eval()
+        
+        # Handle PyG graph data (GNN case)
         if isinstance(background, (Data, Batch)):
-            # Extract actual timesteps from data
-            timesteps = background.x.shape[-1]
-            print(f"Detected timesteps: {timesteps}")
+            print("Processing PyG graph data for SHAP...")
             
-            # Flatten features while preserving timesteps
-            background_features = background.x.reshape(-1, timesteps)
-            inputs_features = inputs.x.reshape(-1, timesteps)
+            # Extract and flatten graph features
+            background_features = background.x.detach().cpu().numpy().reshape(1, -1)
+            inputs_features = inputs.x.detach().cpu().numpy().reshape(1, -1)
             
-            class TensorWrapper(torch.nn.Module):
-                def __init__(self, model, background):
+            print(f"Background features shape: {background_features.shape}")
+            print(f"Input features shape: {inputs_features.shape}")
+            
+            # Create reconstruction wrapper
+            class GraphReconstructor(nn.Module):
+                def __init__(self, model, template_graph):
                     super().__init__()
                     self.model = model
-                    self.background = background
+                    self.template = template_graph
                     self.device = next(model.parameters()).device
                     
-                def forward(self, x):
-                    if isinstance(x, np.ndarray):
-                        x = torch.tensor(x, dtype=torch.float32).to(self.device)
+                def forward(self, flat_features):
+                    # Convert to tensor and reshape to original graph structure
+                    features_tensor = torch.tensor(
+                        flat_features, 
+                        dtype=torch.float32
+                    ).to(self.device)
                     
-                    # Reshape to original format [num_nodes, channels, timesteps]
-                    x = x.reshape(self.background.x.shape)
-                    
-                    # Reconstruct PyG data
-                    data = self.background.clone()
-                    data.x = x
-                    return self.model(data)
+                    # Reconstruct graph from template
+                    reconstructed = self.template.clone()
+                    reconstructed.x = features_tensor.reshape(self.template.x.shape)
+                    return self.model(reconstructed)
             
-            tensor_wrapper = TensorWrapper(wrapped_model, background)
-            explainer = shap.DeepExplainer(tensor_wrapper, background_features)
-            shap_values = explainer.shap_values(inputs_features)
+            # Create reconstructor with background as template
+            reconstructor = GraphReconstructor(wrapped_model, background)
             
+            # Use KernelExplainer for better stability
+            explainer = shap.KernelExplainer(
+                lambda x: reconstructor(x).detach().cpu().numpy(),
+                background_features
+            )
+            
+            # Compute SHAP values
+            shap_values = explainer.shap_values(
+                inputs_features, 
+                nsamples=100  # Reduce for faster computation
+            )
+            
+            return shap.Explanation(
+                values=shap_values,
+                base_values=explainer.expected_value,
+                data=inputs_features
+            )
+            
+        else:
+            # Standard tensor handling for CNN models
+            print("Processing standard tensor data for SHAP...")
+            
+            # Flatten features while preserving batch dimension
+            background_features = background.reshape(background.size(0), -1)
+            inputs_features = inputs.reshape(inputs.size(0), -1)
+            
+            # Try DeepExplainer first for CNNs
             try:
-                explainer = shap.DeepExplainer(tensor_wrapper, background_features)
+                explainer = shap.DeepExplainer(wrapped_model, background_features)
                 shap_values = explainer.shap_values(inputs_features)
             except Exception as e:
                 print(f"DeepExplainer failed: {str(e)}. Using KernelExplainer")
-                bg_numpy = background_features.cpu().detach().numpy().reshape(-1, TIMESTEPS)
-                inputs_numpy = inputs_features.cpu().detach().numpy().reshape(-1, TIMESTEPS)
-                
-                def model_wrapper(x):
-                    return tensor_wrapper(x).detach().cpu().numpy()
-                
-                explainer = shap.KernelExplainer(model_wrapper, bg_numpy)
-                shap_values = explainer.shap_values(inputs_numpy)
-        else:
-            # Standard tensor handling
-            try:
-                explainer = shap.DeepExplainer(wrapped_model, background)
-                shap_values = explainer.shap_values(inputs)
-            except Exception as e:
-                print(f"DeepExplainer failed: {str(e)}. Using KernelExplainer")
-                bg_numpy = background.cpu().detach().numpy().reshape(-1, TIMESTEPS)
-                inputs_numpy = inputs.cpu().detach().numpy().reshape(-1, TIMESTEPS)
-                
+                # Fallback to KernelExplainer
                 def model_wrapper(x):
                     x_tensor = torch.tensor(x, dtype=torch.float32).to(device)
                     return wrapped_model(x_tensor).detach().cpu().numpy()
                 
-                explainer = shap.KernelExplainer(model_wrapper, bg_numpy)
-                shap_values = explainer.shap_values(inputs_numpy)
-        
-        return shap.Explanation(
-            values=shap_values,
-            base_values=explainer.expected_value,
-            data=to_numpy(inputs)
-        )
+                explainer = shap.KernelExplainer(
+                    model_wrapper, 
+                    background_features.detach().cpu().numpy()
+                )
+                shap_values = explainer.shap_values(
+                    inputs_features.detach().cpu().numpy()
+                )
+            
+            return shap.Explanation(
+                values=shap_values,
+                base_values=explainer.expected_value,
+                data=to_numpy(inputs_features)
+            )
+            
     except Exception as e:
         print(f"SHAP computation failed: {str(e)}")
         import traceback

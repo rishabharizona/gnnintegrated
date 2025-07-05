@@ -1302,8 +1302,8 @@ def main(args):
                         shap_array = _get_shap_array(shap_vals)
                         if len(shap_array) >= 2:
                             # Extract SHAP values for first two samples
-                            sample1 = shap_array[0]
-                            sample2 = shap_array[1]
+                            sample1 = shap_array[0].flatten()
+                            sample2 = shap_array[1].flatten()
                             
                             print(f"[SHAP] Jaccard (top-10): {compute_jaccard_topk(sample1, sample2, k=10):.4f}")
                             print(f"[SHAP] Kendall's Tau: {compute_kendall_tau(sample1, sample2):.4f}")

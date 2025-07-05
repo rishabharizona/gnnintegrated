@@ -1335,6 +1335,8 @@ def main(args):
                     try:
                         print("Generating confusion matrix...")
                         true_labels, pred_labels = [], []
+                        device = next(unified_predictor.parameters()).device  # Get model device
+
                         for data in valid_loader:
                             if args.use_gnn and GNN_AVAILABLE:
                                 # Handle different data formats
@@ -1353,14 +1355,18 @@ def main(args):
                                     # Unsupported format
                                     continue
                             else:
-                                x = data[0].to(args.device).float()
+                                x = data[0].float()  # Remove .to(device) here
                                 y = data[1]
                             
+                            # Move data to model's device
+                            if isinstance(x, (Data, Batch)):
+                                x = x.to(device)
+                            elif isinstance(x, torch.Tensor):
+                                x = x.to(device)
+                            
                             with torch.no_grad():
-                                # Apply transform for GNN if needed
-                                if args.use_gnn and GNN_AVAILABLE:
-                                    x = transform_for_gnn(x)
-                                preds = unified_predictor(x).cpu()
+                                # Use UnifiedPredictor's predict method
+                                preds = unified_predictor.predict(x).cpu()
                                 
                                 # Handle single values vs tensors
                                 if isinstance(y, torch.Tensor):

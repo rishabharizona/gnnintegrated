@@ -160,30 +160,44 @@ def safe_compute_shap_values(model, background, inputs):
             print(f"Background features shape: {background_features.shape}")
             print(f"Input features shape: {inputs_features.shape}")
             
-            # Create reconstruction wrapper
+            # Create reconstruction wrapper with batch support
             class GraphReconstructor(nn.Module):
                 def __init__(self, model, template_graph):
                     super().__init__()
                     self.model = model
                     self.template = template_graph
                     self.device = next(model.parameters()).device
+                    self.node_count = template_graph.num_nodes
                     
                 def forward(self, flat_features):
-                    # Convert to tensor and reshape to original graph structure
+                    # Convert to tensor
                     features_tensor = torch.tensor(
                         flat_features, 
                         dtype=torch.float32
                     ).to(self.device)
                     
-                    # Reconstruct graph from template
-                    reconstructed = self.template.clone()
-                    reconstructed.x = features_tensor.reshape(self.template.x.shape)
-                    return self.model(reconstructed)
+                    # Calculate batch size
+                    batch_size = features_tensor.shape[0]
+                    features_per_graph = self.node_count * self.template.x.shape[-1]
+                    
+                    # Reshape to (batch_size, num_nodes, features)
+                    features_tensor = features_tensor.reshape(
+                        batch_size, self.node_count, -1
+                    )
+                    
+                    # Create batch of graphs
+                    data_list = []
+                    for i in range(batch_size):
+                        graph = self.template.clone()
+                        graph.x = features_tensor[i]
+                        data_list.append(graph)
+                    
+                    return self.model(Batch.from_data_list(data_list))
             
             # Create reconstructor with background as template
             reconstructor = GraphReconstructor(wrapped_model, background)
             
-            # Use KernelExplainer for better stability
+            # Use KernelExplainer
             explainer = shap.KernelExplainer(
                 lambda x: reconstructor(x).detach().cpu().numpy(),
                 background_features

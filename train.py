@@ -1224,9 +1224,7 @@ def main(args):
                         # For standard models
                         X_eval_np = X_eval.detach().cpu().numpy()
                     
-                    # Debug print sample data
-                    print(f"Sample SHAP values (min, max, mean): {shap_vals_agg.min()}, {shap_vals_agg.max()}, {shap_vals_agg.mean()}")
-                    print(f"Sample signal data (min, max, mean): {X_eval_np.min()}, {X_eval_np.max()}, {X_eval_np.mean()}")
+                    
                     
                     # Handle GNN dimensionality for visualization
                     if args.use_gnn and GNN_AVAILABLE:
@@ -1236,7 +1234,7 @@ def main(args):
                         # If 4D, reduce to 3D by summing over classes
                         if shap_vals.ndim == 4:
                             shap_vals = np.abs(shap_vals).sum(axis=-1)
-                            print(f"SHAP values after class sum: {shap_vals.shape}")
+                            
                         
                         # Now we should have 3D: [batch, time, channels]
                         if shap_vals.ndim == 3:
@@ -1258,21 +1256,21 @@ def main(args):
                     
                     # Generate core visualizations for ALL models (including GNN)
                     try:
-                        print(f"Visualizing: Summary plot with SHAP shape {shap_vals_agg.shape}, Features shape {X_eval_np.shape}")
+                        
                         plot_summary(shap_vals_agg, X_eval_np, 
                                     output_path=os.path.join(args.output, "shap_summary.png"))
                     except Exception as e:
                         print(f"Summary plot failed: {str(e)}")
                     
                     try:
-                        print(f"Visualizing: Overlay with SHAP shape {shap_vals_agg.shape}, Signal shape {X_eval_np[0].shape}")
+                        
                         overlay_signal_with_shap(X_eval_np[0], shap_vals_agg, 
                                                 output_path=os.path.join(args.output, "shap_overlay.png"))
                     except Exception as e:
                         print(f"Signal overlay failed: {str(e)}")
                     
                     try:
-                        print(f"Visualizing: Heatmap with SHAP shape {shap_vals_agg.shape}")
+                        
                         plot_shap_heatmap(shap_vals_agg, 
                                          output_path=os.path.join(args.output, "shap_heatmap.png"))
                     except Exception as e:
@@ -1330,7 +1328,7 @@ def main(args):
                     
                     # Generate 4D visualizations for ALL models
                     try:
-                        print(f"Visualizing: 4D Scatter with SHAP shape {shap_vals.shape}, Features shape {X_eval_np[0].shape}")
+                        
                         plot_emg_shap_4d(
                             X_eval_np[0], 
                             shap_vals[0] if shap_vals.ndim > 2 else shap_vals_agg[0],
@@ -1340,7 +1338,7 @@ def main(args):
                         print(f"4D scatter plot failed: {str(e)}")
                     
                     try:
-                        print(f"Visualizing: 4D Surface with SHAP shape {shap_vals.shape}")
+                        
                         plot_4d_shap_surface(
                             shap_vals if shap_vals.ndim > 2 else shap_vals_agg,
                             output_path=os.path.join(args.output, "shap_4d_surface.html")
@@ -1348,7 +1346,7 @@ def main(args):
                     except Exception as e:
                         print(f"4D surface plot failed: {str(e)}")
                     
-                    # Confusion matrix
+                    
                     # Confusion matrix
                     try:
                         print("Generating confusion matrix...")

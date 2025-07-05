@@ -679,42 +679,41 @@ def plot_emg_shap_4d(inputs, shap_values, output_path):
     fig.write_html(output_path)
     print(f"✅ Saved 4D SHAP plot: {output_path}")
 
-def plot_4d_shap_surface(shap_values, output_path):
-    """Surface plot for 1600 timesteps"""
+def plot_4d_shap_surface(shap_values, output_path, max_points=1000):
+    """Surface plot with point limitation"""
     if not output_path.endswith('.html'):
         output_path += ".html"
     
     shap_vals = to_numpy(_get_shap_array(shap_values))
     
-    print(f"[Surface] SHAP shape: {shap_vals.shape}")
+    # Flatten and sample if too large
+    flat_vals = np.abs(shap_vals).flatten()
+    if len(flat_vals) > max_points:
+        step = len(flat_vals) // max_points
+        flat_vals = flat_vals[::step]
     
-    # Aggregate multi-class SHAP values
-    if shap_vals.ndim == 3:
-        shap_vals = np.abs(shap_vals).max(axis=-1)  # (samples, timesteps)
+    print(f"[Surface] SHAP values: {len(flat_vals)} points")
     
-    # Aggregate across samples
-    aggregated = np.abs(shap_vals).mean(axis=0)
+    # Create simple visualization
+    fig = go.Figure(data=[go.Scatter3d(
+        x=np.arange(len(flat_vals)),
+        y=np.zeros(len(flat_vals)),
+        z=flat_vals,
+        mode='markers',
+        marker=dict(
+            size=3,
+            color=flat_vals,
+            colorscale='Viridis',
+            opacity=0.8
+        )
+    )])
     
-    # Ensure 1600 timesteps
-    if len(aggregated) > TIMESTEPS:
-        aggregated = aggregated[:TIMESTEPS]
-    elif len(aggregated) < TIMESTEPS:
-        aggregated = np.pad(aggregated, (0, TIMESTEPS - len(aggregated)))
-    
-    # Create grid
-    time_steps = np.arange(TIMESTEPS)
-    channels = np.array([0])  # Single channel
-    X, Y = np.meshgrid(time_steps, channels)
-    Z = np.array([aggregated])  # (1, TIMESTEPS)
-    
-    fig = go.Figure(data=[go.Surface(z=Z, x=X, y=Y)])
     fig.update_layout(
-        title='SHAP Value Surface',
+        title='SHAP Value Distribution',
         scene=dict(
-            xaxis_title='Time Steps',
+            xaxis_title='Feature Index',
             yaxis_title='Channel',
-            zaxis_title='|SHAP Value|',
-            zaxis=dict(range=[0, aggregated.max() * 1.1])
+            zaxis_title='|SHAP Value|'
         ),
         height=800,
         width=1000

@@ -1250,7 +1250,12 @@ def main(args):
                             X_eval_np = np.expand_dims(X_eval_np, axis=2)
                         else:
                             print(f"⚠️ Unexpected SHAP values dimension: {shap_vals.ndim}")
-                        
+
+                        # After getting X_eval_np and before visualizations
+                        if X_eval_np.shape[1] == 200 and X_eval_np.shape[2] == 1 and X_eval_np.shape[3] == 1:
+                            print("Correcting dimension order: (samples, time, channel, spatial) -> (samples, channel, spatial, time)")
+                            X_eval_np = np.transpose(X_eval_np, (0, 2, 3, 1))  # (80, 1, 1, 200)
+                            print(f"New X_eval shape: {X_eval_np.shape}")
                         # Visualize the first sample
                         try:
                             plot_emg_shap_4d(X_eval_np[0], shap_vals[0], 

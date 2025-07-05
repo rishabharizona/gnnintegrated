@@ -339,7 +339,10 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     shap_vals = _get_shap_array(shap_vals)
     shap_vals = to_numpy(shap_vals)
     
-    # Aggregate multi-class SHAP values
+    # Debug print shapes
+    print(f"[Overlay] Signal shape: {signal.shape}, SHAP shape: {shap_vals.shape}")
+    
+    # Aggregate multi-class SHAP values if needed
     if shap_vals.ndim == 3:  # (samples, timesteps, classes)
         shap_vals = np.abs(shap_vals).max(axis=-1)  # Max importance across classes
     
@@ -355,6 +358,9 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     # Ensure 1D arrays
     signal = signal.flatten()
     shap_vals = shap_vals.flatten()
+    
+    # Debug print processed shapes
+    print(f"[Overlay] Processed signal length: {len(signal)}, SHAP length: {len(shap_vals)}")
     
     # Truncate to same length
     min_len = min(len(signal), len(shap_vals))
@@ -515,15 +521,10 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     # Convert to numpy for processing
     inputs_np = to_numpy(inputs)
     shap_vals_np = to_numpy(shap_values)
-
+    
     # Aggregate multi-class SHAP values
     if shap_vals_np.ndim == 3:  # (samples, timesteps, classes)
         shap_vals_np = np.abs(shap_vals_np).max(axis=-1)  # (samples, timesteps)
-    # Handle multi-class SHAP arrays
-    if shap_vals_np.ndim > 4:
-        shap_vals_np = np.abs(shap_vals_np).max(axis=1)
-    elif shap_vals_np.ndim == 4 and shap_vals_np.shape[1] > 1:
-        shap_vals_np = np.abs(shap_vals_np).max(axis=1)
     
     # Ensure we have at least 2 dimensions
     if inputs_np.ndim < 2:
@@ -543,7 +544,7 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     # Now we can safely get dimensions
     n_channels = inputs_np.shape[1]
     n_timesteps = inputs_np.shape[3]
-    device = inputs.device
+    device = next(model.parameters()).device
     
     with torch.no_grad():
         base_preds = model.predict(inputs)

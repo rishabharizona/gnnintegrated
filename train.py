@@ -464,27 +464,21 @@ class EnhancedTemporalGCN(TemporalGCN):
     
     # In EnhancedTemporalGCN.forward_shap
     def forward_shap(self, x):
-        """SHAP-compatible forward pass with fixed reshaping"""
+        """SHAP-compatible forward pass with dynamic reshaping"""
         # Extract features from PyG Data or Batch objects
         if isinstance(x, (Data, Batch)):
             features = x.x
         else:
             features = x
         
-        # Handle batch dimension dynamically
-        batch_size = 1
-        if features.dim() > 2:
+        # Handle batch dimension
+        if features.dim() == 3:  # [batch, nodes, features]
             batch_size = features.size(0)
+            features = features.reshape(batch_size, -1)
+        else:  # Single sample
+            features = features.flatten().unsqueeze(0)
         
-        # Reshape to [batch_size, total_features]
-        features = features.reshape(batch_size, -1)
-        
-        # Enforce fixed input size (8 nodes * 200 features)
-        if features.size(1) != 1600:
-            # Use simple truncation since we know expected size
-            features = features[:, :1600] if features.size(1) > 1600 \
-                      else torch.cat([features, torch.zeros(batch_size, 1600 - features.size(1), device=features.device)], dim=1)
-        
+        # Directly pass to classifier without projection
         return self.shap_classifier(features)
 # ======================= DOMAIN ADVERSARIAL LOSS =======================
 class DomainAdversarialLoss(nn.Module):
@@ -1132,10 +1126,7 @@ def main(args):
                 if background_list:
                     # For GNN: use first sample as background
                     background = background_list[0]
-                    background.x = background.x[0:1] 
-
                     X_eval = background_list[1]
-                    X_eval.x = X_eval.x[0:1]
                     # Add debug prints
                     # Debug prints
                     print(f"Background shape: {background.x.shape}")

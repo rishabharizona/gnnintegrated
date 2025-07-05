@@ -442,40 +442,37 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
     # Convert to numpy for processing
     base_preds_np = to_numpy(base_preds)
     inputs_np = to_numpy(inputs)
-    shap_vals_np = to_numpy(_get_shap_array(shap_values))
+    shap_vals_np = to_numpy(shap_values)
     
-    # Handle 3D inputs by adding dummy spatial dimension
-    # Get the number of timesteps from the last dimension
-    # Get the number of timesteps from the last dimension
+    # Ensure we have at least 2 dimensions
+    if inputs_np.ndim < 2:
+        inputs_np = inputs_np[np.newaxis, :]
+    if shap_vals_np.ndim < 2:
+        shap_vals_np = shap_vals_np[np.newaxis, :]
+    
+    # Get batch size and time dimension
+    batch_size = inputs_np.shape[0]
     n_timesteps = inputs_np.shape[-1]
-
-    # Validate SHAP values shape
-    if shap_vals_np.shape[-1] != n_timesteps:
-        print(f"⚠️ SHAP time dimension mismatch: inputs={n_timesteps}, SHAP={shap_vals_np.shape[-1]}")
-        min_timesteps = min(n_timesteps, shap_vals_np.shape[-1])
-        shap_vals_np = shap_vals_np[..., :min_timesteps]
-        n_timesteps = min_timesteps
-    # Handle different dimensionalities
-    if inputs_np.ndim == 4:
-        # Standard format: (batch, channels, spatial, time)
-        batch_size, n_channels, n_spatial, n_timesteps = inputs_np.shape
-    elif inputs_np.ndim == 3:
-        # (batch, channels, time) - add spatial dimension
-        inputs_np = inputs_np[:, :, np.newaxis, :]
-        shap_vals_np = shap_vals_np[:, :, np.newaxis, :]
-        batch_size, n_channels, n_spatial, n_timesteps = inputs_np.shape
-    elif inputs_np.ndim == 2:
-        # (batch, time) - add channel and spatial dimensions
-        inputs_np = inputs_np[:, np.newaxis, np.newaxis, :]
-        shap_vals_np = shap_vals_np[:, np.newaxis, np.newaxis, :]
-        batch_size, n_channels, n_spatial, n_timesteps = inputs_np.shape
-    else:
-        # Unsupported dimensionality - flatten to 4D
-        print(f"⚠️ Unsupported input dimension {inputs_np.ndim}. Flattening to 4D")
-        inputs_np = inputs_np.reshape(inputs_np.shape[0], -1, 1, inputs_np.shape[-1])
-        shap_vals_np = shap_vals_np.reshape(shap_vals_np.shape[0], -1, 1, shap_vals_np.shape[-1])
-        batch_size, n_channels, n_spatial, n_timesteps = inputs_np.shape
     
+    # Reshape inputs to 4D: [batch, channels, spatial, time]
+    if inputs_np.ndim == 2:
+        inputs_np = inputs_np.reshape(batch_size, 1, 1, n_timesteps)
+    elif inputs_np.ndim == 3:
+        inputs_np = inputs_np.reshape(batch_size, inputs_np.shape[1], 1, n_timesteps)
+    elif inputs_np.ndim == 4:
+        pass  # Already in correct format
+    else:
+        inputs_np = inputs_np.reshape(batch_size, -1, 1, n_timesteps)
+    
+    # Reshape SHAP values to match inputs
+    shap_vals_np = shap_vals_np.reshape(inputs_np.shape)
+    
+    # Validate shapes
+    if inputs_np.shape != shap_vals_np.shape:
+        print(f"⚠️ Shape mismatch after reshaping: inputs {inputs_np.shape} vs SHAP {shap_vals_np.shape}")
+        shap_vals_np = shap_vals_np.reshape(inputs_np.shape)
+    
+    # Rest of function remains unchanged...
     masked_inputs = inputs_np.copy()
     
     # Mask top-K important features for each sample

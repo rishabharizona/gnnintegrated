@@ -148,8 +148,6 @@ def safe_compute_shap_values(model, background, inputs):
             background_features = extract_pyg_features(background)
             inputs_features = extract_pyg_features(inputs)
             
-            print(f"Detected actual feature dimension: {background_features.shape} to {inputs_features.shape}")
-            
             # Create a tensor-based wrapper that reconstructs PyG objects
             class TensorWrapper(torch.nn.Module):
                 def __init__(self, model, background):
@@ -234,7 +232,6 @@ def safe_compute_shap_values(model, background, inputs):
                 # FLATTEN TO 2D HERE
                 bg_numpy = bg_numpy.reshape(bg_numpy.shape[0], -1)
                 inputs_numpy = inputs_numpy.reshape(inputs_numpy.shape[0], -1)
-                print(f"KernelExplainer shapes - bg: {bg_numpy.shape}, inputs: {inputs_numpy.shape}")
                 # Create model wrapper for KernelExplainer
                 def model_wrapper(x):
                     return tensor_wrapper(x).detach().cpu().numpy()

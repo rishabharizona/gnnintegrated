@@ -1216,16 +1216,18 @@ def main(args):
                         print(f"Aggregated SHAP values shape: {shap_vals_agg.shape}")
                     else:
                         shap_vals_agg = shap_vals.copy()
-                    # Debug print sample data
-                    print(f"Sample SHAP values (min, max, mean): {shap_vals_agg.min()}, {shap_vals_agg.max()}, {shap_vals_agg.mean()}")
-                    print(f"Sample signal data (min, max, mean): {X_eval_np.min()}, {X_eval_np.max()}, {X_eval_np.mean()}")
-                    # ==== END OF AGGREGATION BLOCK ====
-                    # Convert to numpy safely before visualization
+
                     if args.use_gnn and GNN_AVAILABLE:
                         # For GNN, convert batched graph to numpy
                         X_eval_np = X_eval.x.detach().cpu().numpy()
                     else:
+                        # For standard models
                         X_eval_np = X_eval.detach().cpu().numpy()
+                    # Debug print sample data
+                    print(f"Sample SHAP values (min, max, mean): {shap_vals_agg.min()}, {shap_vals_agg.max()}, {shap_vals_agg.mean()}")
+                    print(f"Sample signal data (min, max, mean): {X_eval_np.min()}, {X_eval_np.max()}, {X_eval_np.mean()}")
+                    # ==== END OF AGGREGATION BLOCK ====
+                    
                     
                     # Handle GNN dimensionality for visualization
                     if args.use_gnn and GNN_AVAILABLE:
@@ -1332,8 +1334,8 @@ def main(args):
                         try:
                             # For scatter plot - use first sample
                             plot_emg_shap_4d(
-                                X_eval_np[0] if not (args.use_gnn and GNN_AVAILABLE) else X_eval_np[0].squeeze(),
-                                shap_vals[0] if not (args.use_gnn and GNN_AVAILABLE) else shap_vals[0].squeeze(),
+                                X_eval_np[0], 
+                                shap_vals[0] if shap_vals.ndim > 2 else shap_vals_agg[0],
                                 output_path=os.path.join(args.output, "shap_4d_scatter.html")
                             )
                         except Exception as e:
@@ -1342,7 +1344,7 @@ def main(args):
                         try:
                             # For surface plot
                             plot_4d_shap_surface(
-                                shap_vals,
+                                shap_vals if shap_vals.ndim > 2 else shap_vals_agg,
                                 output_path=os.path.join(args.output, "shap_4d_surface.html")
                             )
                         except Exception as e:

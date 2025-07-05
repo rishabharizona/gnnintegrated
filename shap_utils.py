@@ -299,35 +299,30 @@ def _get_shap_array(shap_values):
 # ================= Visualization Functions =================
 
 def plot_summary(shap_values, features, output_path, max_display=20):
-    """Global feature importance summary plot (detached)"""
     plt.figure(figsize=(10, 6))
     
     # Extract SHAP values array
     shap_array = _get_shap_array(shap_values)
     
-    # Reshape data for summary plot
-    flat_features = features.reshape(features.shape[0], -1)
-    flat_shap_values = shap_array.reshape(shap_array.shape[0], -1)
+    # Aggregate multi-class SHAP values
+    if shap_array.ndim == 3:  # (samples, timesteps, classes)
+        shap_array = np.abs(shap_array).max(axis=-1)  # Max importance across classes
     
-    # Verify shape consistency
-    if flat_shap_values.shape != flat_features.shape:
-        print(f"⚠️ Shape mismatch: SHAP values {flat_shap_values.shape} vs features {flat_features.shape}")
-        min_samples = min(flat_shap_values.shape[0], flat_features.shape[0])
-        min_features = min(flat_shap_values.shape[1], flat_features.shape[1])
-        flat_shap_values = flat_shap_values[:min_samples, :min_features]
-        flat_features = flat_features[:min_samples, :min_features]
-        print(f"⚠️ Using truncated shapes: SHAP {flat_shap_values.shape}, features {flat_features.shape}")
+    # Reshape features to match SHAP dimensions
+    if features.ndim == 3:  # (samples, channels, timesteps)
+        features = features.squeeze(1)  # Remove channel dimension
+    features = features.reshape(features.shape[0], -1)
     
-    # Create feature names for EMG data
-    feature_names = []
-    for ch in range(features.shape[1]):  # Channels
-        for t in range(features.shape[3]):  # Time steps
-            feature_names.append(f"CH{ch+1}_T{t}")
+    # Reshape SHAP values
+    flat_shap = shap_array.reshape(shap_array.shape[0], -1)
+    
+    # Create feature names
+    feature_names = [f"T{t}" for t in range(features.shape[1])]
     
     # Create summary plot
     shap.summary_plot(
-        flat_shap_values, 
-        flat_features,
+        flat_shap, 
+        features,
         feature_names=feature_names,
         plot_type="bar",
         max_display=max_display,
@@ -340,21 +335,26 @@ def plot_summary(shap_values, features, output_path, max_display=20):
     print(f"✅ Saved summary plot: {output_path}")
 
 def overlay_signal_with_shap(signal, shap_vals, output_path):
-    """Overlay SHAP values on original signal (fixed for EMG data)"""
     signal = to_numpy(signal)
     shap_vals = _get_shap_array(shap_vals)
     shap_vals = to_numpy(shap_vals)
     
-    # Handle different dimensions
+    # Aggregate multi-class SHAP values
+    if shap_vals.ndim == 3:  # (samples, timesteps, classes)
+        shap_vals = np.abs(shap_vals).max(axis=-1)  # Max importance across classes
+    
+    # Process first sample and channel
     if signal.ndim == 3:  # (samples, channels, timesteps)
         signal = signal[0, 0, :]  # First sample, first channel
     elif signal.ndim > 1:
         signal = signal[0].squeeze()
     
-    if shap_vals.ndim == 3:  # (samples, timesteps, classes)
-        shap_vals = np.abs(shap_vals).max(axis=-1)[0]  # Max importance across classes
-    elif shap_vals.ndim > 1:
-        shap_vals = np.abs(shap_vals[0]).squeeze()
+    if shap_vals.ndim > 1:
+        shap_vals = shap_vals[0].squeeze()
+    
+    # Ensure 1D arrays
+    signal = signal.flatten()
+    shap_vals = shap_vals.flatten()
     
     # Truncate to same length
     min_len = min(len(signal), len(shap_vals))
@@ -383,7 +383,6 @@ def overlay_signal_with_shap(signal, shap_vals, output_path):
     print(f"✅ Saved signal overlay: {output_path}")
 
 def plot_shap_heatmap(shap_values, output_path):
-    """Heatmap of SHAP values across time and channels (fixed)"""
     shap_vals = _get_shap_array(shap_values)
     abs_vals = np.abs(to_numpy(shap_vals))
     
@@ -391,11 +390,14 @@ def plot_shap_heatmap(shap_values, output_path):
     if abs_vals.ndim == 3:  # (samples, timesteps, classes)
         abs_vals = abs_vals.max(axis=-1)  # Max importance per timestep
     
-    # Average across samples and handle channels
-    if abs_vals.ndim == 2:  # (samples, timesteps)
-        aggregated = abs_vals.mean(axis=0).reshape(1, -1)  # (1, timesteps)
-    else:
-        aggregated = abs_vals.mean(axis=0)  # (channels, timesteps)
+    # Average across samples
+    aggregated = abs_vals.mean(axis=0)
+    
+    # Ensure 2D format (channels, timesteps)
+    if aggregated.ndim == 1:
+        aggregated = aggregated.reshape(1, -1)  # (1, timesteps)
+    elif aggregated.ndim > 2:
+        aggregated = aggregated.squeeze()  # Remove singleton dimensions
     
     plt.figure(figsize=(12, 8))
     sns.heatmap(aggregated, cmap="viridis", cbar_kws={'label': '|SHAP Value|'})
@@ -513,7 +515,10 @@ def compute_aopc(model, inputs, shap_values, steps=10):
     # Convert to numpy for processing
     inputs_np = to_numpy(inputs)
     shap_vals_np = to_numpy(shap_values)
-    
+
+    # Aggregate multi-class SHAP values
+    if shap_vals_np.ndim == 3:  # (samples, timesteps, classes)
+        shap_vals_np = np.abs(shap_vals_np).max(axis=-1)  # (samples, timesteps)
     # Handle multi-class SHAP arrays
     if shap_vals_np.ndim > 4:
         shap_vals_np = np.abs(shap_vals_np).max(axis=1)

@@ -481,8 +481,8 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
             masked_inputs[i, :, :, top_indices] = 0
         
         # Convert back to tensor format matching original input type
-            # Convert back to tensor format matching original input type
-        device = next(model.parameters()).device
+        device = next(model.parameters()).device  # Get device from model
+        
         if isinstance(inputs, (Data, Batch)):
             # Handle PyG objects
             masked_tensor = inputs.clone()
@@ -521,10 +521,11 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
             # Handle standard tensors
             original_shape = inputs.shape
             reshaped = masked_inputs.reshape(original_shape)
+            # CORRECTED: Use model's device instead of inputs.device
             masked_tensor = torch.tensor(
                 reshaped, 
                 dtype=inputs.dtype
-            ).to(inputs.device)
+            ).to(device)  # Fixed line
         
         # Get predictions on masked inputs
         with torch.no_grad():

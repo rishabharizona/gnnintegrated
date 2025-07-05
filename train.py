@@ -1186,6 +1186,10 @@ def main(args):
                             return self.model.predict(batch)
                         else:
                             return self.model.predict(x)
+                    
+                    # ADD THIS METHOD TO FIX PREDICTION ISSUE
+                    def predict(self, x):
+                        return self.forward(x)
 
                 # Set SHAP mode in the GNN model
                 if args.use_gnn and GNN_AVAILABLE:
@@ -1327,6 +1331,7 @@ def main(args):
                             print(f"4D surface plot failed: {str(e)}")
                     
                     # Confusion matrix
+                    
                     try:
                         print("Generating confusion matrix...")
                         true_labels, pred_labels = [], []
@@ -1382,8 +1387,6 @@ def main(args):
             print(f"[ERROR] SHAP analysis failed: {str(e)}")
             import traceback
             traceback.print_exc()
-    # ======================= END SHAP SECTION =======================
-    # ======================= END SHAP SECTION =======================
         # ======================= END SHAP SECTION =======================
     
     try:

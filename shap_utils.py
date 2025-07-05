@@ -474,7 +474,17 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
         masked_inputs[i, :, :, top_indices] = 0
     
     # Convert back to tensor
-    masked_tensor = torch.tensor(masked_inputs, dtype=inputs.dtype).to(inputs.device)
+    # Handle PyG Data objects differently
+    if isinstance(inputs, (Data, Batch)):
+        # Create new PyG object with masked features
+        masked_tensor = inputs.clone()
+        if hasattr(masked_tensor, 'x'):
+            masked_tensor.x = torch.tensor(masked_inputs, dtype=masked_tensor.x.dtype).to(masked_tensor.x.device)
+        elif hasattr(masked_tensor, 'node_features'):
+            masked_tensor.node_features = torch.tensor(masked_inputs, dtype=masked_tensor.node_features.dtype).to(masked_tensor.node_features.device)
+    else:
+        # Standard tensor handling
+        masked_tensor = torch.tensor(masked_inputs, dtype=inputs.dtype).to(inputs.device)
     
     # Get predictions on masked inputs
     with torch.no_grad():

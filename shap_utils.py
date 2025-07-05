@@ -446,26 +446,29 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
     
     # Handle 3D inputs by adding dummy spatial dimension
     # Get the number of timesteps from the last dimension
+    # Get the number of timesteps from the last dimension
     n_timesteps = inputs_np.shape[-1]
     
     # Handle different dimensionalities
-    if inputs_np.ndim == 3:
+    if inputs_np.ndim == 4:
+        # Standard format: (batch, channels, spatial, time)
+        batch_size, n_channels, n_spatial, n_timesteps = inputs_np.shape
+    elif inputs_np.ndim == 3:
         # (batch, channels, time) - add spatial dimension
         inputs_np = inputs_np[:, :, np.newaxis, :]
         shap_vals_np = shap_vals_np[:, :, np.newaxis, :]
-        n_channels = inputs_np.shape[1]
-    elif inputs_np.ndim == 4:
-        # (batch, channels, spatial, time) - standard format
-        n_channels = inputs_np.shape[1]
+        batch_size, n_channels, n_spatial, n_timesteps = inputs_np.shape
     elif inputs_np.ndim == 2:
         # (batch, time) - add channel and spatial dimensions
         inputs_np = inputs_np[:, np.newaxis, np.newaxis, :]
         shap_vals_np = shap_vals_np[:, np.newaxis, np.newaxis, :]
-        n_channels = 1
+        batch_size, n_channels, n_spatial, n_timesteps = inputs_np.shape
     else:
-        raise ValueError(f"Unsupported input dimension: {inputs_np.ndim}")
-
-    batch_size = inputs_np.shape[0]
+        # Unsupported dimensionality - flatten to 4D
+        print(f"⚠️ Unsupported input dimension {inputs_np.ndim}. Flattening to 4D")
+        inputs_np = inputs_np.reshape(inputs_np.shape[0], -1, 1, inputs_np.shape[-1])
+        shap_vals_np = shap_vals_np.reshape(shap_vals_np.shape[0], -1, 1, shap_vals_np.shape[-1])
+        batch_size, n_channels, n_spatial, n_timesteps = inputs_np.shape
     
     masked_inputs = inputs_np.copy()
     

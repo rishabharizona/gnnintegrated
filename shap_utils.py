@@ -448,7 +448,13 @@ def evaluate_shap_impact(model, inputs, shap_values, top_k=0.2):
     # Get the number of timesteps from the last dimension
     # Get the number of timesteps from the last dimension
     n_timesteps = inputs_np.shape[-1]
-    
+
+    # Validate SHAP values shape
+    if shap_vals_np.shape[-1] != n_timesteps:
+        print(f"⚠️ SHAP time dimension mismatch: inputs={n_timesteps}, SHAP={shap_vals_np.shape[-1]}")
+        min_timesteps = min(n_timesteps, shap_vals_np.shape[-1])
+        shap_vals_np = shap_vals_np[..., :min_timesteps]
+        n_timesteps = min_timesteps
     # Handle different dimensionalities
     if inputs_np.ndim == 4:
         # Standard format: (batch, channels, spatial, time)

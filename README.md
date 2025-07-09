@@ -28,10 +28,74 @@
 
 ## 🔧 Core Pipelines
 
-### 🏋️ Training Pipeline (`train.py`) and 📊 Evaluation Pipeline
+### 🏋️ Training Pipeline (`train.py`) 
+
+    
+    ┌───────────────────────────────┐
+    │        train.py               │
+    ├───────────────────────────────┤
+    │                               │
+    │ 1. Argument Parsing           │
+    │    • dataset, model, flags    │
+    │                               │
+    │ 2. Dataset Preparation        │
+    │    • get_act_dataloader()     │
+    │                               │
+    │ 3. Graph Construction         │
+    │    • graph_builder.py         │
+    │    • temporal edges           │
+    │                               │
+    │ 4. Curriculum Learning        │
+    │    • reorder samples          │
+    │                               │
+    │ 5. Model Initialization       │
+    │    • ActNetwork (GNN)         │
+    │    • domain adaptation opt.   │
+    │                               │
+    │ 6. Optimization               │
+    │    • multi-component loss     │
+    │      - alignment              │
+    │      - classification         │
+    │      - diversification        │
+    │                               │
+    │ 7. Logging                    │
+    │    • loss, accuracy           │
+    │    • clustering metrics       │
+    │      - Silhouette             │
+    │      - Calinski-Harabasz (CH) │
+    │      - Davies-Bouldin (DB)    │
+    └───────────────────────────────┘
 
 
-![ChatGPT Image Jul 10, 2025, 12_11_53 AM](https://github.com/user-attachments/assets/3d79b6a2-7534-4866-b48f-a5d3b77eccf4)
+### 📊 Evaluation Pipeline
+    
+    ┌───────────────────────────────┐
+    │    evaluation pipeline        │
+    ├───────────────────────────────┤
+    │                               │
+    │ 1. Load Best Model            │
+    │    • resume checkpoint        │
+    │                               │
+    │ 2. Feature Extraction         │
+    │    • GNN encoder embeddings   │
+    │                               │
+    │ 3. Auto-k Clustering          │
+    │    • optimal cluster number   │
+    │    • Silhouette, CH, DB       │
+    │                               │
+    │ 4. Classification             │
+    │    • logistic regression      │
+    │    • or NN classifier         │
+    │                               │
+    │ 5. SHAP Analysis              │
+    │    • shap_utils.py            │
+    │    • feature attributions     │
+    │                               │
+    │ 6. Visualization              │
+    │    • confusion matrix         │
+    │    • silhouette plots         │
+    │    • SHAP explanations        │
+    └───────────────────────────────┘
 
 
 ---

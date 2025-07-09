@@ -176,7 +176,7 @@ conda activate base
 
 !pip install fastdtw scipy
 ```
-### 3. Dataset Used
+### 3. Dataset download
 EMG (electromyography)
 
      # Download the dataset
@@ -193,7 +193,7 @@ EMG (electromyography)
 
    Basic Execution
 ```bash
-!python train.py --data_dir ./data/ --task cross_people --test_envs 0 --dataset emg --algorithm diversify --alpha1 1.0 --alpha 1.0 --lam 0.0 --local_epoch 3 --max_epoch 3 --lr 0.0001 --output ./train_output --batch_size 64 --weight_decay 1e-3 --dropout 0.5 --label_smoothing 0.1 --automated_k --curriculum --CL_PHASE_EPOCHS 2 --enable_shap --use_gnn --gnn_hidden_dim 128 --gnn_output_dim 256 --gnn_pretrain_epochs 2
+python train.py --data_dir ./data/ --task cross_people --test_envs 0 --dataset emg --algorithm diversify --alpha1 1.0 --alpha 1.0 --lam 0.0 --local_epoch 3 --max_epoch 3 --lr 0.0001 --output ./train_output --batch_size 64 --weight_decay 1e-3 --dropout 0.5 --label_smoothing 0.1 --automated_k --curriculum --CL_PHASE_EPOCHS 2 --enable_shap --use_gnn --gnn_hidden_dim 128 --gnn_output_dim 256 --gnn_pretrain_epochs 2
 
 python train.py --data_dir ./data/ --task cross_people --test_envs 1 --dataset emg --algorithm diversify --alpha1 0.1 --alpha 10.0 --lam 0.0 --local_epoch 2 --max_epoch 5 --lr 0.01 --output ./data/train_output1 --batch_size 64 --weight_decay 1e-3 --dropout 0.5 --label_smoothing 0.1 --automated_k --curriculum --CL_PHASE_EPOCHS 3 --enable_shap --use_gnn --gnn_hidden_dim 128 --gnn_output_dim 256 --gnn_pretrain_epochs 3
 

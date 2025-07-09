@@ -134,6 +134,7 @@ datautil/actdata/
 
 Ensure your EMG data is structured or converted accordingly.
 
+Direct link - https://wjdcloud.blob.core.windows.net/dataset/diversity_emg.zip
 ---
 
 ## 🧪 Extensions Breakdown

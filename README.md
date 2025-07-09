@@ -3,6 +3,8 @@
 
 ## 📌 Overview
 
+This project implements our paper OUT-OF-DISTRIBUTION REPRESENTATION LEARNING FOR TIME SERIES CLASSIFICATION at ICLR 2023. Please refer to our paper [1] for the method and technical details. [Zhihu blog]
+
 **GNNIntegrated** is a modular deep learning framework for **Human Activity Recognition (HAR)** from **Electromyography (EMG)** data. It leverages **Graph Neural Networks (GNNs)**, along with innovative extensions such as:
 
 - **Curriculum Learning**: Progressive sample learning for better generalization.

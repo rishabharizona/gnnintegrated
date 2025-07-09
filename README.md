@@ -169,25 +169,25 @@ conda activate base
 ### 2. Install Dependencies
 ```bash
 # Clean up conflicting packages
-!pip uninstall -y thinc spacy accelerate peft fastai sentence-transformers
+pip uninstall -y thinc spacy accelerate peft fastai sentence-transformers
 
 # Install core requirements
-!pip install numpy==1.26.3 --upgrade torch_geometric
+pip install numpy==1.26.3 --upgrade torch_geometric
 
-!pip install fastdtw scipy
+pip install fastdtw scipy
 ```
 ### 3. Dataset download
 EMG (electromyography)
 
      # Download the dataset
-     !wget https://wjdcloud.blob.core.windows.net/dataset/diversity_emg.zip
-     !unzip diversity_emg.zip && mv emg data/
+     wget https://wjdcloud.blob.core.windows.net/dataset/diversity_emg.zip
+     unzip diversity_emg.zip && mv emg data/
      
      # Create necessary directories
-     !mkdir -p ./data/train_output/act/
+     mkdir -p ./data/train_output/act/
      
-     !mkdir -p ./data/emg
-     !mv emg/* ./data/emg
+     mkdir -p ./data/emg
+     mv emg/* ./data/emg
      
 ### 4. Train the Model
 

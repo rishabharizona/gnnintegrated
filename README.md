@@ -247,5 +247,6 @@ This project is free for academic and commercial use with attribution.
               title={GNNIntegrated: EMG-Based Activity Recognition with GNNs, Curriculum Learning, SHAP & Auto-K},
               author={Rishabh Gupta et al.},
               year={2025},
+              e-mail- rishabhgupta8218@gmail.com,
               note={https://github.com/rishabharizona/gnnintegrated}
             }

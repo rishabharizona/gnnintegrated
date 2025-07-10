@@ -180,6 +180,8 @@ pip uninstall -y thinc spacy accelerate peft fastai sentence-transformers
 pip install numpy==1.26.3 --upgrade torch_geometric
 
 pip install fastdtw scipy
+
+pip install scikit-learn scipy numpy torch torchvision shap pandas matplotlib seaborn tqdm plotly
 ```
 ### 3. Dataset download
 EMG (electromyography)

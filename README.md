@@ -242,7 +242,7 @@ Optional flags (see `utils/util.py::get_args()`):
 
 ---
 
-## Future Prospects
+## Limitations and Future Prospects
 
 GNNs proved ineffective for cross-subject EMG classification due to EMG's lack of inherent graph structure, leading to catastrophic training failure and ~16% accuracy. Exploding losses and poor domain alignment indicated architectural mismatch. Latent clustering was unstable, failing domain generalization. In contrast, CNNs like ResNet or TCN exploit EMG’s temporal patterns effectively. GNNs fundamentally require data with inherent graph topology; for tabular or sequential data like EMG, a meaningful graph must first be manually and carefully constructed. Without this, GNNs cannot learn effectively. We recommend removing --use_gnn and using EMG-specific preprocessing with CNNs and domain adaptation methods (e.g., Deep CORAL). GNN integration would require extensive tuning over 3+ months, making CNNs the practical(for short period projects), accurate (80–85%) solution.
 

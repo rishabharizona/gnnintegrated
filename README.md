@@ -255,4 +255,4 @@ This project is free for academic and commercial use with attribution.
 
 ## Contact
 
-rishabhgupta8218@gmail.com
+E-mail- rishabhgupta8218@gmail.com

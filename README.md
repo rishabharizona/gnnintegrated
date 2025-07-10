@@ -14,7 +14,7 @@ Link- https://paperswithcode.com/paper/generalized-representations-learning-for-
 - **SHAP Explainability**: Model interpretation via feature attribution.
 - **Graph-Based Learning**: Temporal and structural dependencies through GNNs.
 
-Abstract: We address the challenge of Out-of-Distribution (OOD) generalization in time series by enhancing the DIVERSIFY framework with four key components: Curriculum Learning, Graph Neural Networks, SHAP-based explainability, and Automated K Estimation. These additions improve adaptability, interpretability, and scalability. Our method demonstrates superior performance on real-world datasets like EMG and UCI-HAR, achieving better OOD accuracy and generalization. The integrated framework adapts to unseen domains and offers meaningful insights into model decisions, boosting both usability and reliability.
+Abstract: We address the challenge of Out-of-Distribution (OOD) generalization in time series by enhancing the DIVERSIFY framework with four key components: Curriculum Learning, Graph Neural Networks, SHAP-based explainability, and Automated K Estimation. These additions improve adaptability, interpretability, and scalability. Our method demonstrates mix performance on real-world datasets like EMG and UCI-HAR, achieving better OOD accuracy and generalization. The integrated framework adapts to unseen domains and offers meaningful insights into model decisions, boosting both usability and reliability.
 
 ![image](https://github.com/user-attachments/assets/a5da6a74-70e4-4232-9e5b-153e616d297b)
 
